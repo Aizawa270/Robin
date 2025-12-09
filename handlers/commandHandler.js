@@ -19,7 +19,7 @@ function loadCommands(client) {
     const categoryPath = path.join(commandsPath, category);
     const stat = fs.statSync(categoryPath);
 
-    // direct .js files in /commands
+    // direct .js files in /commands (not really used, but supported)
     if (stat.isFile() && category.endsWith('.js')) {
       const filePath = categoryPath;
       const command = require(filePath);
@@ -63,7 +63,7 @@ async function handleMessage(client, message) {
     try {
       await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`);
     } catch {
-      // ignore reply errors
+      // ignore
     }
   }
 
@@ -90,8 +90,36 @@ async function handleMessage(client, message) {
     }
   }
 
-  // --- Prefix command handling ---
-  const content = message.content;
+  const content = message.content.trim();
+  if (!content) return;
+
+  // --- PREFIXLESS HOOK ---
+  // For users in client.prefixless: if their message starts with a known command name,
+  // run that command as if they had used the prefix.
+  if (client.prefixless && client.prefixless.has(message.author.id)) {
+    // Split into first word (potential command) + rest (args)
+    const parts = content.split(/\s+/);
+    const possibleName = parts[0].toLowerCase();
+    const possibleCommand = client.commands.get(possibleName);
+
+    if (possibleCommand) {
+      const args = parts.slice(1);
+      try {
+        await possibleCommand.execute(client, message, args);
+      } catch (error) {
+        console.error(`Error executing prefixless command ${possibleName}:`, error);
+        try {
+          await message.reply('Something went wrong while executing that command.');
+        } catch {
+          // ignore
+        }
+      }
+      // Important: return so we don't also try to process this as a prefixed command
+      return;
+    }
+  }
+
+  // --- PREFIX COMMAND HANDLING ---
   if (!content.startsWith(prefix)) return;
 
   const args = content.slice(prefix.length).trim().split(/\s+/);

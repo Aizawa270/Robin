@@ -1,6 +1,6 @@
 module.exports = {
   prefix: '$',
-  ownerId: '', // you can fill this later with your Discord user ID
+  ownerId: '852839588689870879', // your Discord user ID
   colors: {
     ping: '#00ff9d',
     userinfo: '#00eaff',
