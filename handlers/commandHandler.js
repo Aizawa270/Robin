@@ -18,16 +18,16 @@ function loadCommands(client) {
     const categoryPath = path.join(commandsPath, category);
     const stat = fs.statSync(categoryPath);
 
-    // Support direct .js files at root
+    // direct JS files in root of commands
     if (stat.isFile() && category.endsWith('.js')) {
       const command = require(categoryPath);
       if (!command.name || typeof command.execute !== 'function') continue;
 
-      // Defaults
-      if (!command.description) command.description = 'No description.';
-      if (!command.usage) command.usage = 'No usage.';
-      if (!command.category) command.category = 'Misc';
-      if (!Array.isArray(command.aliases)) command.aliases = [];
+      // Fill defaults
+      command.description ||= 'No description.';
+      command.usage ||= 'No usage.';
+      command.category ||= 'Misc';
+      command.aliases ||= [];
 
       client.commands.set(command.name.toLowerCase(), command);
       console.log(`Loaded command: ${command.name} (root)`);
@@ -42,11 +42,11 @@ function loadCommands(client) {
       const command = require(filePath);
       if (!command.name || typeof command.execute !== 'function') continue;
 
-      // Defaults
-      if (!command.description) command.description = 'No description.';
-      if (!command.usage) command.usage = 'No usage.';
-      if (!command.category) command.category = 'Misc';
-      if (!Array.isArray(command.aliases)) command.aliases = [];
+      // Fill defaults
+      command.description ||= 'No description.';
+      command.usage ||= 'No usage.';
+      command.category ||= 'Misc';
+      command.aliases ||= [];
 
       client.commands.set(command.name.toLowerCase(), command);
       console.log(`Loaded command: ${command.name} (${category})`);
@@ -65,7 +65,7 @@ async function handleMessage(client, message) {
   if (client.afk?.has(message.author.id)) {
     client.afk.delete(message.author.id);
     try {
-      await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`);
+      await message.reply(`Welcome back, <@${message.author.id}>. Removed your AFK status.`);
     } catch {}
   }
 
@@ -75,7 +75,9 @@ async function handleMessage(client, message) {
       if (data) {
         try {
           await message.reply(
-            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(data.since / 1000)}:R>)`
+            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(
+              data.since / 1000
+            )}:R>)`
           );
         } catch {}
       }
@@ -85,28 +87,30 @@ async function handleMessage(client, message) {
   // --- PREFIXLESS ---
   if (client.prefixless && client.prefixless.has(message.author.id)) {
     const parts = content.split(/\s+/);
-    const possibleName = parts[0].toLowerCase();
+    const cmdName = parts[0].toLowerCase();
 
-    let possibleCommand = client.commands.get(possibleName);
-    if (!possibleCommand) {
-      possibleCommand = Array.from(client.commands.values()).find(cmd =>
-        Array.isArray(cmd.aliases) && cmd.aliases.includes(possibleName)
+    let cmd = client.commands.get(cmdName);
+    if (!cmd) {
+      cmd = Array.from(client.commands.values()).find(c =>
+        Array.isArray(c.aliases) && c.aliases.includes(cmdName)
       );
     }
 
-    if (possibleCommand) {
+    if (cmd) {
       const args = parts.slice(1);
       try {
-        await possibleCommand.execute(client, message, args);
+        await cmd.execute(client, message, args);
       } catch (err) {
-        console.error(`Prefixless command error (${possibleName}):`, err);
-        try { await message.reply('Something went wrong while executing that command.'); } catch {}
+        console.error(`Error executing prefixless command ${cmdName}:`, err);
+        try {
+          await message.reply('Something went wrong while executing that command.');
+        } catch {}
       }
       return;
     }
   }
 
-  // --- PREFIX COMMANDS ---
+  // --- PREFIXED ---
   if (!content.startsWith(prefix)) return;
 
   const args = content.slice(prefix.length).trim().split(/\s+/);
@@ -115,8 +119,8 @@ async function handleMessage(client, message) {
 
   let command = client.commands.get(commandName);
   if (!command) {
-    command = Array.from(client.commands.values()).find(cmd =>
-      Array.isArray(cmd.aliases) && cmd.aliases.includes(commandName)
+    command = Array.from(client.commands.values()).find(c =>
+      Array.isArray(c.aliases) && c.aliases.includes(commandName)
     );
   }
 
@@ -125,8 +129,10 @@ async function handleMessage(client, message) {
   try {
     await command.execute(client, message, args);
   } catch (err) {
-    console.error(`Command execution error (${commandName}):`, err);
-    try { await message.reply('Something went wrong while executing that command.'); } catch {}
+    console.error(`Error executing command ${commandName}:`, err);
+    try {
+      await message.reply('Something went wrong while executing that command.');
+    } catch {}
   }
 }
 
