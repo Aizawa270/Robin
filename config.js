@@ -1,6 +1,11 @@
 module.exports = {
   prefix: '$',
-  ownerId: '852839588689870879', // your Discord user ID
+  ownerId: '852839588689870879', // your ID
+  // Users who should always have prefixless on startup
+  defaultPrefixless: [
+    '852839588689870879', // you
+    // add other staff IDs here if you want them always prefixless
+  ],
   colors: {
     ping: '#00ff9d',
     userinfo: '#00eaff',
