@@ -35,12 +35,17 @@ module.exports = {
     for (const categoryName of sortedCategoryNames) {
       const cmds = categories[categoryName];
 
-      // Format: `name` – description (usage)
+      // Format each command safely
       const value = cmds
         .sort((a, b) => a.name.localeCompare(b.name))
         .map((cmd) => {
           const usage = cmd.usage ? `\nUsage: \`${cmd.usage}\`` : '';
-          return `\`${cmd.name}\` – ${cmd.description || 'No description.'}${usage}`;
+          const aliases =
+            Array.isArray(cmd.aliases) && cmd.aliases.length
+              ? `\nAliases: \`${cmd.aliases.join('`, `')}\``
+              : '';
+          const desc = cmd.description || 'No description.';
+          return `\`${cmd.name}\` – ${desc}${aliases}${usage}`;
         })
         .join('\n\n');
 
