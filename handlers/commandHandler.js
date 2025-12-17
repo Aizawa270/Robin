@@ -19,7 +19,7 @@ function loadCommands(client) {
     const categoryPath = path.join(commandsPath, category);
     const stat = fs.statSync(categoryPath);
 
-    // direct .js files in /commands (not really used, but supported)
+    // Support direct .js files at /commands root (optional)
     if (stat.isFile() && category.endsWith('.js')) {
       const filePath = categoryPath;
       const command = require(filePath);
@@ -56,6 +56,9 @@ function loadCommands(client) {
 async function handleMessage(client, message) {
   if (message.author.bot) return;
 
+  const content = message.content?.trim();
+  if (!content) return;
+
   // --- AFK: clear AFK when user sends any message ---
   const afkData = client.afk?.get(message.author.id);
   if (afkData) {
@@ -63,7 +66,7 @@ async function handleMessage(client, message) {
     try {
       await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`);
     } catch {
-      // ignore
+      // ignore reply errors
     }
   }
 
@@ -72,9 +75,7 @@ async function handleMessage(client, message) {
     const mentionedAfks = [];
     for (const [, user] of message.mentions.users) {
       const data = client.afk.get(user.id);
-      if (data) {
-        mentionedAfks.push({ user, data });
-      }
+      if (data) mentionedAfks.push({ user, data });
     }
 
     for (const { user, data } of mentionedAfks) {
@@ -90,14 +91,10 @@ async function handleMessage(client, message) {
     }
   }
 
-  const content = message.content.trim();
-  if (!content) return;
-
   // --- PREFIXLESS HOOK ---
   // For users in client.prefixless: if their message starts with a known command name,
-  // run that command as if they had used the prefix.
+  // run that command as if it had the prefix.
   if (client.prefixless && client.prefixless.has(message.author.id)) {
-    // Split into first word (potential command) + rest (args)
     const parts = content.split(/\s+/);
     const possibleName = parts[0].toLowerCase();
     const possibleCommand = client.commands.get(possibleName);
@@ -114,8 +111,7 @@ async function handleMessage(client, message) {
           // ignore
         }
       }
-      // Important: return so we don't also try to process this as a prefixed command
-      return;
+      return; // do not also process as prefixed
     }
   }
 
