@@ -1,36 +1,43 @@
 const { EmbedBuilder } = require('discord.js');
 
+const MAX_SNIPES = 15;
+
 module.exports = {
   name: 'snipeimage',
-  description: 'Shows the last deleted image or GIF. Usage: $snipeimage [1-15]',
-  aliases: ['si'],
+  description: 'Shows recently deleted images or GIFs in this channel.',
   category: 'utility',
-  usage: '$snipeimage [1-15]',
+  usage: '$snipeimage [number]',
+  aliases: ['si'],
   async execute(client, message, args) {
-    const channelId = message.channel.id;
-    const snipes = client.snipes.get(channelId);
+    if (!message.guild) return;
 
-    if (!snipes || !snipes.length) return message.reply('No deleted images found in this channel.');
+    if (!client.snipesImage) client.snipesImage = new Map(); // channelId -> array of deleted msgs
 
-    const index = Math.min(Math.max(parseInt(args[0] || '1') - 1, 0), 14); // 1-15 index
-    const data = snipes[index];
+    const snipes = client.snipesImage.get(message.channel.id) || [];
+    if (!snipes.length) return message.reply('No deleted images or GIFs found.');
 
-    if (!data) return message.reply('No deleted image at that index.');
+    // Default to latest snipe
+    let index = parseInt(args[0], 10);
+    if (isNaN(index) || index < 1) index = 1;
+    if (index > snipes.length) index = snipes.length;
 
-    // Filter for image/gif attachments only
-    const imageAttachment = data.attachments.find((url) =>
-      url.endsWith('.png') || url.endsWith('.jpg') || url.endsWith('.jpeg') || url.endsWith('.gif') || url.endsWith('.webp')
-    );
+    const snipe = snipes[index - 1]; // arrays are 0-indexed
 
-    if (!imageAttachment) return message.reply('No images or GIFs found in that deleted message.');
+    if (!snipe || !snipe.attachments.length) {
+      return message.reply('No image/GIF found for that snipe.');
+    }
 
     const embed = new EmbedBuilder()
-      .setColor('Blue')
-      .setAuthor({ name: data.author.tag, iconURL: data.author.displayAvatarURL({ dynamic: true }) })
-      .setTitle('Deleted Image/GIF')
-      .setImage(imageAttachment)
-      .setTimestamp(data.createdAt);
+      .setColor('#22c55e')
+      .setAuthor({
+        name: `${snipe.author.tag}`,
+        iconURL: snipe.author.displayAvatarURL({ dynamic: true }),
+      })
+      .setDescription(snipe.content || 'No caption')
+      .setImage(snipe.attachments[0]) // show first attachment
+      .setFooter({ text: `Snipe ${index} of ${snipes.length}` })
+      .setTimestamp();
 
-    await message.reply({ embeds: [embed] });
+    message.reply({ embeds: [embed] });
   },
 };
