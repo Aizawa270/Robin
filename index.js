@@ -15,7 +15,7 @@ const client = new Client({
   ],
 });
 
-// AFK storage
+// --- AFK storage ---
 client.afk = new Map(); // userId -> { reason, since }
 
 // --- Load persistent prefixless ---
@@ -27,7 +27,7 @@ try {
   client.prefixless = new Set(defaultPrefixless || []);
 }
 
-// Helper: save prefixless whenever it changes
+// Save prefixless helper
 client.savePrefixless = () => {
   fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless]));
 };
@@ -36,12 +36,12 @@ client.savePrefixless = () => {
 client.snipes = new Map();       // text messages
 client.snipesEdit = new Map();   // edited messages
 client.snipesImage = new Map();  // images/GIFs
+client.edits = client.snipesEdit; // for snipedit command
 
-// --- Capture deleted messages for snipe ---
+// --- Capture deleted messages ---
 client.on('messageDelete', (message) => {
   if (!message.guild) return;
 
-  // Text snipe
   const textData = {
     author: message.author,
     content: message.content || '',
@@ -65,7 +65,7 @@ client.on('messageDelete', (message) => {
   }
 });
 
-// --- Capture edited messages for snipe edit ---
+// --- Capture edited messages ---
 client.on('messageUpdate', (oldMessage, newMessage) => {
   if (!oldMessage.guild) return;
   if (oldMessage.content === newMessage.content) return;
@@ -74,6 +74,7 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
     author: oldMessage.author,
     oldContent: oldMessage.content || '',
     newContent: newMessage.content || '',
+    createdAt: newMessage.createdAt,
   };
 
   if (!client.snipesEdit.has(oldMessage.channel.id)) client.snipesEdit.set(oldMessage.channel.id, []);
@@ -83,6 +84,7 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
   client.snipesEdit.set(oldMessage.channel.id, arr);
 });
 
+// --- Ready event ---
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
@@ -90,8 +92,8 @@ client.once('ready', () => {
 // --- Handle messages ---
 client.on('messageCreate', (message) => handleMessage(client, message));
 
-// Load commands
+// --- Load commands ---
 loadCommands(client);
 
-// Login
+// --- Login ---
 client.login(process.env.DISCORD_TOKEN);
