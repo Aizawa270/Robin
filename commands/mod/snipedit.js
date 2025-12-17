@@ -2,24 +2,27 @@ const { EmbedBuilder } = require('discord.js');
 
 module.exports = {
   name: 'snipedit',
+  description: 'Shows last edited messages. Usage: $snipedit [1-15]',
   aliases: ['se'],
+  category: 'utility',
   async execute(client, message, args) {
-    const edits = client.edits.get(message.channel.id);
-    if (!edits || edits.length === 0) return message.reply('Nothing edited recently!');
+    const channelId = message.channel.id;
+    const edits = client.edits.get(channelId);
+    const index = Math.min(Math.max(parseInt(args[0] || '1') - 1, 0), 14);
 
-    const index = Math.min(Math.max(parseInt(args[0] || '1', 10) - 1, 0), edits.length - 1);
-    const edit = edits[index];
+    if (!edits || !edits[index]) return message.reply('No edited message found at that index.');
 
+    const data = edits[index];
     const embed = new EmbedBuilder()
-      .setColor(0xf1c40f)
-      .setAuthor({ name: edit.author, iconURL: edit.avatar })
+      .setColor('Yellow')
+      .setAuthor({ name: data.author.tag, iconURL: data.author.displayAvatarURL({ dynamic: true }) })
+      .setTitle('Edited Message')
       .addFields(
-        { name: 'Before', value: edit.oldContent || '*(empty)*' },
-        { name: 'After', value: edit.newContent || '*(empty)*' }
+        { name: 'Before', value: data.oldContent || '[No Text]' },
+        { name: 'After', value: data.newContent || '[No Text]' }
       )
-      .setFooter({ text: `Edited message (#${index + 1})` })
-      .setTimestamp(edit.timestamp);
+      .setTimestamp(data.createdAt);
 
-    message.channel.send({ embeds: [embed] });
+    message.reply({ embeds: [embed] });
   },
 };
