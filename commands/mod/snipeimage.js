@@ -2,21 +2,25 @@ const { EmbedBuilder } = require('discord.js');
 
 module.exports = {
   name: 'snipeimage',
+  description: 'Shows the last deleted image/GIF. Usage: $snipeimage [1-15]',
   aliases: ['si'],
+  category: 'utility',
   async execute(client, message, args) {
-    const snipes = client.imageSnipes.get(message.channel.id);
-    if (!snipes || snipes.length === 0) return message.reply('No deleted images or GIFs!');
+    const channelId = message.channel.id;
+    const snipes = client.snipes.get(channelId);
+    const index = Math.min(Math.max(parseInt(args[0] || '1') - 1, 0), 14);
 
-    const index = Math.min(Math.max(parseInt(args[0] || '1', 10) - 1, 0), snipes.length - 1);
-    const snipe = snipes[index];
+    if (!snipes || !snipes[index]) return message.reply('No deleted image found at that index.');
+    const data = snipes[index];
+    if (!data.attachments.length) return message.reply('No attachments found in that deleted message.');
 
     const embed = new EmbedBuilder()
-      .setColor(0x9b59b6)
-      .setAuthor({ name: snipe.author, iconURL: snipe.avatar })
-      .setImage(snipe.imageURL)
-      .setFooter({ text: `Deleted image (#${index + 1})` })
-      .setTimestamp(snipe.timestamp);
+      .setColor('Blue')
+      .setAuthor({ name: data.author.tag, iconURL: data.author.displayAvatarURL({ dynamic: true }) })
+      .setTitle('Deleted Image/GIF')
+      .setImage(data.attachments[0])
+      .setTimestamp(data.createdAt);
 
-    message.channel.send({ embeds: [embed] });
+    message.reply({ embeds: [embed] });
   },
 };
