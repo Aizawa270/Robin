@@ -1,10 +1,11 @@
 require('dotenv').config();
 const fs = require('fs');
+const path = require('path');
 const { Client, GatewayIntentBits } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const { defaultPrefixless } = require('./config');
 
-const PREFIXLESS_FILE = './prefixless.json';
+const PREFIXLESS_FILE = path.join(__dirname, 'prefixless.json');
 
 const client = new Client({
   intents: [
@@ -18,22 +19,31 @@ const client = new Client({
 // --- AFK storage ---
 client.afk = new Map(); // userId -> { reason, since }
 
-// --- Load persistent prefixless ---
+// --- Prefixless storage ---
+if (!fs.existsSync(PREFIXLESS_FILE)) {
+  fs.writeFileSync(PREFIXLESS_FILE, '[]');
+}
+
 try {
   const data = fs.readFileSync(PREFIXLESS_FILE, 'utf8');
   const ids = JSON.parse(data);
   client.prefixless = new Set(ids);
-} catch {
+} catch (err) {
+  console.warn('Failed to load prefixless.json, initializing empty:', err);
   client.prefixless = new Set(defaultPrefixless || []);
 }
 
-// Save prefixless helper
+// Helper: save prefixless immediately
 client.savePrefixless = () => {
-  fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless]));
+  try {
+    fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless], null, 2));
+  } catch (err) {
+    console.error('Failed to save prefixless:', err);
+  }
 };
 
-// --- Snipe storage ---
-client.snipes = new Map();       // text messages
+// --- Snipes storage ---
+client.snipes = new Map();       // deleted messages
 client.snipesEdit = new Map();   // edited messages
 client.snipesImage = new Map();  // images/GIFs
 client.edits = client.snipesEdit; // for snipedit command
