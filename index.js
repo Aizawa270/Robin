@@ -1,6 +1,6 @@
 require('dotenv').config();
 const fs = require('fs');
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const { defaultPrefixless } = require('./config');
 
@@ -13,69 +13,79 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
 // AFK storage
 client.afk = new Map(); // userId -> { reason, since }
 
-// Prefixless storage
+// Snipes storage
+client.snipes = new Map();      // deleted messages
+client.editSnipes = new Map();  // edited messages
+
+// --- Load persistent prefixless ---
 try {
   const data = fs.readFileSync(PREFIXLESS_FILE, 'utf8');
-  client.prefixless = new Set(JSON.parse(data));
+  const ids = JSON.parse(data);
+  client.prefixless = new Set(ids);
 } catch {
   client.prefixless = new Set(defaultPrefixless || []);
 }
+
+// Helper: save prefixless whenever it changes
 client.savePrefixless = () => {
   fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless]));
 };
 
-// --- Snipes storage (up to 15 messages per channel)
-client.snipes = new Map();
-client.edits = new Map(); // edited messages
-
-client.on('messageDelete', message => {
-  if (!message.guild) return;
-  const channelId = message.channel.id;
-  const entry = {
-    content: message.content,
-    author: message.author,
-    attachments: message.attachments.map(a => a.url),
-    createdAt: Date.now(),
-  };
-  if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
-  const arr = client.snipes.get(channelId);
-  arr.unshift(entry);
-  if (arr.length > 15) arr.pop();
-  client.snipes.set(channelId, arr);
-});
-
-client.on('messageUpdate', (oldMessage, newMessage) => {
-  if (!oldMessage.guild || oldMessage.author.bot) return;
-  if (oldMessage.content === newMessage.content) return;
-
-  const channelId = oldMessage.channel.id;
-  const entry = {
-    oldContent: oldMessage.content,
-    newContent: newMessage.content,
-    author: oldMessage.author,
-    createdAt: Date.now(),
-  };
-  if (!client.edits.has(channelId)) client.edits.set(channelId, []);
-  const arr = client.edits.get(channelId);
-  arr.unshift(entry);
-  if (arr.length > 15) arr.pop();
-  client.edits.set(channelId, arr);
-});
-
+// --- Event: Bot ready ---
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
-client.on('messageCreate', message => {
+// --- Event: Message delete ---
+client.on('messageDelete', (message) => {
+  if (!message.guild) return;
+
+  const attachments = message.attachments.map(a => a.url); // store all attachments
+
+  const entry = {
+    content: message.content,
+    author: message.author,
+    attachments,
+    createdAt: Date.now(),
+  };
+
+  if (!client.snipes.has(message.channel.id)) client.snipes.set(message.channel.id, []);
+  const arr = client.snipes.get(message.channel.id);
+  arr.unshift(entry);
+  if (arr.length > 15) arr.pop(); // keep last 15 deleted messages
+  client.snipes.set(message.channel.id, arr);
+});
+
+// --- Event: Message update ---
+client.on('messageUpdate', (oldMessage, newMessage) => {
+  if (!oldMessage.guild || oldMessage.content === newMessage.content) return;
+
+  if (!client.editSnipes.has(oldMessage.channel.id)) client.editSnipes.set(oldMessage.channel.id, []);
+  const arr = client.editSnipes.get(oldMessage.channel.id);
+
+  arr.unshift({
+    oldContent: oldMessage.content,
+    newContent: newMessage.content,
+    author: oldMessage.author,
+    createdAt: Date.now(),
+  });
+
+  if (arr.length > 15) arr.pop();
+  client.editSnipes.set(oldMessage.channel.id, arr);
+});
+
+// --- Event: Message create ---
+client.on('messageCreate', (message) => {
   handleMessage(client, message);
 });
 
+// --- Load commands ---
 loadCommands(client);
 
+// --- Login bot ---
 client.login(process.env.DISCORD_TOKEN);
