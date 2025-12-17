@@ -21,15 +21,20 @@ module.exports = {
     const sub = args.shift()?.toLowerCase();
 
     if (!sub || !['add', 'remove', 'list'].includes(sub)) {
-      return message.reply(
-        'Usage:\n' +
-          '`$prefixless add @user`\n' +
-          '`$prefixless remove @user`\n' +
-          '`$prefixless list`',
-      );
+      const embed = new EmbedBuilder()
+        .setColor(colors.afk || '#94a3b8')
+        .setTitle('Prefixless Command Usage')
+        .setDescription(
+          '**Usage:**\n' +
+            '`$prefixless add @user`\n' +
+            '`$prefixless remove @user`\n' +
+            '`$prefixless list`\n\n' +
+            '**Example:**\n' +
+            '`$prefixless add @SomeUser`',
+        );
+      return message.reply({ embeds: [embed] });
     }
 
-    // list
     if (sub === 'list') {
       const ids = Array.from(client.prefixless);
       if (!ids.length) {
