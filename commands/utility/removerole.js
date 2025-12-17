@@ -1,43 +1,32 @@
+const { EmbedBuilder } = require('discord.js');
+
 module.exports = {
-    name: "removerole",
+  name: 'removerole',
+  description: 'Remove a role from a user. Usage: $removerole @user @role',
+  aliases: ['rr'],
+  category: 'utility',
+  async execute(client, message, args) {
+    if (!message.guild) return;
+    if (!message.member.permissions.has('ManageRoles')) return message.reply('You need Manage Roles permission.');
 
-    async execute(message, args) {
-        if (!message.member.permissions.has("ManageRoles")) {
-            return message.reply("❌ You don’t have permission to manage roles.");
-        }
+    const member = message.mentions.members.first() || message.guild.members.cache.get(args[0]);
+    const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
+    if (!member || !role) return message.reply('Usage: $removerole @user @role');
 
-        const member =
-            message.mentions.members.first() ||
-            message.guild.members.cache.get(args[0]);
+    if (role.position >= message.guild.members.me.roles.highest.position)
+      return message.reply('I cannot remove that role because it is above my top role.');
 
-        const role =
-            message.mentions.roles.first() ||
-            message.guild.roles.cache.get(args[1]);
-
-        if (!member || !role) {
-            return message.reply("❌ Usage: `$removerole @user @role`");
-        }
-
-        if (role.position >= message.guild.members.me.roles.highest.position) {
-            return message.reply("❌ That role is higher than or equal to my role.");
-        }
-
-        await member.roles.remove(role);
-
-        const embed = {
-            color: 0xe74c3c,
-            title: "🗑️ Role Removed",
-            description: `Successfully removed **${role.name}** from **${member.user.tag}**.`,
-            thumbnail: {
-                url: member.user.displayAvatarURL({ dynamic: true })
-            },
-            footer: {
-                text: `Action by ${message.author.tag}`,
-                icon_url: message.author.displayAvatarURL({ dynamic: true })
-            },
-            timestamp: new Date()
-        };
-
-        message.channel.send({ embeds: [embed] });
+    try {
+      await member.roles.remove(role);
+      const embed = new EmbedBuilder()
+        .setColor('Red')
+        .setTitle('Role Removed')
+        .setDescription(`Removed **${role.name}** from **${member.user.tag}**`)
+        .setThumbnail(member.user.displayAvatarURL({ dynamic: true }));
+      message.reply({ embeds: [embed] });
+    } catch (e) {
+      console.error(e);
+      message.reply('Something went wrong while executing that command.');
     }
+  },
 };
