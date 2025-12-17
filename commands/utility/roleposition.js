@@ -1,29 +1,22 @@
+const { EmbedBuilder } = require('discord.js');
+
 module.exports = {
-    name: "roleposition",
+  name: 'roleposition',
+  description: 'Get the position of a role. Usage: $roleposition @role',
+  aliases: ['rp'],
+  category: 'utility',
+  async execute(client, message, args) {
+    if (!message.guild) return;
 
-    async execute(message, args) {
-        const role =
-            message.mentions.roles.first() ||
-            message.guild.roles.cache.get(args[0]);
+    const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[0]);
+    if (!role) return message.reply('Usage: $roleposition @role');
 
-        if (!role) {
-            return message.reply("❌ Usage: `$roleposition @role`");
-        }
+    const embed = new EmbedBuilder()
+      .setColor('Blue')
+      .setTitle('Role Position')
+      .setDescription(`**${role.name}** is at position **${role.position}**`)
+      .setThumbnail(message.guild.iconURL({ dynamic: true }));
 
-        const embed = {
-            color: 0x5865f2, // Discord blurple
-            title: "📍 Role Position",
-            description: `**${role.name}** is at position:\n\n🔢 **${role.position}**`,
-            thumbnail: {
-                url: message.guild.iconURL({ dynamic: true })
-            },
-            footer: {
-                text: `Requested by ${message.author.tag}`,
-                icon_url: message.author.displayAvatarURL({ dynamic: true })
-            },
-            timestamp: new Date()
-        };
-
-        message.channel.send({ embeds: [embed] });
-    }
+    message.reply({ embeds: [embed] });
+  },
 };
