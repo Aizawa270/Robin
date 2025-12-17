@@ -22,19 +22,34 @@ function loadCommands(client) {
     if (stat.isFile() && category.endsWith('.js')) {
       const command = require(categoryPath);
       if (!command.name || typeof command.execute !== 'function') continue;
+
+      // Fill defaults
+      if (!command.description) command.description = 'No description.';
+      if (!command.usage) command.usage = 'No usage.';
+      if (!command.category) command.category = 'Misc';
+      if (!Array.isArray(command.aliases)) command.aliases = [];
+
       client.commands.set(command.name.toLowerCase(), command);
+      console.log(`Loaded command: ${command.name} (root)`);
       continue;
     }
 
     if (!stat.isDirectory()) continue;
 
     const files = fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'));
-
     for (const file of files) {
       const filePath = path.join(categoryPath, file);
       const command = require(filePath);
       if (!command.name || typeof command.execute !== 'function') continue;
+
+      // Fill defaults
+      if (!command.description) command.description = 'No description.';
+      if (!command.usage) command.usage = 'No usage.';
+      if (!command.category) command.category = 'Misc';
+      if (!Array.isArray(command.aliases)) command.aliases = [];
+
       client.commands.set(command.name.toLowerCase(), command);
+      console.log(`Loaded command: ${command.name} (${category})`);
     }
   }
 
@@ -61,7 +76,7 @@ async function handleMessage(client, message) {
       if (data) {
         try {
           await message.reply(
-            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(data.since/1000)}:R>)`
+            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(data.since / 1000)}:R>)`
           );
         } catch {}
       }
