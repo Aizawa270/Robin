@@ -3,61 +3,47 @@ const { colors, prefix } = require('../../config');
 
 module.exports = {
   name: 'help',
-  description: 'Shows the list of commands and what they do.',
-  category: 'misc',
+  description: 'Shows all available commands and their usage.',
+  category: 'utility',
   usage: '$help',
   async execute(client, message, args) {
-    const commands = client.commands;
+    try {
+      const embed = new EmbedBuilder()
+        .setTitle('Help Menu')
+        .setColor(colors.help || '#22c55e')
+        .setDescription(`Prefix: \`${prefix}\`\nHere is a list of commands:`)
+        .setThumbnail(client.user.displayAvatarURL({ size: 1024 }));
 
-    // Group by category
-    const categories = {};
+      const commands = Array.from(client.commands.values());
 
-    for (const command of commands.values()) {
-      const category = command.category || 'other';
-      if (!categories[category]) categories[category] = [];
-      categories[category].push(command);
+      // Group commands by category
+      const categories = {};
+      for (const cmd of commands) {
+        const category = cmd.category || 'Misc';
+        if (!categories[category]) categories[category] = [];
+
+        const desc = cmd.description || 'No description.';
+        const usage = cmd.usage ? `\nUsage: \`${cmd.usage}\`` : '';
+        const aliases = Array.isArray(cmd.aliases) && cmd.aliases.length
+          ? `\nAliases: ${cmd.aliases.join(', ')}`
+          : '';
+
+        categories[category].push(`\`${cmd.name}\` – ${desc}${aliases}${usage}`);
+      }
+
+      // Add fields per category
+      for (const [categoryName, cmds] of Object.entries(categories)) {
+        embed.addFields({
+          name: `${categoryName[0].toUpperCase() + categoryName.slice(1)} Commands`,
+          value: cmds.join('\n\n') || 'None',
+          inline: false,
+        });
+      }
+
+      await message.reply({ embeds: [embed] });
+    } catch (err) {
+      console.error('Error in help command:', err);
+      message.reply('Something went wrong while executing the help command.');
     }
-
-    // Sort categories alphabetically
-    const sortedCategoryNames = Object.keys(categories).sort((a, b) =>
-      a.localeCompare(b),
-    );
-
-    const embed = new EmbedBuilder()
-      .setTitle('Help Menu')
-      .setColor(colors.help || '#22c55e')
-      .setDescription(
-        `Prefix: \`${prefix}\`\n` +
-          'Here is a list of my commands. Use `command` syntax like shown in usage.',
-      )
-      .setThumbnail(client.user.displayAvatarURL({ size: 1024 }));
-
-    for (const categoryName of sortedCategoryNames) {
-      const cmds = categories[categoryName];
-
-      // Format each command safely
-      const value = cmds
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((cmd) => {
-          const usage = cmd.usage ? `\nUsage: \`${cmd.usage}\`` : '';
-          const aliases =
-            Array.isArray(cmd.aliases) && cmd.aliases.length
-              ? `\nAliases: \`${cmd.aliases.join('`, `')}\``
-              : '';
-          const desc = cmd.description || 'No description.';
-          return `\`${cmd.name}\` – ${desc}${aliases}${usage}`;
-        })
-        .join('\n\n');
-
-      const prettyName = categoryName[0].toUpperCase() + categoryName.slice(1);
-
-      embed.addFields({
-        name: `${prettyName} Commands`,
-        value: value || 'None',
-        inline: false,
-      });
-    }
-
-    await message.reply({ embeds: [embed] });
   },
 };
