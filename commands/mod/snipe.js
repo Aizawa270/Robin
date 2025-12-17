@@ -2,21 +2,24 @@ const { EmbedBuilder } = require('discord.js');
 
 module.exports = {
   name: 'snipe',
+  description: 'Shows deleted messages. Usage: $snipe [1-15]',
   aliases: ['s'],
+  category: 'utility',
   async execute(client, message, args) {
-    const snipes = client.snipes.get(message.channel.id);
-    if (!snipes || snipes.length === 0) return message.reply('Nothing to snipe!');
+    const channelId = message.channel.id;
+    const snipes = client.snipes.get(channelId);
+    const index = Math.min(Math.max(parseInt(args[0] || '1') - 1, 0), 14);
 
-    const index = Math.min(Math.max(parseInt(args[0] || '1', 10) - 1, 0), snipes.length - 1);
-    const snipe = snipes[index];
+    if (!snipes || !snipes[index]) return message.reply('No deleted message found at that index.');
 
+    const data = snipes[index];
     const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
-      .setAuthor({ name: snipe.author, iconURL: snipe.avatar })
-      .setDescription(snipe.content || '*(empty)*')
-      .setFooter({ text: `Deleted message (#${index + 1})` })
-      .setTimestamp(snipe.timestamp);
+      .setColor('Orange')
+      .setAuthor({ name: data.author.tag, iconURL: data.author.displayAvatarURL({ dynamic: true }) })
+      .setDescription(data.content || '[No Text Content]')
+      .setTimestamp(data.createdAt);
 
-    message.channel.send({ embeds: [embed] });
+    if (data.attachments.length) embed.setImage(data.attachments[0]);
+    message.reply({ embeds: [embed] });
   },
 };
