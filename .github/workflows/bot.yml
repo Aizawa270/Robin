@@ -3,10 +3,8 @@ name: Discord Bot
 on:
   workflow_dispatch:
   schedule:
-    # Restart approx every 5.5 hours
     - cron: '30 */5 * * *'
 
-# 🔴 THIS WAS THE MAIN ISSUE
 permissions:
   contents: write
 
@@ -16,52 +14,37 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # =========================
-      # Checkout repo (WITH WRITE ACCESS)
-      # =========================
-      - name: Checkout repo
+      - name: Checkout repo (with credentials)
         uses: actions/checkout@v4
         with:
           persist-credentials: true
           fetch-depth: 0
 
-      # =========================
-      # Node.js setup
-      # =========================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      # =========================
-      # Native deps (for better-sqlite3)
-      # =========================
-      - name: Install system dependencies
+      - name: Install system dependencies (for native builds)
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 g++ make
+          sudo apt-get install -y python3 g++ make libsqlite3-dev pkg-config
 
-      # =========================
-      # Install dependencies
-      # =========================
       - name: Install project dependencies
         run: |
+          # prefer clean install; fallback to npm install
           npm ci || npm install
-          npm rebuild better-sqlite3 --build-from-source
+          # ensure better-sqlite3 is present and built
+          npm install better-sqlite3@latest --build-from-source || true
+          npm rebuild --build-from-source
 
-      # =========================
-      # Create .env from secrets
-      # =========================
-      - name: Create .env file
+      - name: Create .env file from secrets
         run: |
           echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" >> .env
           echo "CLIENT_ID=${{ secrets.CLIENT_ID }}" >> .env
           echo "WEATHERAPI_KEY=${{ secrets.WEATHERAPI_KEY }}" >> .env
           echo "REMOVEBG_API_KEY=${{ secrets.REMOVEBG_API_KEY }}" >> .env
 
-      # =========================
-      # Start bot
-      # =========================
       - name: Start bot
         run: node index.js
         env:
@@ -70,15 +53,13 @@ jobs:
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
           REMOVEBG_API_KEY: ${{ secrets.REMOVEBG_API_KEY }}
 
-      # =========================
-      # Persist SQLite DBs
-      # =========================
       - name: Persist databases
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add data/prefixless.sqlite data/quarantine.sqlite
-          git commit -m "chore: persist sqlite databases (auto)" || echo "No DB changes"
+          git add data/prefixless.sqlite data/quarantine.sqlite || true
+          git commit -m "chore: persist sqlite DB" || echo "No DB changes to commit"
           git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
