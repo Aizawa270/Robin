@@ -10,7 +10,7 @@ const Database = require('better-sqlite3');
    FILE PATHS (PERSISTENT)
 ============================ */
 const DATA_DIR = path.join(__dirname, 'data');
-const QUARANTINE_FILE = path.join(DATA_DIR, 'quarantine.json');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 /* ============================
    CLIENT
@@ -25,49 +25,39 @@ const client = new Client({
 });
 
 /* ============================
-   ENSURE DATA DIRECTORY
+   DATABASES
 ============================ */
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(QUARANTINE_FILE)) fs.writeFileSync(QUARANTINE_FILE, '{}');
-
-/* ============================
-   DATABASE (PREFIXLESS)
-============================ */
-const PREFIXLESS_DB = path.join(DATA_DIR, 'prefixless.db');
-const db = new Database(PREFIXLESS_DB);
+// Prefixless SQLite
+const PREFIXLESS_DB = path.join(DATA_DIR, 'prefixless.sqlite');
+const prefixlessDB = new Database(PREFIXLESS_DB);
 
 // create table if not exists
-db.prepare(`
+prefixlessDB.prepare(`
   CREATE TABLE IF NOT EXISTS prefixless (
-    userId TEXT PRIMARY KEY
+    user_id TEXT PRIMARY KEY
   )
 `).run();
 
-client.db = db;
+client.prefixlessDB = prefixlessDB;
+
+// Quarantine SQLite
+const QUARANTINE_DB = path.join(DATA_DIR, 'quarantine.sqlite');
+const quarantineDB = new Database(QUARANTINE_DB);
+
+// create table if not exists
+quarantineDB.prepare(`
+  CREATE TABLE IF NOT EXISTS quarantine (
+    user_id TEXT PRIMARY KEY,
+    roles TEXT
+  )
+`).run();
+
+client.quarantineDB = quarantineDB;
 
 /* ============================
    AFK STORAGE
 ============================ */
 client.afk = new Map();
-
-/* ============================
-   QUARANTINE (PERSISTENT)
-============================ */
-let quarantineData = {};
-try {
-  quarantineData = JSON.parse(fs.readFileSync(QUARANTINE_FILE, 'utf8'));
-} catch (err) {
-  console.warn('Failed to load quarantine.json, initializing empty:', err);
-  quarantineData = {};
-}
-
-client.saveQuarantine = () => {
-  try {
-    fs.writeFileSync(QUARANTINE_FILE, JSON.stringify(quarantineData, null, 2));
-  } catch (err) {
-    console.error('Failed to save quarantine data:', err);
-  }
-};
 
 /* ============================
    SNIPE STORAGE
@@ -124,9 +114,10 @@ client.once('ready', async () => {
   const QUARANTINE_ROLE_ID = '1432363678430396436';
 
   // Restore quarantine roles after restart
-  for (const guild of client.guilds.cache.values()) {
-    for (const userId of Object.keys(quarantineData)) {
-      const member = await guild.members.fetch(userId).catch(() => null);
+  const rows = client.quarantineDB.prepare('SELECT user_id FROM quarantine').all();
+  for (const row of rows) {
+    for (const guild of client.guilds.cache.values()) {
+      const member = await guild.members.fetch(row.user_id).catch(() => null);
       if (!member) continue;
       if (!member.roles.cache.has(QUARANTINE_ROLE_ID)) {
         await member.roles.set([QUARANTINE_ROLE_ID]).catch(console.error);
