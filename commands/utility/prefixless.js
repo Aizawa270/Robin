@@ -25,15 +25,15 @@ module.exports = {
       });
     }
 
-    const db = client.db;
+    const db = client.prefixlessDB;
 
     if (sub === 'list') {
-      const rows = db.prepare(`SELECT userId FROM prefixless`).all();
+      const rows = db.prepare(`SELECT user_id FROM prefixless`).all();
       if (!rows.length) return message.reply('No users have prefixless enabled.');
 
       const members = rows.map(r => {
-        const m = message.guild.members.cache.get(r.userId);
-        return m ? `${m.user.tag} (${r.userId})` : `Unknown user (${r.userId})`;
+        const m = message.guild.members.cache.get(r.user_id);
+        return m ? `${m.user.tag} (${r.user_id})` : `Unknown user (${r.user_id})`;
       }).join('\n');
 
       return message.reply({
@@ -50,7 +50,7 @@ module.exports = {
     if (!target) return message.reply('Please specify a user by mention or ID.');
 
     if (sub === 'add') {
-      db.prepare(`INSERT OR IGNORE INTO prefixless (userId) VALUES (?)`).run(target.id);
+      db.prepare(`INSERT OR IGNORE INTO prefixless (user_id) VALUES (?)`).run(target.id);
       return message.reply({
         embeds: [
           new EmbedBuilder()
@@ -62,7 +62,7 @@ module.exports = {
     }
 
     if (sub === 'remove') {
-      db.prepare(`DELETE FROM prefixless WHERE userId = ?`).run(target.id);
+      db.prepare(`DELETE FROM prefixless WHERE user_id = ?`).run(target.id);
       return message.reply({
         embeds: [
           new EmbedBuilder()
