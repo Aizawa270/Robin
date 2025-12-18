@@ -5,8 +5,15 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const { defaultPrefixless } = require('./config');
 
-const PREFIXLESS_FILE = path.join(__dirname, 'prefixless.json');
+/* ============================
+   FILE PATHS (PERSISTENT)
+============================ */
+const DATA_DIR = path.join(__dirname, 'data');
+const PREFIXLESS_FILE = path.join(DATA_DIR, 'prefixless.json');
 
+/* ============================
+   CLIENT
+============================ */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -16,94 +23,114 @@ const client = new Client({
   ],
 });
 
-// --- AFK storage ---
-client.afk = new Map(); // userId -> { reason, since }
-
-// --- Prefixless storage ---
-if (!fs.existsSync(PREFIXLESS_FILE)) {
-  fs.writeFileSync(PREFIXLESS_FILE, '[]');
+/* ============================
+   ENSURE DATA DIRECTORY
+============================ */
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+if (!fs.existsSync(PREFIXLESS_FILE)) {
+  fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([], null, 2));
+}
+
+/* ============================
+   AFK STORAGE
+============================ */
+client.afk = new Map();
+
+/* ============================
+   PREFIXLESS (PERSISTENT)
+============================ */
 try {
   const data = fs.readFileSync(PREFIXLESS_FILE, 'utf8');
   const ids = JSON.parse(data);
   client.prefixless = new Set(ids);
 } catch (err) {
-  console.warn('Failed to load prefixless.json, initializing empty:', err);
+  console.error('Failed to load prefixless.json, resetting:', err);
   client.prefixless = new Set(defaultPrefixless || []);
+  fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless], null, 2));
 }
 
-// Helper: save prefixless immediately
 client.savePrefixless = () => {
   try {
-    fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless], null, 2));
+    fs.writeFileSync(
+      PREFIXLESS_FILE,
+      JSON.stringify([...client.prefixless], null, 2)
+    );
   } catch (err) {
     console.error('Failed to save prefixless:', err);
   }
 };
 
-// --- Snipes storage ---
-client.snipes = new Map();       // deleted messages
-client.snipesEdit = new Map();   // edited messages
-client.snipesImage = new Map();  // images/GIFs
-client.edits = client.snipesEdit; // for snipedit command
+/* ============================
+   SNIPE STORAGE
+============================ */
+client.snipes = new Map();
+client.snipesEdit = new Map();
+client.snipesImage = new Map();
+client.edits = client.snipesEdit; // compatibility for snipedit
 
-// --- Capture deleted messages ---
+/* ============================
+   MESSAGE DELETE (SNIPE)
+============================ */
 client.on('messageDelete', (message) => {
-  if (!message.guild) return;
+  if (!message.guild || !message.author) return;
 
-  const textData = {
+  const data = {
     author: message.author,
     content: message.content || '',
-    attachments: Array.from(message.attachments.values()).map(a => a.proxyURL),
+    attachments: [...message.attachments.values()].map(a => a.proxyURL),
   };
 
-  // Text snipes
-  if (!client.snipes.has(message.channel.id)) client.snipes.set(message.channel.id, []);
-  const arr = client.snipes.get(message.channel.id);
-  arr.unshift(textData);
-  if (arr.length > 15) arr.pop();
-  client.snipes.set(message.channel.id, arr);
-
-  // Image snipes
-  if (message.attachments.size) {
-    if (!client.snipesImage.has(message.channel.id)) client.snipesImage.set(message.channel.id, []);
-    const imgArr = client.snipesImage.get(message.channel.id);
-    imgArr.unshift(textData);
-    if (imgArr.length > 15) imgArr.pop();
-    client.snipesImage.set(message.channel.id, imgArr);
+  if (!client.snipes.has(message.channel.id)) {
+    client.snipes.set(message.channel.id, []);
   }
+
+  const arr = client.snipes.get(message.channel.id);
+  arr.unshift(data);
+  if (arr.length > 15) arr.pop();
 });
 
-// --- Capture edited messages ---
+/* ============================
+   MESSAGE UPDATE (SNIPEDIT)
+============================ */
 client.on('messageUpdate', (oldMessage, newMessage) => {
   if (!oldMessage.guild) return;
   if (oldMessage.content === newMessage.content) return;
 
-  const editData = {
+  const data = {
     author: oldMessage.author,
     oldContent: oldMessage.content || '',
     newContent: newMessage.content || '',
     createdAt: newMessage.createdAt,
   };
 
-  if (!client.snipesEdit.has(oldMessage.channel.id)) client.snipesEdit.set(oldMessage.channel.id, []);
+  if (!client.snipesEdit.has(oldMessage.channel.id)) {
+    client.snipesEdit.set(oldMessage.channel.id, []);
+  }
+
   const arr = client.snipesEdit.get(oldMessage.channel.id);
-  arr.unshift(editData);
+  arr.unshift(data);
   if (arr.length > 15) arr.pop();
-  client.snipesEdit.set(oldMessage.channel.id, arr);
 });
 
-// --- Ready event ---
+/* ============================
+   READY
+============================ */
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
-// --- Handle messages ---
-client.on('messageCreate', (message) => handleMessage(client, message));
+/* ============================
+   MESSAGE HANDLER
+============================ */
+client.on('messageCreate', (message) => {
+  handleMessage(client, message);
+});
 
-// --- Load commands ---
+/* ============================
+   LOAD COMMANDS & LOGIN
+============================ */
 loadCommands(client);
-
-// --- Login ---
 client.login(process.env.DISCORD_TOKEN);
