@@ -1,5 +1,9 @@
 const { EmbedBuilder } = require('discord.js');
 const { colors, ownerId } = require('../../config');
+const fs = require('fs');
+const path = require('path');
+
+const PREFIXLESS_FILE = path.join(__dirname, '..', '..', 'prefixless.json');
 
 module.exports = {
   name: 'prefixless',
@@ -9,24 +13,22 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return message.reply('This command can only be used in a server.');
     if (message.author.id !== ownerId) return message.reply('Only the bot owner can manage prefixless users.');
+    if (!client.prefixless) client.prefixless = new Set();
 
     const sub = args.shift()?.toLowerCase();
     if (!sub || !['add', 'remove', 'list'].includes(sub)) {
-      return message.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(colors.afk || '#94a3b8')
-            .setTitle('Prefixless Command Usage')
-            .setDescription(
-              '**Usage:**\n' +
-              '`$prefixless add @user`\n' +
-              '`$prefixless remove @user`\n' +
-              '`$prefixless list`\n\n' +
-              '**Example:**\n' +
-              '`$prefixless add @SomeUser`'
-            )
-        ]
-      });
+      const embed = new EmbedBuilder()
+        .setColor(colors.afk || '#94a3b8')
+        .setTitle('Prefixless Command Usage')
+        .setDescription(
+          '**Usage:**\n' +
+          '`$prefixless add @user`\n' +
+          '`$prefixless remove @user`\n' +
+          '`$prefixless list`\n\n' +
+          '**Example:**\n' +
+          '`$prefixless add @SomeUser`'
+        );
+      return message.reply({ embeds: [embed] });
     }
 
     if (sub === 'list') {
@@ -38,32 +40,49 @@ module.exports = {
         return m ? `${m.user.tag} (${id})` : `Unknown user (${id})`;
       }).join('\n');
 
-      return message.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(colors.afk || '#94a3b8')
-            .setTitle('Prefixless Users')
-            .setDescription(members)
-        ]
-      });
+      const embed = new EmbedBuilder()
+        .setColor(colors.afk || '#94a3b8')
+        .setTitle('Prefixless Users')
+        .setDescription(members);
+
+      return message.reply({ embeds: [embed] });
     }
 
-    // add/remove
+    // add/remove commands require a user
     const target = message.mentions.users.first() ||
       (args[0] && await client.users.fetch(args[0]).catch(() => null));
 
-    if (!target) return message.reply('Specify a user by mention or ID.');
+    if (!target) return message.reply('Please specify a user by mention or ID.');
+
+    // function to save prefixless.json
+    const savePrefixlessFile = () => {
+      try {
+        fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless], null, 2));
+      } catch (err) {
+        console.error('Failed to save prefixless.json:', err);
+      }
+    };
 
     if (sub === 'add') {
       client.prefixless.add(target.id);
-      client.savePrefixless();
-      return message.reply(`Enabled prefixless for **${target.tag}** (${target.id}).`);
+      savePrefixlessFile();
+
+      const embed = new EmbedBuilder()
+        .setColor(colors.afk || '#94a3b8')
+        .setTitle('Prefixless Added ✅')
+        .setDescription(`Successfully added prefixless to **${target.tag}** (@${target.username})`);
+      return message.reply({ embeds: [embed] });
     }
 
     if (sub === 'remove') {
       client.prefixless.delete(target.id);
-      client.savePrefixless();
-      return message.reply(`Disabled prefixless for **${target.tag}** (${target.id}).`);
+      savePrefixlessFile();
+
+      const embed = new EmbedBuilder()
+        .setColor(colors.afk || '#94a3b8')
+        .setTitle('Prefixless Removed ⚠️')
+        .setDescription(`Successfully removed prefixless from **${target.tag}** (@${target.username})`);
+      return message.reply({ embeds: [embed] });
     }
-  }
+  },
 };
