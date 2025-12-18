@@ -1,24 +1,29 @@
 name: Discord Bot
 
 on:
-  workflow_dispatch:   # Manual start
+  workflow_dispatch:
   schedule:
-    # Restart approx every 5.5 hours (at minute 30 every 5th hour UTC)
+    # Restart approx every 5.5 hours
     - cron: '30 */5 * * *'
+
+# 🔴 THIS WAS THE MAIN ISSUE
+permissions:
+  contents: write
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # max 6 hours per run
+    timeout-minutes: 360
 
     steps:
       # =========================
-      # Checkout repo with credentials
+      # Checkout repo (WITH WRITE ACCESS)
       # =========================
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          persist-credentials: true  # THIS FIXES GIT PUSH PERMISSIONS
+          persist-credentials: true
+          fetch-depth: 0
 
       # =========================
       # Node.js setup
@@ -29,25 +34,25 @@ jobs:
           node-version: '22'
 
       # =========================
-      # System dependencies for native modules
+      # Native deps (for better-sqlite3)
       # =========================
-      - name: Install system dependencies for native modules
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 g++ make
 
       # =========================
-      # Project dependencies
+      # Install dependencies
       # =========================
       - name: Install project dependencies
         run: |
           npm ci || npm install
-          npm install better-sqlite3@latest --build-from-source
+          npm rebuild better-sqlite3 --build-from-source
 
       # =========================
-      # Create .env file from secrets
+      # Create .env from secrets
       # =========================
-      - name: Create .env file from secrets
+      - name: Create .env file
         run: |
           echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" >> .env
           echo "CLIENT_ID=${{ secrets.CLIENT_ID }}" >> .env
@@ -66,15 +71,14 @@ jobs:
           REMOVEBG_API_KEY: ${{ secrets.REMOVEBG_API_KEY }}
 
       # =========================
-      # Persist prefixless DB back to repo
+      # Persist SQLite DBs
       # =========================
-      - name: Persist prefixless DB
+      - name: Persist databases
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/prefixless.sqlite
-          git commit -m "chore: update prefixless DB (auto)" || echo "No changes to commit"
+
+          git add data/prefixless.sqlite data/quarantine.sqlite
+          git commit -m "chore: persist sqlite databases (auto)" || echo "No DB changes"
           git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
