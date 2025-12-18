@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
-const { defaultPrefixless } = require('./config');
+const { defaultPrefixless, prefix } = require('./config');
 const Database = require('better-sqlite3');
 
 /* ============================
@@ -30,28 +30,27 @@ const client = new Client({
 // Prefixless SQLite
 const PREFIXLESS_DB = path.join(DATA_DIR, 'prefixless.sqlite');
 const prefixlessDB = new Database(PREFIXLESS_DB);
-
-// create table if not exists
 prefixlessDB.prepare(`
   CREATE TABLE IF NOT EXISTS prefixless (
     user_id TEXT PRIMARY KEY
   )
 `).run();
-
 client.prefixlessDB = prefixlessDB;
+
+// Load prefixless users into memory
+client.prefixless = new Set();
+const prefixlessRows = prefixlessDB.prepare('SELECT user_id FROM prefixless').all();
+for (const row of prefixlessRows) client.prefixless.add(row.user_id);
 
 // Quarantine SQLite
 const QUARANTINE_DB = path.join(DATA_DIR, 'quarantine.sqlite');
 const quarantineDB = new Database(QUARANTINE_DB);
-
-// create table if not exists
 quarantineDB.prepare(`
   CREATE TABLE IF NOT EXISTS quarantine (
     user_id TEXT PRIMARY KEY,
     roles TEXT
   )
 `).run();
-
 client.quarantineDB = quarantineDB;
 
 /* ============================
@@ -72,13 +71,11 @@ client.edits = client.snipesEdit;
 ============================ */
 client.on('messageDelete', (message) => {
   if (!message.guild || !message.author) return;
-
   const data = {
     author: message.author,
     content: message.content || '',
     attachments: [...message.attachments.values()].map(a => a.proxyURL),
   };
-
   if (!client.snipes.has(message.channel.id)) client.snipes.set(message.channel.id, []);
   const arr = client.snipes.get(message.channel.id);
   arr.unshift(data);
@@ -91,14 +88,12 @@ client.on('messageDelete', (message) => {
 client.on('messageUpdate', (oldMessage, newMessage) => {
   if (!oldMessage.guild) return;
   if (oldMessage.content === newMessage.content) return;
-
   const data = {
     author: oldMessage.author,
     oldContent: oldMessage.content || '',
     newContent: newMessage.content || '',
     createdAt: newMessage.createdAt,
   };
-
   if (!client.snipesEdit.has(oldMessage.channel.id)) client.snipesEdit.set(oldMessage.channel.id, []);
   const arr = client.snipesEdit.get(oldMessage.channel.id);
   arr.unshift(data);
