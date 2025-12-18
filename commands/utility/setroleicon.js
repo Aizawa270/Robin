@@ -1,5 +1,5 @@
-const { EmbedBuilder } = require('discord.js');
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch);
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 module.exports = {
   name: 'setroleicon',
@@ -9,7 +9,8 @@ module.exports = {
   aliases: ['sri'],
   async execute(client, message, args) {
     if (!message.guild) return message.reply('This command only works in servers.');
-    if (!message.member.permissions.has('ManageRoles')) return message.reply('You need Manage Roles perms.');
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) 
+      return message.reply('You need Manage Roles permissions.');
 
     const roleArg = args[0];
     const url = args[1];
@@ -24,6 +25,7 @@ module.exports = {
 
       const buffer = Buffer.from(await res.arrayBuffer());
       await role.setIcon(buffer);
+
       const embed = new EmbedBuilder()
         .setColor(role.hexColor || '#ffffff')
         .setDescription(`Role **${role.name}** icon has been updated successfully.`);
