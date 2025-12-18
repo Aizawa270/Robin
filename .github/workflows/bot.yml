@@ -1,14 +1,15 @@
 name: Discord Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # Manual start
   schedule:
+    # Restart approx every 5.5 hours (at minute 30 every 5th hour UTC)
     - cron: '30 */5 * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360  # max 6 hours per run
 
     steps:
       - name: Checkout repo
@@ -31,14 +32,11 @@ jobs:
 
       - name: Create .env file from secrets
         run: |
-          echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" >> .env
-          echo "CLIENT_ID=${{ secrets.CLIENT_ID }}" >> .env
-          echo "WEATHERAPI_KEY=${{ secrets.WEATHERAPI_KEY }}" >> .env
-          echo "REMOVEBG_API_KEY=${{ secrets.REMOVEBG_API_KEY }}" >> .env
-
-      # ✅ Make sure data folder exists
-      - name: Ensure data folder
-        run: mkdir -p data
+          touch .env
+          grep -qxF "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" .env || echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" >> .env
+          grep -qxF "CLIENT_ID=${{ secrets.CLIENT_ID }}" .env || echo "CLIENT_ID=${{ secrets.CLIENT_ID }}" >> .env
+          grep -qxF "WEATHERAPI_KEY=${{ secrets.WEATHERAPI_KEY }}" .env || echo "WEATHERAPI_KEY=${{ secrets.WEATHERAPI_KEY }}" >> .env
+          grep -qxF "REMOVEBG_API_KEY=${{ secrets.REMOVEBG_API_KEY }}" .env || echo "REMOVEBG_API_KEY=${{ secrets.REMOVEBG_API_KEY }}" >> .env
 
       - name: Start bot
         run: node index.js
@@ -48,9 +46,8 @@ jobs:
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
           REMOVEBG_API_KEY: ${{ secrets.REMOVEBG_API_KEY }}
 
-      # Persist prefixless DB back to repo
       - name: Persist prefixless DB
-        if: always()
+        if: always() && steps.persist-db-check.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -59,3 +56,12 @@ jobs:
           git push origin HEAD:$(echo $GITHUB_REF | sed 's|refs/heads/||')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check prefixless DB exists
+        id: persist-db-check
+        run: |
+          if [ -f data/prefixless.sqlite ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
