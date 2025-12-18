@@ -1,48 +1,35 @@
 const { EmbedBuilder } = require('discord.js');
-const fetch = require('node-fetch'); // make sure to install node-fetch v2 if on Node <18
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch);
 
 module.exports = {
   name: 'translate',
-  description: 'Translate any text to English.',
+  description: 'Translate text to English.',
   category: 'utility',
   usage: '$translate <text>',
-  aliases: ['tr'],
   async execute(client, message, args) {
-    if (!args.length) return message.reply('Please provide some text to translate. Example: `$translate Bonjour`');
-
+    if (!args.length) return message.reply('Please provide text to translate.');
     const text = args.join(' ');
 
     try {
-      const response = await fetch('https://libretranslate.de/translate', {
+      const res = await fetch('https://libretranslate.de/translate', {
         method: 'POST',
-        body: JSON.stringify({
-          q: text,
-          source: 'auto',
-          target: 'en',
-          format: 'text'
-        }),
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: text, source: 'auto', target: 'en', format: 'text' })
       });
 
-      const data = await response.json();
-
-      if (!data.translatedText) {
-        return message.reply('Translation failed. Try again later.');
-      }
-
+      const data = await res.json();
       const embed = new EmbedBuilder()
-        .setTitle('Translation')
         .setColor('#22c55e')
+        .setTitle('Translation')
         .addFields(
-          { name: 'Original', value: text, inline: false },
-          { name: 'Translated (to English)', value: data.translatedText, inline: false }
-        )
-        .setTimestamp();
+          { name: 'Original', value: text },
+          { name: 'English', value: data.translatedText || 'Error' }
+        );
 
-      await message.reply({ embeds: [embed] });
+      message.reply({ embeds: [embed] });
     } catch (err) {
-      console.error('Translate command error:', err);
-      message.reply('Something went wrong while translating.');
+      console.error('Translate error:', err);
+      message.reply('Failed to translate text.');
     }
-  }
+  },
 };
