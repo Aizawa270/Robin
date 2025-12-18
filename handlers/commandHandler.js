@@ -56,7 +56,6 @@ function registerCommand(client, command, filePath = 'unknown') {
   console.log(`Loaded command: ${command.name} (${command.category})`);
 }
 
-/* =========================== 🔥 MESSAGE HANDLER =========================== */
 async function handleMessage(client, message) {
   if (message.author.bot) return;
   const content = message.content?.trim();
@@ -90,6 +89,7 @@ async function handleMessage(client, message) {
     const cmdName = parts.shift().toLowerCase();
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!cmd) return;
+
     try { await cmd.execute(client, message, parts); } 
     catch (err) {
       console.error(`Prefixless error (${cmdName}):`, err);
