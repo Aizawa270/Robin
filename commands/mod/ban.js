@@ -3,6 +3,7 @@ const { colors } = require('../../config');
 
 module.exports = {
   name: 'ban',
+  aliases: ['B', 'b'], // <-- aliases added
   description: 'Ban a user by mention or ID.',
   category: 'mod',
   usage: '$ban <@user|userID> [reason]',
@@ -11,12 +12,12 @@ module.exports = {
       return message.reply('This command can only be used in a server.');
     }
 
-    // Only admins can ban
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Only admins can use this command.');
+    // Check if member has Ban Members permission
+    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+      return message.reply('You need the **Ban Members** permission to use this command.');
     }
 
-    // If no args → show help embed
+    // Show usage if no args
     if (!args.length) {
       const embed = new EmbedBuilder()
         .setColor(colors.roleinfo || '#fde047')
@@ -32,8 +33,6 @@ module.exports = {
       return message.reply({ embeds: [embed] });
     }
 
-    const reason = args.slice(1).join(' ') || 'No reason provided';
-
     const targetUser =
       message.mentions.users.first() ||
       (args[0] && (await client.users.fetch(args[0]).catch(() => null)));
@@ -44,15 +43,17 @@ module.exports = {
 
     const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
 
-    // Prevent banning yourself / bot / admins
+    const reason = args.slice(1).join(' ') || 'No reason provided';
+
+    // Prevent banning self / bot / higher roles
     if (targetUser.id === message.author.id) {
       return message.reply('You cannot ban yourself.');
     }
     if (targetUser.id === client.user.id) {
       return message.reply('I cannot ban myself.');
     }
-    if (targetMember && targetMember.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('You cannot ban an administrator.');
+    if (targetMember && targetMember.roles.highest.position >= message.member.roles.highest.position) {
+      return message.reply('You cannot ban someone with an equal or higher role than yours.');
     }
 
     if (targetMember && !targetMember.bannable) {
@@ -69,21 +70,9 @@ module.exports = {
         .setTitle('User Banned')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
-          {
-            name: 'User',
-            value: `${targetUser.tag} (${targetUser.id})`,
-            inline: false,
-          },
-          {
-            name: 'Banned by',
-            value: `${message.author.tag} (${message.author.id})`,
-            inline: false,
-          },
-          {
-            name: 'Reason',
-            value: reason,
-            inline: false,
-          },
+          { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: false },
+          { name: 'Banned by', value: `${message.author.tag} (${message.author.id})`, inline: false },
+          { name: 'Reason', value: reason, inline: false },
         )
         .setTimestamp();
 
