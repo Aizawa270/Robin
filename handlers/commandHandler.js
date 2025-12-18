@@ -16,18 +16,11 @@ function loadCommands(client) {
   for (const category of categories) {
     const categoryPath = path.join(commandsPath, category);
     let stat;
-    try {
-      stat = fs.statSync(categoryPath);
-    } catch {
-      continue;
-    }
+    try { stat = fs.statSync(categoryPath); } catch { continue; }
 
     if (stat.isFile() && category.endsWith('.js')) {
-      try {
-        registerCommand(client, require(categoryPath), categoryPath);
-      } catch (err) {
-        client.brokenCommands.push({ file: categoryPath, error: err.stack || String(err) });
-      }
+      try { registerCommand(client, require(categoryPath), categoryPath); }
+      catch (err) { client.brokenCommands.push({ file: categoryPath, error: err.stack || String(err) }); }
       continue;
     }
 
@@ -36,11 +29,8 @@ function loadCommands(client) {
     const files = fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'));
     for (const file of files) {
       const filePath = path.join(categoryPath, file);
-      try {
-        registerCommand(client, require(filePath), filePath);
-      } catch (err) {
-        client.brokenCommands.push({ file: filePath, error: err.stack || String(err) });
-      }
+      try { registerCommand(client, require(filePath), filePath); }
+      catch (err) { client.brokenCommands.push({ file: filePath, error: err.stack || String(err) }); }
     }
   }
 
@@ -48,12 +38,9 @@ function loadCommands(client) {
 }
 
 function registerCommand(client, command, filePath = 'unknown') {
-  if (!command || typeof command !== 'object')
-    throw new Error(`Invalid command export in ${filePath}`);
-  if (!command.name || typeof command.name !== 'string')
-    throw new Error(`Missing name in ${filePath}`);
-  if (typeof command.execute !== 'function')
-    throw new Error(`Missing execute() in ${command.name}`);
+  if (!command || typeof command !== 'object') throw new Error(`Invalid command export in ${filePath}`);
+  if (!command.name || typeof command.name !== 'string') throw new Error(`Missing name in ${filePath}`);
+  if (typeof command.execute !== 'function') throw new Error(`Missing execute() in ${command.name}`);
 
   if (!command.description) command.description = 'No description.';
   if (!command.usage) command.usage = '';
@@ -63,29 +50,22 @@ function registerCommand(client, command, filePath = 'unknown') {
   client.commands.set(command.name.toLowerCase(), command);
 
   for (const a of command.aliases) {
-    if (!client.aliases.has(a.toLowerCase())) {
-      client.aliases.set(a.toLowerCase(), command);
-    }
+    if (!client.aliases.has(a.toLowerCase())) client.aliases.set(a.toLowerCase(), command);
   }
 
   console.log(`Loaded command: ${command.name} (${command.category})`);
 }
 
-/* ===========================
-   🔥 FIXED MESSAGE HANDLER
-   =========================== */
+/* =========================== 🔥 MESSAGE HANDLER =========================== */
 async function handleMessage(client, message) {
   if (message.author.bot) return;
-
   const content = message.content?.trim();
   if (!content) return;
 
   // AFK clear
   if (client.afk?.has(message.author.id)) {
     client.afk.delete(message.author.id);
-    try {
-      await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`);
-    } catch {}
+    try { await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`); } catch {}
   }
 
   // AFK mentions
@@ -95,9 +75,7 @@ async function handleMessage(client, message) {
       if (data) {
         try {
           await message.reply(
-            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(
-              data.since / 1000
-            )}:R>)`
+            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(data.since / 1000)}:R>)`
           );
         } catch {}
       }
@@ -112,16 +90,12 @@ async function handleMessage(client, message) {
     const cmdName = parts.shift().toLowerCase();
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!cmd) return;
-
-    try {
-      await cmd.execute(client, message, parts);
-    } catch (err) {
+    try { await cmd.execute(client, message, parts); } 
+    catch (err) {
       console.error(`Prefixless error (${cmdName}):`, err);
-      try {
-        await message.reply('Something went wrong while executing that command.');
-      } catch {}
+      try { await message.reply('Something went wrong while executing that command.'); } catch {}
     }
-    return; // 🔒 HARD STOP (no double exec)
+    return; // HARD STOP
   }
 
   // ===== PREFIXED =====
@@ -134,13 +108,10 @@ async function handleMessage(client, message) {
   const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
   if (!cmd) return;
 
-  try {
-    await cmd.execute(client, message, args);
-  } catch (err) {
+  try { await cmd.execute(client, message, args); }
+  catch (err) {
     console.error(`Command execution error (${cmdName}):`, err);
-    try {
-      await message.reply('Something went wrong while executing that command.');
-    } catch {}
+    try { await message.reply('Something went wrong while executing that command.'); } catch {}
   }
 }
 
