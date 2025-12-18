@@ -4,12 +4,12 @@ const path = require('path');
 const { Client, GatewayIntentBits } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const { defaultPrefixless } = require('./config');
+const Database = require('better-sqlite3');
 
 /* ============================
    FILE PATHS (PERSISTENT)
 ============================ */
 const DATA_DIR = path.join(__dirname, 'data');
-const PREFIXLESS_FILE = path.join(DATA_DIR, 'prefixless.json');
 const QUARANTINE_FILE = path.join(DATA_DIR, 'quarantine.json');
 
 /* ============================
@@ -28,34 +28,27 @@ const client = new Client({
    ENSURE DATA DIRECTORY
 ============================ */
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(PREFIXLESS_FILE)) fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([], null, 2));
 if (!fs.existsSync(QUARANTINE_FILE)) fs.writeFileSync(QUARANTINE_FILE, '{}');
+
+/* ============================
+   DATABASE (PREFIXLESS)
+============================ */
+const PREFIXLESS_DB = path.join(DATA_DIR, 'prefixless.db');
+const db = new Database(PREFIXLESS_DB);
+
+// create table if not exists
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS prefixless (
+    userId TEXT PRIMARY KEY
+  )
+`).run();
+
+client.db = db;
 
 /* ============================
    AFK STORAGE
 ============================ */
 client.afk = new Map();
-
-/* ============================
-   PREFIXLESS (PERSISTENT)
-============================ */
-try {
-  const data = fs.readFileSync(PREFIXLESS_FILE, 'utf8');
-  const ids = JSON.parse(data);
-  client.prefixless = new Set(ids);
-} catch (err) {
-  console.error('Failed to load prefixless.json, resetting:', err);
-  client.prefixless = new Set(defaultPrefixless || []);
-  fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless], null, 2));
-}
-
-client.savePrefixless = () => {
-  try {
-    fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless], null, 2));
-  } catch (err) {
-    console.error('Failed to save prefixless:', err);
-  }
-};
 
 /* ============================
    QUARANTINE (PERSISTENT)
