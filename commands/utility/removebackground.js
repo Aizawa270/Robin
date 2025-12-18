@@ -1,66 +1,34 @@
-const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
-const fetch = require('node-fetch');
-const FormData = require('form-data');
+const { EmbedBuilder } = require('discord.js');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch);
 
 module.exports = {
-  name: 'removebackground',
-  aliases: ['rbg'],
-  description: 'Removes the background from an image.',
+  name: 'removebg',
+  description: 'Remove the background of an attached image.',
   category: 'utility',
-  usage: '$removebackground (attach image)',
-  async execute(client, message) {
-    const apiKey = process.env.REMOVEBG_API_KEY;
-
-    if (!apiKey) {
-      return message.reply('❌ Background remover API is not configured.');
-    }
-
+  usage: '$removebg (attach an image)',
+  aliases: ['rb'],
+  async execute(client, message, args) {
     const attachment = message.attachments.first();
-    if (!attachment) {
-      return message.reply('❌ Attach an image to remove its background.');
-    }
-
-    const loadingEmbed = new EmbedBuilder()
-      .setColor('#38bdf8')
-      .setDescription('🧠 Removing background… hold up.');
-
-    const msg = await message.reply({ embeds: [loadingEmbed] });
+    if (!attachment) return message.reply('Please attach an image.');
 
     try {
-      const form = new FormData();
-      form.append('image_url', attachment.url);
-      form.append('size', 'auto');
+      const formData = new FormData();
+      formData.append('image_url', attachment.url);
+      formData.append('size', 'auto');
 
       const res = await fetch('https://api.remove.bg/v1.0/removebg', {
         method: 'POST',
-        headers: {
-          'X-Api-Key': apiKey,
-        },
-        body: form,
+        headers: { 'X-Api-Key': process.env.REMOVEBG_API_KEY },
+        body: formData
       });
 
-      if (!res.ok) {
-        throw new Error(`API Error: ${res.status}`);
-      }
+      if (!res.ok) return message.reply('Failed to remove background.');
 
-      const buffer = await res.buffer();
-      const file = new AttachmentBuilder(buffer, { name: 'no-bg.png' });
-
-      const doneEmbed = new EmbedBuilder()
-        .setColor('#22c55e')
-        .setTitle('Background Removed')
-        .setDescription('Here you go 🧼');
-
-      await msg.edit({
-        embeds: [doneEmbed],
-        files: [file],
-      });
+      const buffer = Buffer.from(await res.arrayBuffer());
+      await message.reply({ files: [{ attachment: buffer, name: 'no-bg.png' }] });
     } catch (err) {
       console.error('RemoveBG error:', err);
-      await msg.edit({
-        content: '❌ Failed to remove background.',
-        embeds: [],
-      });
+      message.reply('There was an error removing the background.');
     }
   },
 };
