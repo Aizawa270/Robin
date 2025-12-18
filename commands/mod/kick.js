@@ -1,8 +1,10 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { colors } = require('../../config');
 
 module.exports = {
   name: 'kick',
   description: 'Kick a user by mention or ID.',
+  aliases: ['k', 'K'],
   category: 'mod',
   usage: '$kick <@user|userID> [reason]',
   async execute(client, message, args) {
@@ -10,23 +12,21 @@ module.exports = {
       return message.reply('This command can only be used in a server.');
     }
 
-    // Admin-only for kick as well
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Only admins can use this command.');
+    // Mods with Kick Members permission can kick
+    if (!message.member.permissions.has(PermissionFlagsBits.KickMembers)) {
+      return message.reply('You need the **Kick Members** permission to use this command.');
     }
 
-    // If no args → show usage embed
     if (!args.length) {
       const embed = new EmbedBuilder()
-        .setColor('#fb923c')
+        .setColor(colors.roleinfo || '#fb923c')
         .setTitle('Kick Command Usage')
         .setDescription(
-          'Kick a user by mention or ID.\n\n' +
           '**Usage:**\n' +
           '`$kick <@user|userID> [reason]`\n\n' +
           '**Examples:**\n' +
           '`$kick @User being rude`\n' +
-          '`$kick 123456789012345678 spam`\n',
+          '`$kick 123456789012345678 spam`\n'
         );
       return message.reply({ embeds: [embed] });
     }
@@ -64,25 +64,13 @@ module.exports = {
       await targetMember.kick(`${reason} (kicked by ${message.author.tag})`);
 
       const embed = new EmbedBuilder()
-        .setColor('#fb923c')
+        .setColor(colors.roleinfo || '#fb923c')
         .setTitle('User Kicked')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
-          {
-            name: 'User',
-            value: `${targetUser.tag} (${targetUser.id})`,
-            inline: false,
-          },
-          {
-            name: 'Kicked by',
-            value: `${message.author.tag} (${message.author.id})`,
-            inline: false,
-          },
-          {
-            name: 'Reason',
-            value: reason,
-            inline: false,
-          },
+          { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: false },
+          { name: 'Kicked by', value: `${message.author.tag} (${message.author.id})`, inline: false },
+          { name: 'Reason', value: reason, inline: false }
         )
         .setTimestamp();
 
