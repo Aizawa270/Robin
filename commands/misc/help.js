@@ -1,20 +1,5 @@
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { colors, prefix } = require('../../config');
-
-function chunkString(str, maxLength = 900) {
-  const chunks = [];
-  let current = '';
-  for (const line of str.split('\n')) {
-    if ((current + line + '\n').length > maxLength) {
-      chunks.push(current);
-      current = line + '\n';
-    } else {
-      current += line + '\n';
-    }
-  }
-  if (current) chunks.push(current);
-  return chunks;
-}
 
 module.exports = {
   name: 'help',
@@ -24,41 +9,78 @@ module.exports = {
   aliases: ['h'],
   async execute(client, message, args) {
     try {
-      const embed = new EmbedBuilder()
-        .setTitle('Help Menu')
-        .setColor(colors.help || '#22c55e')
-        .setDescription(`Prefix: \`${prefix}\`\nHere is a list of commands by category:`)
-        .setThumbnail(client.user.displayAvatarURL({ size: 1024 }));
+      const allCommands = Array.from(client.commands.values());
+      if (!allCommands.length) return message.reply('No commands loaded.');
 
       // Group commands by category
       const categories = {};
-      for (const cmd of client.commands.values()) {
-        const name = typeof cmd.name === 'string' ? cmd.name : 'Unknown';
-        const category = typeof cmd.category === 'string' ? cmd.category : 'Misc';
-        const description = typeof cmd.description === 'string' ? cmd.description : 'No description.';
-        const usage = typeof cmd.usage === 'string' && cmd.usage ? `\nUsage: \`${cmd.usage}\`` : '';
-        const aliases = Array.isArray(cmd.aliases) && cmd.aliases.length
-          ? `\nAliases: ${cmd.aliases.join(', ')}`
-          : '';
-
-        if (!categories[category]) categories[category] = [];
-        categories[category].push(`\`${name}\` – ${description}${aliases}${usage}`);
+      for (const cmd of allCommands) {
+        const cat = cmd.category || 'Misc';
+        if (!categories[cat]) categories[cat] = [];
+        categories[cat].push(cmd);
       }
 
-      // Add fields per category, split if too long
+      // Build pages
+      const pages = [];
       for (const [categoryName, cmds] of Object.entries(categories)) {
-        const content = cmds.join('\n\n');
-        const chunks = chunkString(content, 900); // leave buffer under 1024
-        chunks.forEach((chunk, i) => {
-          embed.addFields({
-            name: i === 0 ? `${categoryName[0].toUpperCase() + categoryName.slice(1)} Commands` : '\u200B',
-            value: chunk,
-            inline: false,
+        for (let i = 0; i < cmds.length; i += 10) {
+          const chunk = cmds.slice(i, i + 10);
+          const embed = new EmbedBuilder()
+            .setTitle(`Help – ${categoryName}`)
+            .setColor(colors.help || '#22c55e')
+            .setDescription(`Prefix: \`${prefix}\``)
+            .setThumbnail(client.user.displayAvatarURL({ size: 1024 }))
+            .setFooter({ text: `Page ${pages.length + 1}` });
+
+          chunk.forEach(cmd => {
+            const usage = cmd.usage ? `\nUsage: \`${cmd.usage}\`` : '';
+            const aliases = cmd.aliases && cmd.aliases.length ? `\nAliases: ${cmd.aliases.join(', ')}` : '';
+            embed.addFields({ name: `\`${cmd.name}\``, value: `${cmd.description}${aliases}${usage}`, inline: false });
           });
-        });
+
+          pages.push(embed);
+        }
       }
 
-      await message.reply({ embeds: [embed] });
+      if (!pages.length) return message.reply('No commands to display.');
+
+      // Buttons for navigation
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('prev')
+          .setLabel('⬅️ Previous')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('next')
+          .setLabel('➡️ Next')
+          .setStyle(ButtonStyle.Primary)
+      );
+
+      let current = 0;
+      const helpMsg = await message.reply({ embeds: [pages[current]], components: [row] });
+
+      const collector = helpMsg.createMessageComponentCollector({
+        filter: i => i.user.id === message.author.id,
+        time: 120000 // 2 minutes
+      });
+
+      collector.on('collect', async interaction => {
+        if (!interaction.isButton()) return;
+
+        if (interaction.customId === 'prev') {
+          current = current > 0 ? current - 1 : pages.length - 1;
+        } else if (interaction.customId === 'next') {
+          current = current < pages.length - 1 ? current + 1 : 0;
+        }
+
+        await interaction.update({ embeds: [pages[current]], components: [row] });
+      });
+
+      collector.on('end', async () => {
+        try {
+          await helpMsg.edit({ components: [] });
+        } catch {}
+      });
     } catch (err) {
       console.error('Help command error:', err);
       try { await message.reply('Something went wrong while executing the help command.'); } catch {}
