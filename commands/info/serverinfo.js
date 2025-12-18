@@ -40,8 +40,8 @@ module.exports = {
       .setTitle(guild.name)
       .setThumbnail(guild.iconURL({ dynamic: true, size: 1024 }))
       .addFields(
-        { name: '🆔 Server ID', value: guild.id, inline: true },
-        { name: '👑 Owner', value: owner ? owner.user.tag : 'Unknown', inline: true },
+        { name: 'Server ID', value: guild.id, inline: true },
+        { name: 'Owner', value: owner ? owner.user.tag : 'Unknown', inline: true },
         {
           name: '👥 Members',
           value:
@@ -51,7 +51,7 @@ module.exports = {
           inline: false,
         },
         {
-          name: '📚 Channels',
+          name: 'Channels',
           value:
             `Text: **${textChannels}**\n` +
             `Voice: **${voiceChannels}**\n` +
@@ -59,19 +59,19 @@ module.exports = {
           inline: false,
         },
         {
-          name: '✨ Server Stats',
+          name: 'Server Stats',
           value:
             `Roles: **${rolesCount}**\n` +
             `Emojis: **${emojiCount}**`,
           inline: false,
         },
         {
-          name: '🚀 Boosts',
+          name: 'Boosts',
           value: `Level **${guild.premiumTier}** (${guild.premiumSubscriptionCount || 0} boosts)`,
           inline: false,
         },
         {
-          name: '📅 Created On',
+          name: 'Created On',
           value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:F>`,
           inline: false,
         },
