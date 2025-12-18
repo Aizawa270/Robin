@@ -1,8 +1,9 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { colors } = require('../../config');
 
 module.exports = {
   name: 'unban',
-  description: 'Unban a user by ID or tag.',
+  description: 'Unban a user by ID.',
   category: 'mod',
   usage: '$unban <userID>',
   async execute(client, message, args) {
@@ -10,14 +11,26 @@ module.exports = {
       return message.reply('This command can only be used in a server.');
     }
 
-    // Admin-only
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Only admins can use this command.');
+    // Mods with Ban Members permission can unban
+    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+      return message.reply('You need the **Ban Members** permission to use this command.');
     }
 
     const userId = args[0];
     if (!userId) {
-      return message.reply('Please provide a user ID. Example: `$unban 123456789012345678`');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(colors.roleinfo || '#fde047')
+            .setTitle('Unban Command Usage')
+            .setDescription(
+              '**Usage:**\n' +
+              '`$unban <userID>`\n\n' +
+              '**Example:**\n' +
+              '`$unban 123456789012345678`'
+            )
+        ]
+      });
     }
 
     try {
@@ -32,16 +45,8 @@ module.exports = {
         .setColor('#22c55e') // green for unban
         .setTitle('User Unbanned')
         .addFields(
-          {
-            name: 'User',
-            value: `${banInfo.user.tag} (${banInfo.user.id})`,
-            inline: false,
-          },
-          {
-            name: 'Unbanned by',
-            value: `${message.author.tag} (${message.author.id})`,
-            inline: false,
-          },
+          { name: 'User', value: `${banInfo.user.tag} (${banInfo.user.id})`, inline: false },
+          { name: 'Unbanned by', value: `${message.author.tag} (${message.author.id})`, inline: false },
         )
         .setTimestamp();
 
