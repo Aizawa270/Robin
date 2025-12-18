@@ -1,14 +1,15 @@
 name: Discord Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # Manual start
   schedule:
+    # Restart approx every 5.5 hours (at minute 30 every 5th hour UTC)
     - cron: '30 */5 * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360  # max 6 hours per run
 
     steps:
       - name: Checkout repo
@@ -19,14 +20,15 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y python3 make g++
+      - name: Install system dependencies for native modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 g++ make
 
-      - name: Install dependencies
-        run: npm ci || npm install
-
-      - name: Rebuild better-sqlite3
-        run: npm rebuild better-sqlite3 --build-from-source
+      - name: Install project dependencies
+        run: |
+          npm ci || npm install
+          npm install better-sqlite3@latest --build-from-source
 
       - name: Create .env file from secrets
         run: |
