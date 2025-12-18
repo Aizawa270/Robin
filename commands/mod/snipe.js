@@ -8,21 +8,17 @@ module.exports = {
   async execute(client, message, args) {
     if (!client.snipes) return message.reply('Snipe feature is not enabled.');
 
-    const snipes = client.snipes.get(message.channel.id);
-    if (!snipes || !snipes.length) 
-      return message.reply('No deleted messages found in this channel.');
+    const snipes = client.snipes.get(message.channel.id) || [];
+    if (!snipes.length) return message.reply('No deleted messages found in this channel.');
 
-    const index = parseInt(args[0]) - 1 || 0;
-    if (index < 0 || index >= snipes.length) 
-      return message.reply(`Please provide a valid index between 1 and ${snipes.length}.`);
-
+    const index = Math.min(Math.max(parseInt(args[0]) - 1 || 0, 0), snipes.length - 1);
     const data = snipes[index];
 
     const embed = new EmbedBuilder()
       .setColor('Orange')
-      .setAuthor({ 
-        name: data.author.tag, 
-        iconURL: data.author.displayAvatarURL({ dynamic: true }) 
+      .setAuthor({
+        name: data.author.tag,
+        iconURL: data.author.displayAvatarURL({ dynamic: true }),
       })
       .setDescription(data.content || '[No Text Content]')
       .setTimestamp(data.createdAt);
