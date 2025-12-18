@@ -1,13 +1,9 @@
+// releasequarantine.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
+const Database = require('better-sqlite3');
+const db = new Database('./data/quarantine.sqlite');
 
-const QUARANTINE_FILE = path.join(__dirname, '../../quarantine.json');
 const QUARANTINE_ROLE_ID = '1432363678430396436';
-
-function saveData(data) {
-  fs.writeFileSync(QUARANTINE_FILE, JSON.stringify(data, null, 2));
-}
 
 module.exports = {
   name: 'releasequarantine',
@@ -27,16 +23,15 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
 
-    const data = JSON.parse(fs.readFileSync(QUARANTINE_FILE, 'utf8'));
-    const oldRoles = data[member.id];
-    if (!oldRoles) return message.reply('This user is not in quarantine.');
+    // Fetch roles from DB
+    const row = db.prepare('SELECT roles FROM quarantine WHERE user_id = ?').get(member.id);
+    if (!row) return message.reply('This user is not in quarantine.');
 
-    // Restore old roles and remove quarantine
+    const oldRoles = JSON.parse(row.roles);
     await member.roles.set(oldRoles).catch(console.error);
 
-    // Remove from JSON
-    delete data[member.id];
-    saveData(data);
+    // Remove from DB
+    db.prepare('DELETE FROM quarantine WHERE user_id = ?').run(member.id);
 
     const embed = new EmbedBuilder()
       .setColor('#34d399')
