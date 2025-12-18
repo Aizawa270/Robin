@@ -1,70 +1,36 @@
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const fetch = require('node-fetch');
+const { EmbedBuilder } = require('discord.js');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch);
 
 module.exports = {
   name: 'setroleicon',
-  aliases: ['sri'],
   description: 'Set an icon for a role.',
-  category: 'mod',
-  usage: '$setroleicon <@role|roleID> <image>',
+  category: 'utility',
+  usage: '$setroleicon <role> <image url>',
+  aliases: ['sri'],
   async execute(client, message, args) {
-    if (!message.guild) {
-      return message.reply('This command can only be used in a server.');
-    }
+    if (!message.guild) return message.reply('This command only works in servers.');
+    if (!message.member.permissions.has('ManageRoles')) return message.reply('You need Manage Roles perms.');
 
-    // Bot permission check ONLY
-    if (!message.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) {
-      return message.reply('I need **Manage Roles** permission.');
-    }
+    const roleArg = args[0];
+    const url = args[1];
+    if (!roleArg || !url) return message.reply('Usage: $setroleicon <role> <image URL>');
 
-    const role =
-      message.mentions.roles.first() ||
-      message.guild.roles.cache.get(args[0]);
-
-    if (!role) {
-      return message.reply('Give a valid role mention or role ID.');
-    }
-
-    // Role hierarchy check (non-negotiable)
-    if (role.position >= message.guild.members.me.roles.highest.position) {
-      return message.reply('That role is higher than me. I can’t touch it.');
-    }
-
-    // Image source: attachment OR URL
-    let imageURL =
-      message.attachments.first()?.url ||
-      args.find(a => a.startsWith('http'));
-
-    if (!imageURL) {
-      return message.reply('Attach an image or provide an image URL.');
-    }
+    const role = message.mentions.roles.first() || message.guild.roles.cache.get(roleArg);
+    if (!role) return message.reply('Role not found.');
 
     try {
-      const res = await fetch(imageURL);
-      const buffer = await res.arrayBuffer();
+      const res = await fetch(url);
+      if (!res.ok) return message.reply('Failed to fetch the image.');
 
-      if (buffer.byteLength > 256 * 1024) {
-        return message.reply('Image is too large. Max size is **256KB**.');
-      }
-
-      await role.edit({
-        icon: Buffer.from(buffer),
-        reason: `Role icon set by ${message.author.tag}`,
-      });
-
+      const buffer = Buffer.from(await res.arrayBuffer());
+      await role.setIcon(buffer);
       const embed = new EmbedBuilder()
-        .setColor('#22c55e')
-        .setTitle('Role Icon Updated')
-        .setDescription(
-          `Icon successfully set for **${role.name}** by <@${message.author.id}>`
-        )
-        .setThumbnail(imageURL)
-        .setTimestamp();
-
-      message.reply({ embeds: [embed] });
+        .setColor(role.hexColor || '#ffffff')
+        .setDescription(`Role **${role.name}** icon has been updated successfully.`);
+      await message.reply({ embeds: [embed] });
     } catch (err) {
       console.error('SetRoleIcon error:', err);
-      message.reply('Failed to set role icon. Invalid image or Discord said no.');
+      message.reply('Failed to set role icon.');
     }
   },
 };
