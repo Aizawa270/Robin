@@ -10,6 +10,7 @@ const { defaultPrefixless } = require('./config');
 ============================ */
 const DATA_DIR = path.join(__dirname, 'data');
 const PREFIXLESS_FILE = path.join(DATA_DIR, 'prefixless.json');
+const QUARANTINE_FILE = path.join(DATA_DIR, 'quarantine.json');
 
 /* ============================
    CLIENT
@@ -26,13 +27,9 @@ const client = new Client({
 /* ============================
    ENSURE DATA DIRECTORY
 ============================ */
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-if (!fs.existsSync(PREFIXLESS_FILE)) {
-  fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([], null, 2));
-}
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(PREFIXLESS_FILE)) fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([], null, 2));
+if (!fs.existsSync(QUARANTINE_FILE)) fs.writeFileSync(QUARANTINE_FILE, '{}');
 
 /* ============================
    AFK STORAGE
@@ -54,12 +51,28 @@ try {
 
 client.savePrefixless = () => {
   try {
-    fs.writeFileSync(
-      PREFIXLESS_FILE,
-      JSON.stringify([...client.prefixless], null, 2)
-    );
+    fs.writeFileSync(PREFIXLESS_FILE, JSON.stringify([...client.prefixless], null, 2));
   } catch (err) {
     console.error('Failed to save prefixless:', err);
+  }
+};
+
+/* ============================
+   QUARANTINE (PERSISTENT)
+============================ */
+let quarantineData = {};
+try {
+  quarantineData = JSON.parse(fs.readFileSync(QUARANTINE_FILE, 'utf8'));
+} catch (err) {
+  console.warn('Failed to load quarantine.json, initializing empty:', err);
+  quarantineData = {};
+}
+
+client.saveQuarantine = () => {
+  try {
+    fs.writeFileSync(QUARANTINE_FILE, JSON.stringify(quarantineData, null, 2));
+  } catch (err) {
+    console.error('Failed to save quarantine data:', err);
   }
 };
 
@@ -69,7 +82,7 @@ client.savePrefixless = () => {
 client.snipes = new Map();
 client.snipesEdit = new Map();
 client.snipesImage = new Map();
-client.edits = client.snipesEdit; // compatibility for snipedit
+client.edits = client.snipesEdit;
 
 /* ============================
    MESSAGE DELETE (SNIPE)
@@ -83,10 +96,7 @@ client.on('messageDelete', (message) => {
     attachments: [...message.attachments.values()].map(a => a.proxyURL),
   };
 
-  if (!client.snipes.has(message.channel.id)) {
-    client.snipes.set(message.channel.id, []);
-  }
-
+  if (!client.snipes.has(message.channel.id)) client.snipes.set(message.channel.id, []);
   const arr = client.snipes.get(message.channel.id);
   arr.unshift(data);
   if (arr.length > 15) arr.pop();
@@ -106,10 +116,7 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
     createdAt: newMessage.createdAt,
   };
 
-  if (!client.snipesEdit.has(oldMessage.channel.id)) {
-    client.snipesEdit.set(oldMessage.channel.id, []);
-  }
-
+  if (!client.snipesEdit.has(oldMessage.channel.id)) client.snipesEdit.set(oldMessage.channel.id, []);
   const arr = client.snipesEdit.get(oldMessage.channel.id);
   arr.unshift(data);
   if (arr.length > 15) arr.pop();
@@ -118,16 +125,27 @@ client.on('messageUpdate', (oldMessage, newMessage) => {
 /* ============================
    READY
 ============================ */
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
+
+  const QUARANTINE_ROLE_ID = '1432363678430396436';
+
+  // Restore quarantine roles after restart
+  for (const guild of client.guilds.cache.values()) {
+    for (const userId of Object.keys(quarantineData)) {
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) continue;
+      if (!member.roles.cache.has(QUARANTINE_ROLE_ID)) {
+        await member.roles.set([QUARANTINE_ROLE_ID]).catch(console.error);
+      }
+    }
+  }
 });
 
 /* ============================
    MESSAGE HANDLER
 ============================ */
-client.on('messageCreate', (message) => {
-  handleMessage(client, message);
-});
+client.on('messageCreate', (message) => handleMessage(client, message));
 
 /* ============================
    LOAD COMMANDS & LOGIN
