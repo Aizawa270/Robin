@@ -1,15 +1,14 @@
 name: Discord Bot
 
 on:
-  workflow_dispatch:   # Manual start
+  workflow_dispatch:
   schedule:
-    # Restart approx every 5.5 hours (at minute 30 every 5th hour UTC)
     - cron: '30 */5 * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # max 6 hours per run
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repo
@@ -37,6 +36,10 @@ jobs:
           echo "WEATHERAPI_KEY=${{ secrets.WEATHERAPI_KEY }}" >> .env
           echo "REMOVEBG_API_KEY=${{ secrets.REMOVEBG_API_KEY }}" >> .env
 
+      # ✅ Make sure data folder exists
+      - name: Ensure data folder
+        run: mkdir -p data
+
       - name: Start bot
         run: node index.js
         env:
@@ -45,9 +48,7 @@ jobs:
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
           REMOVEBG_API_KEY: ${{ secrets.REMOVEBG_API_KEY }}
 
-      # =========================
       # Persist prefixless DB back to repo
-      # =========================
       - name: Persist prefixless DB
         if: always()
         run: |
