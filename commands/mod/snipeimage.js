@@ -3,28 +3,19 @@ const { EmbedBuilder } = require('discord.js');
 module.exports = {
   name: 'snipeimage',
   description: 'Shows recently deleted images or GIFs in this channel.',
-  usage: '$snipeimage [number]',
   aliases: ['si'],
   category: 'utility',
+  usage: '$snipeimage [1-15]',
   async execute(client, message, args) {
     if (!message.guild) return;
 
     const snipes = client.snipesImage?.get(message.channel.id) || [];
-    if (!snipes.length) return message.channel.send('No deleted images or GIFs found.');
+    if (!snipes.length) return message.reply('No deleted images or GIFs found.');
 
-    let index = parseInt(args[0], 10) || 1;
-    index = Math.max(1, Math.min(index, snipes.length)); // clamp to valid range
+    const index = Math.min(Math.max(parseInt(args[0]) - 1 || 0, 0), snipes.length - 1);
+    const snipe = snipes[index];
 
-    const snipe = snipes[index - 1];
-    if (!snipe || !snipe.attachments?.length) {
-      return message.channel.send('No image/GIF found for that snipe.');
-    }
-
-    const description = snipe.content
-      ? snipe.content.length > 4096
-        ? snipe.content.slice(0, 4093) + '...'
-        : snipe.content
-      : 'No caption';
+    if (!snipe) return message.reply('No image found at that index.');
 
     const embed = new EmbedBuilder()
       .setColor('#22c55e')
@@ -32,10 +23,11 @@ module.exports = {
         name: snipe.author.tag,
         iconURL: snipe.author.displayAvatarURL({ dynamic: true }),
       })
-      .setDescription(description)
-      .setImage(snipe.attachments[0].url) // correct usage
-      .setFooter({ text: `Snipe ${index} of ${snipes.length}` })
-      .setTimestamp();
+      .setDescription(snipe.content || '[No Caption]')
+      .setTimestamp()
+      .setFooter({ text: `Snipe ${index + 1} of ${snipes.length}` });
+
+    if (snipe.attachments && snipe.attachments.length) embed.setImage(snipe.attachments[0]);
 
     message.channel.send({ embeds: [embed] });
   },
