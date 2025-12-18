@@ -1,5 +1,4 @@
 const { EmbedBuilder } = require('discord.js');
-const { colors } = require('../../config');
 
 module.exports = {
   name: 'roleinfo',
@@ -32,10 +31,12 @@ module.exports = {
     }
 
     const memberCount = role.members.size;
+    const embedColor = role.hexColor && role.hexColor !== '#000000' ? role.hexColor : '#94a3b8'; // fallback
 
     const embed = new EmbedBuilder()
-      .setColor(colors.roleinfo)
+      .setColor(embedColor)
       .setTitle('Role Information')
+      .setThumbnail(role.iconURL({ size: 1024 }) || null) // top-right role icon
       .addFields(
         { name: 'Role Name', value: role.name, inline: true },
         { name: 'Role ID', value: role.id, inline: true },
