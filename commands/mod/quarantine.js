@@ -1,13 +1,17 @@
+// quarantine.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
+const Database = require('better-sqlite3');
+const db = new Database('./data/quarantine.sqlite');
 
-const QUARANTINE_FILE = path.join(__dirname, '../../quarantine.json');
-const QUARANTINE_ROLE_ID = '1432363678430396436'; // your role ID
+const QUARANTINE_ROLE_ID = '1432363678430396436';
 
-function saveData(data) {
-  fs.writeFileSync(QUARANTINE_FILE, JSON.stringify(data, null, 2));
-}
+// Ensure table exists
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS quarantine (
+    user_id TEXT PRIMARY KEY,
+    roles TEXT
+  )
+`).run();
 
 module.exports = {
   name: 'quarantine',
@@ -26,18 +30,16 @@ module.exports = {
 
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
-
     if (member.roles.cache.has(QUARANTINE_ROLE_ID)) {
       return message.reply('This user is already in quarantine.');
     }
 
     // Store current roles
     const oldRoles = member.roles.cache.filter(r => r.id !== message.guild.id).map(r => r.id);
+    const rolesStr = JSON.stringify(oldRoles);
 
-    // Save to quarantine.json
-    const data = JSON.parse(fs.readFileSync(QUARANTINE_FILE, 'utf8'));
-    data[member.id] = oldRoles;
-    saveData(data);
+    // Insert into DB
+    db.prepare('INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)').run(member.id, rolesStr);
 
     // Remove all roles and add quarantine role
     await member.roles.set([QUARANTINE_ROLE_ID]).catch(console.error);
