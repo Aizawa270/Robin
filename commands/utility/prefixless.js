@@ -51,24 +51,26 @@ module.exports = {
 
     if (sub === 'add') {
       db.prepare(`INSERT OR IGNORE INTO prefixless (user_id) VALUES (?)`).run(target.id);
+      client.prefixless.add(target.id);
       return message.reply({
         embeds: [
           new EmbedBuilder()
             .setColor(colors.afk || '#94a3b8')
             .setTitle('Prefixless Added ✅')
-            .setDescription(`Successfully added prefixless to **${target.tag}** (@${target.username})`)
+            .setDescription(`Successfully added prefixless to **${target.tag}**`)
         ]
       });
     }
 
     if (sub === 'remove') {
       db.prepare(`DELETE FROM prefixless WHERE user_id = ?`).run(target.id);
+      client.prefixless.delete(target.id);
       return message.reply({
         embeds: [
           new EmbedBuilder()
             .setColor(colors.afk || '#94a3b8')
             .setTitle('Prefixless Removed ⚠️')
-            .setDescription(`Successfully removed prefixless from **${target.tag}** (@${target.username})`)
+            .setDescription(`Successfully removed prefixless from **${target.tag}**`)
         ]
       });
     }
