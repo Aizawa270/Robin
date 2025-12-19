@@ -11,10 +11,13 @@ module.exports = {
     const role = message.mentions.roles.first() || message.guild.roles.cache.get(args[0]);
     if (!role) return message.reply('Usage: $roleposition @role');
 
+    // Flip position: top role = 1
+    const flippedPosition = message.guild.roles.cache.size - role.position;
+
     const embed = new EmbedBuilder()
       .setColor('Blue')
       .setTitle('Role Position')
-      .setDescription(`**${role.name}** is at position **${role.position}**`)
+      .setDescription(`**${role.name}** is at position **${flippedPosition}** (top role = 1)`)
       .setThumbnail(message.guild.iconURL({ dynamic: true }));
 
     message.reply({ embeds: [embed] });
