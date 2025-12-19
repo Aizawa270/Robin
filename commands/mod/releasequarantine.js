@@ -33,16 +33,14 @@ module.exports = {
     const oldRoles = JSON.parse(row.roles).filter(id => message.guild.roles.cache.has(id));
 
     try {
-      // Remove quarantine role first
-      await member.roles.remove(QUARANTINE_ROLE_ID).catch(() => {});
-      // Restore old roles
+      // Restore old roles and remove quarantine role if still present
+      if (!oldRoles.includes(QUARANTINE_ROLE_ID)) oldRoles.push(...member.roles.cache.has(QUARANTINE_ROLE_ID) ? [] : []);
       await member.roles.set(oldRoles);
     } catch (err) {
       console.error(err);
       return message.reply('Failed to restore roles. Check bot permissions.');
     }
 
-    // Remove from DB
     db.prepare('DELETE FROM quarantine WHERE user_id = ?').run(member.id);
 
     const embed = new EmbedBuilder()
