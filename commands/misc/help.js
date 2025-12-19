@@ -9,7 +9,10 @@ module.exports = {
   aliases: ['h'],
   async execute(client, message, args) {
     try {
-      const allCommands = Array.from(client.commands.values()).filter(cmd => !cmd.hidden);
+      // Filter commands: hide hidden ones and mod commands
+      const allCommands = Array.from(client.commands.values()).filter(
+        cmd => !cmd.hidden && cmd.category?.toLowerCase() !== 'mod'
+      );
       if (!allCommands.length) return message.reply('No commands loaded.');
 
       // Determine if user asked for a category
