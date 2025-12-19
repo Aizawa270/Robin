@@ -6,13 +6,20 @@ module.exports = {
   aliases: ['s'],
   category: 'utility',
   async execute(client, message, args) {
-    if (!client.snipes) return message.reply('Snipe feature is not enabled.');
+    if (!client.snipes) {
+      return message.reply('Snipe feature is not enabled.');
+    }
 
-    const snipes = client.snipes.get(message.channel.id) || [];
-    if (!snipes.length) return message.reply('No deleted messages found in this channel.');
+    const snipes = client.snipes.get(message.channel.id);
+    if (!snipes || !snipes.length) {
+      return message.reply('No deleted messages found in this channel.');
+    }
 
-    const index = Math.min(Math.max(parseInt(args[0]) - 1 || 0, 0), snipes.length - 1);
-    const data = snipes[index];
+    let index = parseInt(args[0], 10);
+    if (isNaN(index) || index < 1) index = 1;
+    if (index > snipes.length) index = snipes.length;
+
+    const data = snipes[index - 1];
 
     const embed = new EmbedBuilder()
       .setColor('Orange')
@@ -21,13 +28,14 @@ module.exports = {
         iconURL: data.author.displayAvatarURL({ dynamic: true }),
       })
       .setDescription(data.content || '[No Text Content]')
+      .setFooter({ text: `Snipe ${index} of ${snipes.length}` })
       .setTimestamp(data.createdAt);
 
-    if (data.attachments && data.attachments.size) {
-      const attachment = data.attachments.first();
-      if (attachment) embed.setImage(attachment.url);
+    // ✅ attachments is an ARRAY OF URLS
+    if (Array.isArray(data.attachments) && data.attachments.length > 0) {
+      embed.setImage(data.attachments[0]);
     }
 
-    message.channel.send({ embeds: [embed] });
+    await message.reply({ embeds: [embed] });
   },
 };
