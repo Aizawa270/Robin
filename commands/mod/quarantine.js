@@ -1,4 +1,3 @@
-// quarantine.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const Database = require('better-sqlite3');
 const fs = require('fs');
@@ -7,11 +6,9 @@ const path = require('path');
 const DATA_DIR = path.resolve(__dirname, './data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Absolute DB path
 const db = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
 const QUARANTINE_ROLE_ID = '1432363678430396436';
 
-// Ensure table exists
 db.prepare(`
   CREATE TABLE IF NOT EXISTS quarantine (
     user_id TEXT PRIMARY KEY,
@@ -44,11 +41,13 @@ module.exports = {
     const oldRoles = member.roles.cache.filter(r => r.id !== message.guild.id).map(r => r.id);
     db.prepare('INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)').run(member.id, JSON.stringify(oldRoles));
 
-    // Set quarantine role only
-    await member.roles.set([QUARANTINE_ROLE_ID]).catch(err => {
+    try {
+      // Set quarantine role only
+      await member.roles.set([QUARANTINE_ROLE_ID]);
+    } catch (err) {
       console.error(err);
       return message.reply('Failed to set quarantine role. Check bot permissions.');
-    });
+    }
 
     const embed = new EmbedBuilder()
       .setColor('#f87171')
