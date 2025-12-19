@@ -38,27 +38,18 @@ module.exports = {
     }
 
     // Store current roles except @everyone
-    const oldRoles = member.roles.cache.filter(r => r.id !== message.guild.id).map(r => r.id);
+    const oldRoles = member.roles.cache
+      .filter(r => r.id !== message.guild.id && r.id !== QUARANTINE_ROLE_ID)
+      .map(r => r.id);
+
     db.prepare('INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)').run(member.id, JSON.stringify(oldRoles));
 
     try {
-      // Remove all roles except @everyone
-      const rolesToRemove = member.roles.cache.filter(r => r.id !== message.guild.id);
-      await member.roles.remove(rolesToRemove);
-
-      // Add the quarantine role
-      await member.roles.add(QUARANTINE_ROLE_ID);
-
+      // Remove all roles except @everyone and add quarantine
+      await member.roles.set([QUARANTINE_ROLE_ID]);
     } catch (err) {
       console.error(err);
-      return message.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor('#f87171')
-            .setTitle('Quarantine Failed')
-            .setDescription(`Failed to set quarantine role for **${targetUser.tag}**. Check bot permissions.`)
-        ]
-      });
+      return message.reply('Failed to set quarantine role. Check bot permissions.');
     }
 
     const embed = new EmbedBuilder()
