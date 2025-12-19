@@ -42,11 +42,23 @@ module.exports = {
     db.prepare('INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)').run(member.id, JSON.stringify(oldRoles));
 
     try {
-      // Set quarantine role only
-      await member.roles.set([QUARANTINE_ROLE_ID]);
+      // Remove all roles except @everyone
+      const rolesToRemove = member.roles.cache.filter(r => r.id !== message.guild.id);
+      await member.roles.remove(rolesToRemove);
+
+      // Add the quarantine role
+      await member.roles.add(QUARANTINE_ROLE_ID);
+
     } catch (err) {
       console.error(err);
-      return message.reply('Failed to set quarantine role. Check bot permissions.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#f87171')
+            .setTitle('Quarantine Failed')
+            .setDescription(`Failed to set quarantine role for **${targetUser.tag}**. Check bot permissions.`)
+        ]
+      });
     }
 
     const embed = new EmbedBuilder()
