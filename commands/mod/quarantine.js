@@ -3,18 +3,19 @@ const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 
+// ===== DATA / DB =====
 const DATA_DIR = path.resolve('./data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
 
-const QUARANTINE_ROLE_ID = '1432363678430396436'; // Quarantine role ID
+const QUARANTINE_ROLE_ID = '1432363678430396436'; // quarantine role
 
 // Ensure table exists
 db.prepare(`
   CREATE TABLE IF NOT EXISTS quarantine (
     user_id TEXT PRIMARY KEY,
-    roles TEXT
+    roles TEXT NOT NULL
   )
 `).run();
 
@@ -24,37 +25,56 @@ module.exports = {
   description: 'Send a user to quarantine.',
   category: 'mod',
   usage: '$quarantine <@user|id>',
+
   async execute(client, message, args) {
     if (!message.guild) return;
+
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
       return message.reply('Only administrators can use this command.');
     }
 
-    const targetUser = message.mentions.users.first() || (args[0] && await client.users.fetch(args[0]).catch(() => null));
-    if (!targetUser) return message.reply('Please provide a user mention or ID.');
+    const targetUser =
+      message.mentions.users.first() ||
+      (args[0] && await client.users.fetch(args[0]).catch(() => null));
+
+    if (!targetUser) {
+      return message.reply('Please provide a user mention or ID.');
+    }
 
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
-    if (member.roles.cache.has(QUARANTINE_ROLE_ID)) {
+
+    // Already quarantined check (role OR DB — avoids desync)
+    const dbRow = db
+      .prepare('SELECT 1 FROM quarantine WHERE user_id = ?')
+      .get(member.id);
+
+    if (member.roles.cache.has(QUARANTINE_ROLE_ID) || dbRow) {
       return message.reply('This user is already in quarantine.');
     }
 
-    // Store all current roles except @everyone
-    const oldRoles = member.roles.cache
-      .filter(r => r.id !== message.guild.id)
+    // ===== SAVE ROLES (ONLY NON-MANAGED) =====
+    const rolesToSave = member.roles.cache
+      .filter(r => r.id !== message.guild.id && !r.managed)
       .map(r => r.id);
 
-    // Save to DB
-    db.prepare('INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)').run(member.id, JSON.stringify(oldRoles));
+    db.prepare(
+      'INSERT INTO quarantine (user_id, roles) VALUES (?, ?)'
+    ).run(member.id, JSON.stringify(rolesToSave));
 
     try {
-      // Preserve managed roles like booster
-      const managedRoles = member.roles.cache.filter(r => r.managed).map(r => r.id);
+      // Keep managed roles (booster, integrations)
+      const managedRoles = member.roles.cache
+        .filter(r => r.managed)
+        .map(r => r.id);
 
-      // Set quarantine role + managed roles
       await member.roles.set([QUARANTINE_ROLE_ID, ...managedRoles]);
     } catch (err) {
       console.error(err);
+
+      // Roll back DB if role set fails
+      db.prepare('DELETE FROM quarantine WHERE user_id = ?').run(member.id);
+
       return message.reply('Failed to set quarantine role. Check bot permissions.');
     }
 
