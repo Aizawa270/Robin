@@ -17,7 +17,7 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setColor('Blue')
       .setTitle('Role Position')
-      .setDescription(`**${role.name}** is at position **${flippedPosition}** (top role = 1)`)
+      .setDescription(`**${role.name}** is at position **${flippedPosition}**`)
       .setThumbnail(message.guild.iconURL({ dynamic: true }));
 
     message.reply({ embeds: [embed] });
