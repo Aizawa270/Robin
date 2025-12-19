@@ -1,47 +1,43 @@
 const { EmbedBuilder } = require('discord.js');
 
-// Store last 15 reactions per channel
-const reactionSnipes = new Map(); // key: channelId, value: array of reactions
-
 module.exports = {
   name: 'snipereaction',
-  description: 'Stores last 15 reactions in each channel.',
+  aliases: ['sr'], // alias added
+  description: 'Stores the last 15 reactions in each channel.',
   category: 'utility',
   hidden: true, // Not shown in help
-  maxSnipes: 15, // maximum stored reactions
-  async execute(client) {
-    client.on('messageReactionAdd', async (reaction, user) => {
-      if (user.bot) return; // ignore bots
-      try {
-        // Fetch partials if necessary
-        if (reaction.partial) await reaction.fetch();
-        if (reaction.message.partial) await reaction.message.fetch();
+  maxSnipes: 15, // Maximum reactions to store
+  snipes: new Map(), // channelId => array of reactions
+  async execute(client, message, args) {
+    const channelSnipes = this.snipes.get(message.channel.id) || [];
+    if (!channelSnipes.length) return message.reply('No reaction snipes in this channel.');
 
-        const channelId = reaction.message.channel.id;
-        if (!reactionSnipes.has(channelId)) reactionSnipes.set(channelId, []);
+    // Display snipes
+    const embed = new EmbedBuilder()
+      .setTitle(`Last ${this.maxSnipes} Reactions in #${message.channel.name}`)
+      .setColor('#f472b6')
+      .setDescription(
+        channelSnipes
+          .slice(-this.maxSnipes)
+          .map((s, i) => `**${i + 1}.** ${s.emoji} by ${s.user.tag}`)
+          .join('\n')
+      )
+      .setTimestamp();
 
-        const arr = reactionSnipes.get(channelId);
-
-        arr.push({
-          emoji: reaction.emoji.toString(),
-          user: { tag: user.tag, id: user.id },
-          messageId: reaction.message.id,
-          messageContent: reaction.message.content,
-          timestamp: new Date()
-        });
-
-        // Keep only the last 15
-        if (arr.length > module.exports.maxSnipes) arr.shift();
-
-        reactionSnipes.set(channelId, arr);
-      } catch (err) {
-        console.error('Reaction snipe error:', err);
-      }
-    });
+    message.reply({ embeds: [embed] });
   },
-
-  // Optional helper to fetch snipes for a channel
-  getSnipes(channelId) {
-    return reactionSnipes.get(channelId) || [];
-  }
 };
+
+// -------------------------------
+// Event listener (to put in your main bot file):
+// -------------------------------
+// client.on('messageReactionAdd', (reaction, user) => {
+//   if (user.bot) return; // ignore bots
+//   const snipereaction = client.commands.get('snipereaction');
+//   if (!snipereaction.snipes.has(reaction.message.channel.id)) {
+//     snipereaction.snipes.set(reaction.message.channel.id, []);
+//   }
+//   const arr = snipereaction.snipes.get(reaction.message.channel.id);
+//   arr.push({ emoji: reaction.emoji.name, user });
+//   if (arr.length > snipereaction.maxSnipes) arr.shift(); // keep max 15
+// });
