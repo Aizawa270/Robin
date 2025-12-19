@@ -11,19 +11,12 @@ module.exports = {
       return message.reply('This command can only be used in a server.');
     }
 
-    // Refresh member cache so role.members is up to date
+    // Refresh member cache
     await message.guild.members.fetch().catch(() => null);
 
     const roleFromMention = message.mentions.roles.first();
     const roleIdArg = args[0];
-
-    let role = null;
-
-    if (roleFromMention) {
-      role = roleFromMention;
-    } else if (roleIdArg) {
-      role = message.guild.roles.cache.get(roleIdArg);
-    }
+    let role = roleFromMention || message.guild.roles.cache.get(roleIdArg);
 
     if (!role) {
       return message.reply(
@@ -34,21 +27,23 @@ module.exports = {
     const members = role.members;
     const memberCount = members.size;
 
-    const memberNames = members
-      .map((m) => `${m.user.tag}`)
+    // Map members to pings
+    const memberPings = members
+      .map((m) => `<@${m.id}>`)
       .slice(0, 50); // limit to avoid embed overflow
 
     const value =
-      memberNames.length > 0
-        ? memberNames.join('\n') +
-          (memberCount > memberNames.length
-            ? `\n...and **${memberCount - memberNames.length}** more`
+      memberPings.length > 0
+        ? memberPings.join('\n') +
+          (memberCount > memberPings.length
+            ? `\n...and **${memberCount - memberPings.length}** more`
             : '')
         : 'No members in this role.';
 
     const embed = new EmbedBuilder()
-      .setColor(colors.listinrole)
+      .setColor(colors.listinrole || '#3498db') // fallback blue
       .setTitle(`Members in role: ${role.name}`)
+      .setThumbnail(role.iconURL({ dynamic: true })) // role icon top right
       .addFields(
         { name: 'Role ID', value: role.id, inline: true },
         { name: 'Member Count', value: `${memberCount}`, inline: true },
