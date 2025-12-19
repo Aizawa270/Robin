@@ -3,9 +3,9 @@ const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 module.exports = {
   name: 'createrole',
   aliases: ['crole'],
-  description: 'Create a role with a name and hex color.',
+  description: 'Create a role with a name and optional hex color.',
   category: 'mod',
-  usage: '$createrole <name> <#hex>',
+  usage: '$createrole <name> [#hex]',
   async execute(client, message, args) {
     if (!message.guild) return;
 
@@ -14,18 +14,22 @@ module.exports = {
       return message.reply('Admins only. Sit down.');
     }
 
-    if (args.length < 2) {
+    if (!args.length) {
       return message.reply(
-        'Usage: `$createrole <name> <#hex>`\nExample: `$createrole Members #22c55e`'
+        'Usage: `$createrole <name> [#hex]`\nExample: `$createrole Members #22c55e`'
       );
     }
 
-    const hex = args[args.length - 1];
-    const name = args.slice(0, -1).join(' ');
+    let hex;
+    let name;
 
-    // Validate hex
-    if (!/^#([0-9A-Fa-f]{6})$/.test(hex)) {
-      return message.reply('Invalid hex color. Example: `#22c55e`');
+    // Check if last argument is a hex
+    if (/^#([0-9A-Fa-f]{6})$/.test(args[args.length - 1])) {
+      hex = args[args.length - 1];
+      name = args.slice(0, -1).join(' ');
+    } else {
+      hex = '#3498db'; // default blue if no hex provided
+      name = args.join(' ');
     }
 
     try {
