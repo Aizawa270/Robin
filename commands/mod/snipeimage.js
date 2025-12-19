@@ -7,15 +7,23 @@ module.exports = {
   category: 'utility',
   usage: '$snipeimage [1-15]',
   async execute(client, message, args) {
-    if (!message.guild) return;
+    if (!client.snipesImage) {
+      return message.reply('SnipeImage feature is not enabled.');
+    }
 
-    const snipes = client.snipesImage?.get(message.channel.id) || [];
-    if (!snipes.length) return message.reply('No deleted images or GIFs found.');
+    const snipes = client.snipesImage.get(message.channel.id);
+    if (!snipes || !snipes.length) {
+      return message.reply('No deleted images or GIFs found in this channel.');
+    }
 
-    const index = Math.min(Math.max(parseInt(args[0]) - 1 || 0, 0), snipes.length - 1);
-    const snipe = snipes[index];
+    let index = parseInt(args[0], 10);
+    if (isNaN(index) || index < 1) index = 1;
+    if (index > snipes.length) index = snipes.length;
 
-    if (!snipe) return message.reply('No image found at that index.');
+    const snipe = snipes[index - 1];
+    if (!snipe || !snipe.image) {
+      return message.reply('No image found at that index.');
+    }
 
     const embed = new EmbedBuilder()
       .setColor('#22c55e')
@@ -24,11 +32,10 @@ module.exports = {
         iconURL: snipe.author.displayAvatarURL({ dynamic: true }),
       })
       .setDescription(snipe.content || '[No Caption]')
-      .setTimestamp()
-      .setFooter({ text: `Snipe ${index + 1} of ${snipes.length}` });
+      .setImage(snipe.image)
+      .setFooter({ text: `Snipe ${index} of ${snipes.length}` })
+      .setTimestamp(snipe.createdAt);
 
-    if (snipe.attachments && snipe.attachments.length) embed.setImage(snipe.attachments[0]);
-
-    message.channel.send({ embeds: [embed] });
+    await message.reply({ embeds: [embed] });
   },
 };
