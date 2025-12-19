@@ -8,6 +8,7 @@ const Database = require('better-sqlite3');
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// ===== CLIENT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -18,7 +19,7 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel],
 });
 
-// DBs
+// ===== DATABASES =====
 const prefixlessDB = new Database(path.join(DATA_DIR, 'prefixless.sqlite'));
 prefixlessDB.prepare('CREATE TABLE IF NOT EXISTS prefixless (user_id TEXT PRIMARY KEY)').run();
 client.prefixlessDB = prefixlessDB;
@@ -28,10 +29,10 @@ const quarantineDB = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
 quarantineDB.prepare('CREATE TABLE IF NOT EXISTS quarantine (user_id TEXT PRIMARY KEY, roles TEXT)').run();
 client.quarantineDB = quarantineDB;
 
-// MEMORY MAPS
+// ===== MEMORY MAPS =====
 client.afk = new Map();
-client.snipes = new Map();       // deleted text
-client.snipesImage = new Map();  // deleted images/gifs
+client.snipes = new Map();       // deleted text messages
+client.snipesImage = new Map();  // deleted images/GIFs
 client.edits = new Map();        // edited messages
 
 // ===== MESSAGE DELETE =====
@@ -51,7 +52,7 @@ client.on('messageDelete', async (message) => {
   textArr.unshift({
     content: message.content || '',
     author: message.author,
-    attachments: [...message.attachments.values()].map(a => a.url), // always array
+    attachments: [...message.attachments.values()].map(a => a.url),
     createdAt: message.createdAt
   });
   if (textArr.length > 15) textArr.pop();
@@ -64,7 +65,7 @@ client.on('messageDelete', async (message) => {
     imgArr.unshift({
       content: message.content || '',
       author: message.author,
-      attachments: [...message.attachments.values()].map(a => a.url), // always array
+      attachments: [...message.attachments.values()].map(a => a.url),
       createdAt: message.createdAt
     });
     if (imgArr.length > 15) imgArr.pop();
@@ -84,7 +85,6 @@ client.on('messageUpdate', async (oldMsg, newMsg) => {
   const channelId = oldMsg.channel.id;
   if (!client.edits.has(channelId)) client.edits.set(channelId, []);
   const arr = client.edits.get(channelId);
-
   arr.unshift({
     author: oldMsg.author,
     oldContent: oldMsg.content || '',
@@ -95,9 +95,19 @@ client.on('messageUpdate', async (oldMsg, newMsg) => {
   client.edits.set(channelId, arr);
 });
 
-// READY & HANDLER
-client.once('ready', () => console.log(`Logged in as ${client.user.tag}`));
-client.on('messageCreate', (message) => handleMessage(client, message));
+// ===== READY =====
+client.once('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+});
 
+// ===== COMMAND HANDLER =====
+if (!client.messageCreateHandlerAttached) {
+  client.on('messageCreate', (message) => handleMessage(client, message));
+  client.messageCreateHandlerAttached = true;
+}
+
+// ===== LOAD COMMANDS =====
 loadCommands(client);
+
+// ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
