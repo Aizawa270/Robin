@@ -52,8 +52,6 @@ function registerCommand(client, command, filePath = 'unknown') {
   for (const a of command.aliases) {
     if (!client.aliases.has(a.toLowerCase())) client.aliases.set(a.toLowerCase(), command);
   }
-
-  console.log(`Loaded command: ${command.name} (${command.category})`);
 }
 
 async function handleMessage(client, message) {
@@ -61,13 +59,13 @@ async function handleMessage(client, message) {
   const content = message.content?.trim();
   if (!content) return;
 
-  // AFK clear
+  // ===== AFK REMOVAL =====
   if (client.afk?.has(message.author.id)) {
     client.afk.delete(message.author.id);
     try { await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`); } catch {}
   }
 
-  // AFK mentions
+  // ===== AFK MENTION =====
   if (message.mentions.users.size && client.afk) {
     for (const [, user] of message.mentions.users) {
       const data = client.afk.get(user.id);
