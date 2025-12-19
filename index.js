@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const Database = require('better-sqlite3');
 
@@ -22,6 +22,19 @@ const client = new Client({
 });
 
 // ===== DATABASES =====
+
+// Prefixless DB
+const prefixlessDB = new Database(path.join(DATA_DIR, 'prefixless.sqlite'));
+prefixlessDB.prepare('CREATE TABLE IF NOT EXISTS prefixless (user_id TEXT PRIMARY KEY)').run();
+client.prefixlessDB = prefixlessDB;
+client.prefixless = new Set(prefixlessDB.prepare('SELECT user_id FROM prefixless').all().map(r => r.user_id));
+
+// Quarantine DB
+const quarantineDB = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
+quarantineDB.prepare('CREATE TABLE IF NOT EXISTS quarantine (user_id TEXT PRIMARY KEY, roles TEXT)').run();
+client.quarantineDB = quarantineDB;
+
+// Giveaways DB
 const giveawayDB = new Database(path.join(DATA_DIR, 'giveaways.sqlite'));
 giveawayDB.prepare(`
   CREATE TABLE IF NOT EXISTS giveaways (
@@ -35,52 +48,85 @@ giveawayDB.prepare(`
 client.giveawayDB = giveawayDB;
 
 // ===== MEMORY MAPS =====
-client.giveaways = new Map();  // messageId => {participants: Set, ...}
+client.afk = new Map();
+client.snipes = new Map();
+client.snipesImage = new Map();
+client.edits = new Map();
+client.reactionSnipes = new Map();
+client.giveaways = new Map();
 
-// ===== REACTION ADD =====
+// ===== MESSAGE DELETE =====
+client.on('messageDelete', async (message) => {
+  if (!message.guild) return;
+  if (message.partial) {
+    try { message = await message.fetch(); } catch { return; }
+  }
+  if (!message.content && message.attachments.size === 0) return;
+  if (message.author?.bot) return;
+
+  const channelId = message.channel.id;
+  if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
+  const arr = client.snipes.get(channelId);
+  arr.unshift({
+    content: message.content || '',
+    author: message.author,
+    attachments: [...message.attachments.values()].map(a => a.url),
+    createdAt: message.createdAt,
+  });
+  if (arr.length > 15) arr.pop();
+
+  if (message.attachments.size > 0) {
+    if (!client.snipesImage.has(channelId)) client.snipesImage.set(channelId, []);
+    const imgArr = client.snipesImage.get(channelId);
+    imgArr.unshift({
+      content: message.content || '',
+      author: message.author,
+      attachments: [...message.attachments.values()].map(a => a.url),
+      createdAt: message.createdAt,
+    });
+    if (imgArr.length > 15) imgArr.pop();
+  }
+});
+
+// ===== MESSAGE UPDATE =====
+client.on('messageUpdate', async (oldMsg, newMsg) => {
+  if (!oldMsg.guild) return;
+  if (oldMsg.partial) {
+    try { oldMsg = await oldMsg.fetch(); } catch { return; }
+  }
+  if (oldMsg.author?.bot) return;
+  if (oldMsg.content === newMsg.content) return;
+
+  const channelId = oldMsg.channel.id;
+  if (!client.edits.has(channelId)) client.edits.set(channelId, []);
+  const arr = client.edits.get(channelId);
+  arr.unshift({
+    author: oldMsg.author,
+    oldContent: oldMsg.content || '',
+    newContent: newMsg.content || '',
+    createdAt: newMsg.editedAt || new Date(),
+  });
+  if (arr.length > 15) arr.pop();
+});
+
+// ===== REACTIONS =====
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
   if (reaction.partial) await reaction.fetch();
 
-  const giveaway = client.giveawayDB.prepare('SELECT * FROM giveaways WHERE message_id = ?').get(reaction.message.id);
-  if (!giveaway) return;
+  const channelId = reaction.message.channel.id;
+  if (!client.reactionSnipes.has(channelId)) client.reactionSnipes.set(channelId, []);
+  const arr = client.reactionSnipes.get(channelId);
+  arr.unshift({ emoji: reaction.emoji.toString(), user, createdAt: new Date() });
+  if (arr.length > 15) arr.pop();
 
-  if (!client.giveaways.has(reaction.message.id)) {
-    client.giveaways.set(reaction.message.id, { participants: new Set() });
-  }
-  const g = client.giveaways.get(reaction.message.id);
-
-  if (g.participants.has(user.id)) {
-    // Already in -> ask confirmation to leave
-    try {
-      await user.send(`You reacted again to leave the giveaway **${giveaway.name}**. Reply "yes" to leave or "no" to stay.`);
-      const filter = m => m.author.id === user.id && ['yes','no'].includes(m.content.toLowerCase());
-      const dm = await user.createDM();
-      const collected = await dm.awaitMessages({ filter, max: 1, time: 30000, errors: ['time'] });
-      const reply = collected.first().content.toLowerCase();
-      if (reply === 'yes') {
-        g.participants.delete(user.id);
-        await reaction.users.remove(user.id);
-        await user.send(`You have left the giveaway **${giveaway.name}**.`);
-      } else {
-        await user.send(`You are still in the giveaway **${giveaway.name}**.`);
-      }
-    } catch {
-      await user.send('No response. You remain in the giveaway.');
-    }
-  } else {
-    // Add to giveaway
-    g.participants.add(user.id);
-  }
+  // Giveaway live tracking handled in startgiveaway.js
 });
 
-// ===== REACTION REMOVE (Live tracking is automatic) =====
 client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
   if (reaction.partial) await reaction.fetch();
-
-  const g = client.giveaways.get(reaction.message.id);
-  if (g) g.participants.delete(user.id); // leave if they manually remove
+  // Giveaway live tracking handled in startgiveaway.js
 });
 
 // ===== READY =====
@@ -99,7 +145,7 @@ client.once('ready', async () => {
   }
 });
 
-// ===== COMMAND HANDLER =====
+// ===== MESSAGE CREATE (COMMAND HANDLER) =====
 if (!client.messageCreateHandlerAttached) {
   client.on('messageCreate', (message) => handleMessage(client, message));
   client.messageCreateHandlerAttached = true;
