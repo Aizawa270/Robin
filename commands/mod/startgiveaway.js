@@ -1,125 +1,115 @@
 const { EmbedBuilder, PermissionsBitField } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
-const dbPath = path.join(__dirname, '../data/giveaways.sqlite');
-const db = new Database(dbPath);
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS giveaways (
-    message_id TEXT PRIMARY KEY,
-    channel_id TEXT,
-    name TEXT,
-    winner_count INTEGER,
-    end_timestamp INTEGER
-  )
-`).run();
+const DATA_DIR = path.resolve(__dirname, '../data');
+const giveawayDB = new Database(path.join(DATA_DIR, 'giveaways.sqlite'));
 
 module.exports = {
   name: 'startgiveaway',
-  aliases: ['sg', 'sgw'],
+  aliases: ['sgw'],
+  description: 'Start a giveaway. Usage: $startgiveaway <name> <duration> <winners> [channel]',
   category: 'utility',
-  hidden: true, // won't show in help
-  usage: '$startgiveaway <name> <duration> <winners> [#channel]',
+  hidden: true, // Not shown in help
   async execute(client, message, args) {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageGuild))
-      return message.reply('You need the **Manage Server** permission.');
-
-    if (args.length < 3) return message.reply('Usage: $sgw <name> <duration> <winners> [#channel]');
+    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+      return message.reply('You need Manage Messages permission to start giveaways.');
+    }
 
     const name = args[0];
-    const durationRaw = args[1];
-    const winnerCount = parseInt(args[2]);
-    if (isNaN(winnerCount) || winnerCount < 1) return message.reply('Winner count must be a number ≥ 1');
+    const durationInput = args[1];
+    const winnersCount = parseInt(args[2]) || 1;
+    let channel = message.channel;
 
-    // parse duration
-    const duration = parseDuration(durationRaw);
-    if (!duration) return message.reply('Invalid duration format. Example: 10s, 5m, 2h, 7d');
+    if (!name || !durationInput) return message.reply('Usage: $startgiveaway <name> <duration> <winners> [channel]');
 
-    // target channel
-    let channel = message.mentions.channels.first() || message.channel;
+    if (args[3]) {
+      const ch = message.guild.channels.cache.get(args[3].replace(/[<#>]/g, ''));
+      if (ch) channel = ch;
+    }
 
-    // build embed
+    // Convert duration like 10s, 5m, 2h, 7d
+    const durationMs = parseDuration(durationInput);
+    if (!durationMs) return message.reply('Invalid duration format. Examples: 10s, 5m, 2h, 7d');
+
     const embed = new EmbedBuilder()
       .setTitle(name)
-      .setColor('Purple')
+      .setColor('#f59e0b')
+      .setDescription(`Winners: ${winnersCount}\nDuration: ${durationInput}`)
       .setThumbnail(message.guild.iconURL({ dynamic: true }))
-      .addFields(
-        { name: 'Winners', value: `${winnerCount}`, inline: true },
-        { name: 'Duration', value: durationRaw, inline: true }
-      )
-      .setFooter({ text: 'React with 🎉 to enter!' })
-      .setTimestamp();
+      .setFooter({ text: 'React with 🎉 to enter!' });
 
-    const giveawayMsg = await channel.send({ embeds: [embed] });
-    await giveawayMsg.react('🎉');
+    const gwMessage = await channel.send({ embeds: [embed] });
+    await gwMessage.react('🎉');
 
-    // save to DB
-    const endTime = Date.now() + duration;
-    db.prepare('INSERT OR REPLACE INTO giveaways (message_id, channel_id, name, winner_count, end_timestamp) VALUES (?, ?, ?, ?, ?)')
-      .run(giveawayMsg.id, channel.id, name, winnerCount, endTime);
+    // Save to DB
+    giveawayDB.prepare(`
+      INSERT OR REPLACE INTO giveaways (message_id, channel_id, name, winner_count, end_timestamp)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(gwMessage.id, channel.id, name, winnersCount, Date.now() + durationMs);
 
-    // schedule automatic end
-    scheduleEnd(client, giveawayMsg.id, endTime);
+    // Schedule end
+    setTimeout(() => module.exports.endGiveaway(client, gwMessage.id), durationMs);
 
-    message.reply(`Giveaway started in ${channel}`);
+    message.reply(`Giveaway "${name}" started in ${channel}!`);
   },
+
+  // End giveaway helper
+  async endGiveaway(client, messageId) {
+    const row = giveawayDB.prepare('SELECT * FROM giveaways WHERE message_id = ?').get(messageId);
+    if (!row) return;
+
+    const channel = await client.channels.fetch(row.channel_id).catch(() => null);
+    if (!channel) return giveawayDB.prepare('DELETE FROM giveaways WHERE message_id = ?').run(messageId);
+
+    const message = await channel.messages.fetch(row.message_id).catch(() => null);
+    if (!message) return giveawayDB.prepare('DELETE FROM giveaways WHERE message_id = ?').run(messageId);
+
+    const users = (await message.reactions.cache.get('🎉')?.users.fetch()).filter(u => !u.bot).map(u => u);
+    if (users.length === 0) {
+      const noWinnerEmbed = new EmbedBuilder()
+        .setTitle(row.name)
+        .setColor('#f87171')
+        .setDescription('No participants, no winners.')
+        .setThumbnail(channel.guild.iconURL({ dynamic: true }));
+      return message.edit({ embeds: [noWinnerEmbed] });
+    }
+
+    // Pick winners randomly
+    const winners = [];
+    while (winners.length < row.winner_count && users.length > 0) {
+      const index = Math.floor(Math.random() * users.length);
+      winners.push(users[index]);
+      users.splice(index, 1);
+    }
+
+    const winnerMentions = winners.map(u => `<@${u.id}>`).join(', ');
+
+    const winEmbed = new EmbedBuilder()
+      .setTitle(row.name)
+      .setColor('#34d399')
+      .setDescription(`🎉 Winner${winners.length > 1 ? 's' : ''}: ${winnerMentions}`)
+      .setThumbnail(channel.guild.iconURL({ dynamic: true }));
+
+    await message.edit({ embeds: [winEmbed] });
+
+    // Notify winners
+    winners.forEach(u => u.send(`You won the giveaway: **${row.name}** in **${channel.guild.name}**!`).catch(() => {}));
+
+    giveawayDB.prepare('DELETE FROM giveaways WHERE message_id = ?').run(messageId);
+  }
 };
 
-// ------------------ HELPERS ------------------
-
+// Utility: parse duration string like 10s, 5m, 2h, 7d
 function parseDuration(str) {
   const match = str.match(/^(\d+)(s|m|h|d)$/);
   if (!match) return null;
-  const val = parseInt(match[1]);
-  const unit = match[2];
-  switch (unit) {
-    case 's': return val * 1000;
-    case 'm': return val * 60 * 1000;
-    case 'h': return val * 60 * 60 * 1000;
-    case 'd': return val * 24 * 60 * 60 * 1000;
-    default: return null;
+  const n = parseInt(match[1]);
+  switch (match[2]) {
+    case 's': return n * 1000;
+    case 'm': return n * 60 * 1000;
+    case 'h': return n * 60 * 60 * 1000;
+    case 'd': return n * 24 * 60 * 60 * 1000;
   }
-}
-
-function scheduleEnd(client, messageId, endTime) {
-  const delay = endTime - Date.now();
-  if (delay <= 0) return endGiveaway(client, messageId);
-  setTimeout(() => endGiveaway(client, messageId), delay);
-}
-
-async function endGiveaway(client, messageId) {
-  const row = db.prepare('SELECT * FROM giveaways WHERE message_id = ?').get(messageId);
-  if (!row) return;
-
-  const channel = client.channels.cache.get(row.channel_id);
-  if (!channel) return db.prepare('DELETE FROM giveaways WHERE message_id = ?').run(messageId);
-
-  const msg = await channel.messages.fetch(row.message_id).catch(() => null);
-  if (!msg) return db.prepare('DELETE FROM giveaways WHERE message_id = ?').run(messageId);
-
-  // get participants from reactions
-  const reaction = msg.reactions.cache.get('🎉');
-  if (!reaction) return db.prepare('DELETE FROM giveaways WHERE message_id = ?').run(messageId);
-
-  const users = (await reaction.users.fetch()).filter(u => !u.bot);
-  if (users.size === 0) {
-    msg.edit({ embeds: [new EmbedBuilder().setTitle(row.name).setColor('Grey').setDescription('No participants!')] });
-    return db.prepare('DELETE FROM giveaways WHERE message_id = ?').run(messageId);
-  }
-
-  // pick winners
-  const shuffled = [...users.values()].sort(() => 0.5 - Math.random());
-  const winners = shuffled.slice(0, row.winner_count);
-
-  const winnersMentions = winners.map(u => `<@${u.id}>`).join(', ');
-
-  const winEmbed = new EmbedBuilder()
-    .setTitle(row.name)
-    .setColor('Green')
-    .setDescription(`${winnersMentions} won **${row.name}** 🎉`)
-    .setThumbnail(msg.guild.iconURL({ dynamic: true }));
-
-  await msg.edit({ embeds: [winEmbed] });
-
-  db.prepare('DELETE FROM giveaways WHERE message_id = ?').run(messageId);
+  return null;
 }
