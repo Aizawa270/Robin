@@ -3,13 +3,14 @@ const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.resolve(__dirname, './data');
+const DATA_DIR = path.resolve('./data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
-const QUARANTINE_ROLE_ID = '1432363678430396436';
-const BOOSTER_ROLE_ID = '1432373819116617870'; // Managed booster role
 
+const QUARANTINE_ROLE_ID = '1432363678430396436'; // Quarantine role ID
+
+// Ensure table exists
 db.prepare(`
   CREATE TABLE IF NOT EXISTS quarantine (
     user_id TEXT PRIMARY KEY,
@@ -38,18 +39,20 @@ module.exports = {
       return message.reply('This user is already in quarantine.');
     }
 
-    // Store current roles except @everyone and managed roles
+    // Store all current roles except @everyone
     const oldRoles = member.roles.cache
-      .filter(r => r.id !== message.guild.id && !r.managed)
+      .filter(r => r.id !== message.guild.id)
       .map(r => r.id);
 
+    // Save to DB
     db.prepare('INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)').run(member.id, JSON.stringify(oldRoles));
 
     try {
-      // Apply quarantine role while keeping managed roles like booster
-      const rolesToSet = [QUARANTINE_ROLE_ID];
+      // Preserve managed roles like booster
       const managedRoles = member.roles.cache.filter(r => r.managed).map(r => r.id);
-      await member.roles.set([...rolesToSet, ...managedRoles]);
+
+      // Set quarantine role + managed roles
+      await member.roles.set([QUARANTINE_ROLE_ID, ...managedRoles]);
     } catch (err) {
       console.error(err);
       return message.reply('Failed to set quarantine role. Check bot permissions.');
