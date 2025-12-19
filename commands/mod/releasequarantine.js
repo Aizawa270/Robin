@@ -33,9 +33,9 @@ module.exports = {
     const oldRoles = JSON.parse(row.roles).filter(id => message.guild.roles.cache.has(id));
 
     try {
-      // Restore old roles and remove quarantine role if still present
-      if (!oldRoles.includes(QUARANTINE_ROLE_ID)) oldRoles.push(...member.roles.cache.has(QUARANTINE_ROLE_ID) ? [] : []);
-      await member.roles.set(oldRoles);
+      // Restore old roles + keep managed roles
+      const managedRoles = member.roles.cache.filter(r => r.managed).map(r => r.id);
+      await member.roles.set([...oldRoles, ...managedRoles]);
     } catch (err) {
       console.error(err);
       return message.reply('Failed to restore roles. Check bot permissions.');
