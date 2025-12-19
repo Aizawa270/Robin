@@ -6,16 +6,29 @@ module.exports = {
   aliases: ['se'],
   category: 'utility',
   async execute(client, message, args) {
-    if (!client.edits) return message.reply('SnipEdit feature is not enabled.');
+    // ✅ correct map name
+    if (!client.snipesEdit) {
+      return message.reply('SnipEdit feature is not enabled.');
+    }
 
-    const edits = client.edits.get(message.channel.id) || [];
-    if (!edits.length) return message.reply('No edited messages in this channel.');
+    const edits = client.snipesEdit.get(message.channel.id);
+    if (!edits || !edits.length) {
+      return message.reply('No edited messages in this channel.');
+    }
 
-    const index = Math.min(Math.max(parseInt(args[0]) - 1 || 0, 0), edits.length - 1);
-    const data = edits[index];
+    let index = parseInt(args[0], 10);
+    if (isNaN(index) || index < 1) index = 1;
+    if (index > edits.length) index = edits.length;
 
-    const oldContent = data.oldContent?.slice(0, 1021) + (data.oldContent?.length > 1024 ? '...' : '');
-    const newContent = data.newContent?.slice(0, 1021) + (data.newContent?.length > 1024 ? '...' : '');
+    const data = edits[index - 1];
+
+    const oldContent = data.oldContent
+      ? data.oldContent.slice(0, 1021) + (data.oldContent.length > 1024 ? '...' : '')
+      : '[No Text]';
+
+    const newContent = data.newContent
+      ? data.newContent.slice(0, 1021) + (data.newContent.length > 1024 ? '...' : '')
+      : '[No Text]';
 
     const embed = new EmbedBuilder()
       .setColor('Yellow')
@@ -25,11 +38,12 @@ module.exports = {
       })
       .setTitle('Edited Message')
       .addFields(
-        { name: 'Before', value: oldContent || '[No Text]' },
-        { name: 'After', value: newContent || '[No Text]' }
+        { name: 'Before', value: oldContent },
+        { name: 'After', value: newContent }
       )
+      .setFooter({ text: `SnipEdit ${index} of ${edits.length}` })
       .setTimestamp(data.createdAt);
 
-    message.channel.send({ embeds: [embed] });
+    await message.reply({ embeds: [embed] });
   },
 };
