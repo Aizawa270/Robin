@@ -1,4 +1,3 @@
-// releasequarantine.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const Database = require('better-sqlite3');
 const fs = require('fs');
@@ -7,7 +6,6 @@ const path = require('path');
 const DATA_DIR = path.resolve(__dirname, './data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Absolute DB path
 const db = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
 const QUARANTINE_ROLE_ID = '1432363678430396436';
 
@@ -29,20 +27,18 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
 
-    // Fetch roles from DB
     const row = db.prepare('SELECT roles FROM quarantine WHERE user_id = ?').get(member.id);
     if (!row) return message.reply('This user is not in quarantine.');
 
-    // Validate roles still exist
     const oldRoles = JSON.parse(row.roles).filter(id => message.guild.roles.cache.has(id));
 
-    // Restore roles
-    await member.roles.set(oldRoles).catch(err => {
+    try {
+      await member.roles.set(oldRoles);
+    } catch (err) {
       console.error(err);
       return message.reply('Failed to restore roles. Check bot permissions.');
-    });
+    }
 
-    // Remove from DB
     db.prepare('DELETE FROM quarantine WHERE user_id = ?').run(member.id);
 
     const embed = new EmbedBuilder()
