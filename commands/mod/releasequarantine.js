@@ -3,10 +3,11 @@ const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.resolve(__dirname, './data');
+const DATA_DIR = path.resolve('./data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
+
 const QUARANTINE_ROLE_ID = '1432363678430396436';
 
 module.exports = {
@@ -27,14 +28,17 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
 
+    // Fetch stored roles from DB
     const row = db.prepare('SELECT roles FROM quarantine WHERE user_id = ?').get(member.id);
     if (!row) return message.reply('This user is not in quarantine.');
 
     const oldRoles = JSON.parse(row.roles).filter(id => message.guild.roles.cache.has(id));
 
     try {
-      // Restore old roles + keep managed roles
+      // Preserve managed roles like booster
       const managedRoles = member.roles.cache.filter(r => r.managed).map(r => r.id);
+
+      // Restore old roles + managed roles
       await member.roles.set([...oldRoles, ...managedRoles]);
     } catch (err) {
       console.error(err);
