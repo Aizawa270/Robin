@@ -7,6 +7,7 @@ module.exports = {
   category: 'utility',
   usage: '$prefixless <add|remove|list> [@user|id]',
   aliases: [],
+  hidden: true, // ✅ This hides it from the help command
   async execute(client, message, args) {
     if (!message.guild) return;
     if (message.author.id !== ownerId) {
