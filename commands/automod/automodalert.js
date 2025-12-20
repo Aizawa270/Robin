@@ -19,20 +19,39 @@ module.exports = {
 
     if (sub === 'list') {
       const rows = client.automod.listAlertTargets(message.guild.id);
-      if (!rows.length) return message.reply('No alert targets.');
+      if (!rows.length) {
+        const embed = new EmbedBuilder()
+          .setTitle('📋 Automod Alert List')
+          .setColor('#60a5fa')
+          .setDescription('No alert targets configured.')
+          .setFooter({ text: 'Use $automodalert add to add targets' });
+        return message.reply({ embeds: [embed] });
+      }
+      
       const users = [];
       const roles = [];
       for (const r of rows) {
         if (r.target_type === 'user') users.push(`<@${r.target_id}>`);
         else roles.push(`<@&${r.target_id}>`);
       }
+      
       const embed = new EmbedBuilder()
-        .setTitle('Automod Alert List')
+        .setTitle('📋 Automod Alert List')
         .setColor('#60a5fa')
-        .setDescription([
-          `**Roles:** ${roles.length ? roles.join(' ') : 'None'}`,
-          `**Users:** ${users.length ? users.join(' ') : 'None'}`,
-        ].join('\n\n'));
+        .addFields(
+          { 
+            name: `👑 Roles (${roles.length})`, 
+            value: roles.length ? roles.join(' ') : 'None', 
+            inline: false 
+          },
+          { 
+            name: `👤 Users (${users.length})`, 
+            value: users.length ? users.join(' ') : 'None', 
+            inline: false 
+          }
+        )
+        .setFooter({ text: `Total: ${rows.length} targets` });
+      
       return message.reply({ embeds: [embed] });
     }
 
@@ -46,13 +65,51 @@ module.exports = {
     const isRole = target?.id && target?.constructor && target.constructor.name === 'Role';
     const type = isRole ? 'role' : 'user';
     const id = target.id;
+    const name = isRole ? target.name : target.tag;
 
     if (sub === 'add') {
       client.automod.addAlertTarget(message.guild.id, type, id);
-      return message.reply(`Added ${isRole ? `<@&${id}>` : `<@${id}>`} to automod alert list.`);
-    } else {
+      
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Alert Target Added')
+        .setColor('#22c55e')
+        .addFields(
+          { name: 'Type', value: isRole ? 'Role' : 'User', inline: true },
+          { name: 'Target', value: isRole ? `\`@${name}\`` : `\`${name}\``, inline: true },
+          { name: 'ID', value: `\`${id}\``, inline: true }
+        )
+        .setDescription(`**${isRole ? 'Role' : 'User'}** will now be mentioned in automod alerts.`)
+        .setFooter({ text: `Added by ${message.author.tag}` })
+        .setTimestamp();
+      
+      // Add thumbnail for user
+      if (!isRole) {
+        embed.setThumbnail(target.displayAvatarURL({ size: 1024 }));
+      }
+      
+      return message.reply({ embeds: [embed] });
+      
+    } else { // remove
       client.automod.removeAlertTarget(message.guild.id, type, id);
-      return message.reply(`Removed ${isRole ? `<@&${id}>` : `<@${id}>`} from automod alert list.`);
+      
+      const embed = new EmbedBuilder()
+        .setTitle('❌ Alert Target Removed')
+        .setColor('#ef4444')
+        .addFields(
+          { name: 'Type', value: isRole ? 'Role' : 'User', inline: true },
+          { name: 'Target', value: isRole ? `\`@${name}\`` : `\`${name}\``, inline: true },
+          { name: 'ID', value: `\`${id}\``, inline: true }
+        )
+        .setDescription(`**${isRole ? 'Role' : 'User'}** will no longer be mentioned in automod alerts.`)
+        .setFooter({ text: `Removed by ${message.author.tag}` })
+        .setTimestamp();
+      
+      // Add thumbnail for user
+      if (!isRole) {
+        embed.setThumbnail(target.displayAvatarURL({ size: 1024 }));
+      }
+      
+      return message.reply({ embeds: [embed] });
     }
   },
 };
