@@ -1,3 +1,4 @@
+// commands/utility/help.js
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { colors } = require('../../config');
 
@@ -9,13 +10,17 @@ module.exports = {
   aliases: ['h'],
   async execute(client, message, args) {
     try {
-      // Get current prefix dynamically
-      const prefix = client.getPrefix(message.guild?.id);
+      // Get current prefix dynamically (falls back to $)
+      const prefix = typeof client.getPrefix === 'function' ? client.getPrefix(message.guild?.id) : '$';
 
-      // Filter commands: hide hidden ones and mod commands
-      const allCommands = Array.from(client.commands.values()).filter(
-        cmd => !cmd.hidden && cmd.category?.toLowerCase() !== 'mod'
+      // Filter commands: hide hidden ones, mod commands, automod category, and the prefixless admin command
+      const allCommands = Array.from(client.commands.values()).filter(cmd =>
+        !cmd.hidden &&
+        (cmd.category?.toLowerCase() || 'misc') !== 'mod' &&
+        (cmd.category?.toLowerCase() || 'misc') !== 'automod' &&
+        cmd.name !== 'prefixless'
       );
+
       if (!allCommands.length) return message.reply('No commands loaded.');
 
       // Determine if user asked for a category
@@ -24,7 +29,7 @@ module.exports = {
       // Group commands by category
       const categories = {};
       for (const cmd of allCommands) {
-        const cat = cmd.category?.toLowerCase() || 'misc';
+        const cat = (cmd.category || 'Misc').toLowerCase();
         if (!categories[cat]) categories[cat] = [];
         categories[cat].push(cmd);
       }
@@ -39,11 +44,14 @@ module.exports = {
         targetCategories = categories;
       }
 
-      // Build pages
+      // Build pages (10 commands per page)
       const pages = [];
-      for (const [categoryName, cmds] of Object.entries(targetCategories)) {
-        for (let i = 0; i < cmds.length; i += 10) {
-          const chunk = cmds.slice(i, i + 10);
+      const sortedCategoryEntries = Object.entries(targetCategories).sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [categoryName, cmds] of sortedCategoryEntries) {
+        // sort commands alphabetically within category
+        const sortedCmds = cmds.slice().sort((a, b) => a.name.localeCompare(b.name));
+        for (let i = 0; i < sortedCmds.length; i += 10) {
+          const chunk = sortedCmds.slice(i, i + 10);
           const embed = new EmbedBuilder()
             .setTitle(`Help – ${categoryName.charAt(0).toUpperCase() + categoryName.slice(1)}`)
             .setColor(colors.help || '#22c55e')
@@ -52,7 +60,10 @@ module.exports = {
             .setFooter({ text: `Page ${pages.length + 1}` });
 
           chunk.forEach(cmd => {
-            const usage = cmd.usage ? `\nUsage: \`${prefix}${cmd.usage.replace(/^\$?/, '')}\`` : '';
+            // make usage show dynamic prefix; if command usage already includes a prefix, strip it
+            const rawUsage = cmd.usage || '';
+            const normalizedUsage = rawUsage.replace(/^[\s$!?.#%&]+/, ''); // remove leading prefix-like char if any
+            const usage = normalizedUsage ? `\nUsage: \`${prefix}${normalizedUsage}\`` : '';
             const aliases = cmd.aliases && cmd.aliases.length ? `\nAliases: ${cmd.aliases.join(', ')}` : '';
             embed.addFields({ name: `\`${cmd.name}\``, value: `${cmd.description}${aliases}${usage}`, inline: false });
           });
@@ -66,11 +77,11 @@ module.exports = {
       // Buttons for navigation
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('prev')
+          .setCustomId('prev_help')
           .setLabel('⬅️ Previous')
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-          .setCustomId('next')
+          .setCustomId('next_help')
           .setLabel('➡️ Next')
           .setStyle(ButtonStyle.Primary)
       );
@@ -85,9 +96,9 @@ module.exports = {
 
       collector.on('collect', async interaction => {
         if (!interaction.isButton()) return;
-        if (interaction.customId === 'prev') {
+        if (interaction.customId === 'prev_help') {
           current = current > 0 ? current - 1 : pages.length - 1;
-        } else if (interaction.customId === 'next') {
+        } else if (interaction.customId === 'next_help') {
           current = current < pages.length - 1 ? current + 1 : 0;
         }
         await interaction.update({ embeds: [pages[current]], components: [row] });
