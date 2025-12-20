@@ -2,6 +2,7 @@ const { EmbedBuilder } = require('discord.js');
 
 module.exports = {
   name: 'roleinfo',
+  aliases: ['ri'], // ✅ added alias
   description: 'Shows information about a role by ID or mention.',
   category: 'utility',
   usage: '$roleinfo <roleID or @role>',
