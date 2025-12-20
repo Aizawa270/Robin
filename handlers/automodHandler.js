@@ -154,8 +154,6 @@ function buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId, chan
       `➤  **Channel:** ${channelId ? `<#${channelId}>` : 'Unknown'}`,
       `➤  **Time:** <t:${Math.floor(Date.now() / 1000)}:R>`,
       '',
-      `╰┈➤ **__Requirements:__** ${requirementRoleId ? `<@&${requirementRoleId}>` : '\`\`none\`\`'}`,
-      '',
       `**Actions:** Use the buttons below to Warn / Ban / Ignore.`
     ].join('\n'));
   return embed;
