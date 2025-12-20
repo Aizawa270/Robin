@@ -3,6 +3,7 @@ const { colors } = require('../../config');
 
 module.exports = {
   name: 'membercount',
+  aliases: ['mc'], // ✅ added alias
   description: 'Shows total server members, humans and bots.',
   category: 'info',
   usage: '$membercount',
