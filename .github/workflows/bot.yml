@@ -3,10 +3,15 @@ name: Discord Bot
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 */5 * * *'
+    # Every 6 hours at minute 0
+    - cron: '0 */6 * * *'
 
 permissions:
   contents: write
+
+concurrency:
+  group: discord-bot
+  cancel-in-progress: true
 
 jobs:
   run-bot:
@@ -32,15 +37,13 @@ jobs:
 
       - name: Install project dependencies
         run: |
-          # prefer clean install; fallback to npm install
           npm ci || npm install
-          # ensure better-sqlite3 is present and built
           npm install better-sqlite3@latest --build-from-source || true
           npm rebuild --build-from-source
 
       - name: Create .env file from secrets
         run: |
-          echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" >> .env
+          echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
           echo "CLIENT_ID=${{ secrets.CLIENT_ID }}" >> .env
           echo "WEATHERAPI_KEY=${{ secrets.WEATHERAPI_KEY }}" >> .env
           echo "REMOVEBG_API_KEY=${{ secrets.REMOVEBG_API_KEY }}" >> .env
@@ -58,7 +61,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/prefixless.sqlite data/quarantine.sqlite || true
+          git add data/prefixless.sqlite data/quarantine.sqlite data/prefixes.sqlite data/giveaways.sqlite || true
           git commit -m "chore: persist sqlite DB" || echo "No DB changes to commit"
           git push
         env:
