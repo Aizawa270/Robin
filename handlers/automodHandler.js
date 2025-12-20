@@ -218,85 +218,116 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
       time: 30 * 60 * 1000
     });
 
-    // ===== FIXED BUTTON COLLECTOR =====
+    // ===== FIXED BUTTON HANDLER - NO CRASHES =====
     collector.on('collect', async (interaction) => {
       const custom = interaction.customId;
       const member = interaction.member;
 
-      // CRITICAL FIX 1: Immediately defer to prevent 3-second timeout
-      await interaction.deferUpdate().catch(() => {});
-      
+      // Check if user is staff
       if (!isStaff(member)) {
-        await interaction.followUp({ content: "you aint important enough brochacho😹", ephemeral: true });
-        return;
-      }
-
-      const state = pendingActions.get(sent.id);
-      if (!state || state.handled) {
-        await interaction.followUp({ content: "This alert has already been handled.", ephemeral: true });
-        return;
-      }
-
-      if (custom === `am_ignore:${sent.id}`) {
-        state.handled = true;
-        pendingActions.set(sent.id, state);
-        const newEmbed = EmbedBuilder.from(embed).setColor('#94a3b8').setFooter({ text: `Ignored by ${interaction.user.tag}` });
-        await sent.edit({ embeds: [newEmbed], components: [] });
-        await interaction.followUp({ content: `Ignored.`, ephemeral: true });
-        collector.stop('handled');
-        return;
-      }
-
-      if (custom === `am_warn:${sent.id}`) {
-        state.handled = true;
-        pendingActions.set(sent.id, state);
-
-        const modal = new ModalBuilder()
-          .setCustomId(`am_warn_modal:${sent.id}`)
-          .setTitle('Warn Reason');
-
-        const reasonInput = new TextInputBuilder()
-          .setCustomId('warn_reason')
-          .setLabel('Reason for warning')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-          .setPlaceholder('Type the reason and then submit');
-
-        const row1 = new ActionRowBuilder().addComponents(reasonInput);
-        modal.addComponents(row1);
-
-        // CRITICAL FIX 2: Wrap modal.show() in try-catch to prevent bot crash
         try {
-          await interaction.showModal(modal);
-        } catch (error) {
-          console.error('[Automod] Failed to show warning modal. Interaction may have expired:', error.message);
-          // Let the user know with a follow-up message
-          await interaction.followUp({ 
-            content: 'Could not open the warning menu. The interaction may have timed out. Please click the button again if needed.', 
-            ephemeral: true 
-          });
+          await interaction.reply({ content: "you aint important enough brochacho😹", ephemeral: true });
+        } catch (err) {
+          console.log('[Automod] Could not reply to non-staff:', err.message);
         }
         return;
       }
 
+      // Get alert state
+      const state = pendingActions.get(sent.id);
+      if (!state || state.handled) {
+        try {
+          await interaction.reply({ content: "This alert has already been handled.", ephemeral: true });
+        } catch (err) {
+          console.log('[Automod] Could not reply to handled alert:', err.message);
+        }
+        return;
+      }
+
+      // Handle IGNORE button
+      if (custom === `am_ignore:${sent.id}`) {
+        try {
+          state.handled = true;
+          pendingActions.set(sent.id, state);
+          
+          // Update embed to show ignored
+          const newEmbed = EmbedBuilder.from(embed).setColor('#94a3b8').setFooter({ text: `Ignored by ${interaction.user.tag}` });
+          await sent.edit({ embeds: [newEmbed], components: [] });
+          
+          // Send confirmation
+          await interaction.reply({ content: `Ignored.`, ephemeral: true });
+          
+          collector.stop('handled');
+        } catch (err) {
+          console.error('[Automod] Ignore button error:', err.message);
+        }
+        return;
+      }
+
+      // Handle WARN button (MODAL)
+      if (custom === `am_warn:${sent.id}`) {
+        try {
+          state.handled = true;
+          pendingActions.set(sent.id, state);
+
+          // Create modal for warning reason
+          const modal = new ModalBuilder()
+            .setCustomId(`am_warn_modal:${sent.id}:${state.targetUserId}`)
+            .setTitle('Warn Reason');
+
+          const reasonInput = new TextInputBuilder()
+            .setCustomId('warn_reason')
+            .setLabel('Reason for warning')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setPlaceholder('Type the reason and then submit')
+            .setMaxLength(1000);
+
+          const row1 = new ActionRowBuilder().addComponents(reasonInput);
+          modal.addComponents(row1);
+
+          // Show the modal - NO defer, just show it
+          await interaction.showModal(modal);
+          
+        } catch (error) {
+          console.error('[Automod] Warn button error:', error.message);
+          // If modal fails, send error message
+          try {
+            await interaction.reply({ 
+              content: 'Could not open warning menu. Please try again.', 
+              ephemeral: true 
+            });
+          } catch {}
+        }
+        return;
+      }
+
+      // Handle BAN button (confirmation)
       if (custom === `am_ban:${sent.id}`) {
-        const confirmRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`am_ban_confirm:${sent.id}`).setLabel('Confirm Ban').setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId(`am_ban_cancel:${sent.id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
-        );
-        // CRITICAL FIX 3: Use followUp after deferUpdate
-        await interaction.followUp({ 
-          content: `Confirm ban of <@${state.targetUserId}>? (Only first click counts)`, 
-          components: [confirmRow], 
-          ephemeral: true 
-        });
+        try {
+          const confirmRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`am_ban_confirm:${sent.id}`).setLabel('✅ Confirm Ban').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`am_ban_cancel:${sent.id}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Secondary)
+          );
+          
+          await interaction.reply({ 
+            content: `**Confirm ban of <@${state.targetUserId}>?**\nThis action cannot be undone.`, 
+            components: [confirmRow], 
+            ephemeral: true 
+          });
+          
+        } catch (err) {
+          console.error('[Automod] Ban button error:', err.message);
+        }
         return;
       }
     });
 
     collector.on('end', () => {
       pendingActions.delete(sent.id);
-      try { sent.edit({ components: [] }); } catch {}
+      try { 
+        sent.edit({ components: [] }).catch(() => {}); 
+      } catch {}
     });
 
     return sent;
@@ -375,6 +406,152 @@ async function checkMessage(client, message) {
   }
 }
 
+// ===== MODAL HANDLER =====
+async function handleModal(interaction) {
+  if (!interaction.isModalSubmit()) return;
+  
+  try {
+    const customId = interaction.customId;
+    
+    // Check if it's a warn modal
+    if (customId.startsWith('am_warn_modal:')) {
+      const parts = customId.split(':');
+      if (parts.length < 3) return;
+      
+      const messageId = parts[1];
+      const targetUserId = parts[2];
+      const reason = interaction.fields.getTextInputValue('warn_reason');
+      
+      // Save the warning
+      saveWarnRaw(interaction.guildId, targetUserId, interaction.user.id, reason);
+      incrementWarnCount(interaction.guildId, targetUserId);
+      
+      // Update the alert message
+      const originalMessage = await interaction.channel.messages.fetch(messageId).catch(() => null);
+      if (originalMessage) {
+        const newEmbed = EmbedBuilder.from(originalMessage.embeds[0])
+          .setColor('#f59e0b')
+          .setFooter({ text: `Warned by ${interaction.user.tag}` })
+          .addFields({ name: 'Warning Reason', value: reason });
+        
+        await originalMessage.edit({ embeds: [newEmbed], components: [] });
+      }
+      
+      // Confirm to moderator
+      await interaction.reply({ 
+        content: `✅ <@${targetUserId}> has been warned. Reason: ${reason}`,
+        ephemeral: true 
+      });
+      
+      // Notify the warned user if possible
+      try {
+        const user = await interaction.client.users.fetch(targetUserId);
+        await user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('⚠️ You have been warned')
+              .setDescription(`You received a warning in **${interaction.guild.name}**`)
+              .addFields(
+                { name: 'Reason', value: reason },
+                { name: 'Moderator', value: interaction.user.tag }
+              )
+              .setColor('#f59e0b')
+              .setTimestamp()
+          ]
+        });
+      } catch (dmError) {
+        console.log('[Automod] Could not DM warned user:', dmError.message);
+      }
+    }
+  } catch (error) {
+    console.error('[Automod] Modal handler error:', error);
+    try {
+      await interaction.reply({ 
+        content: '❌ Failed to process warning. Check console for error.',
+        ephemeral: true 
+      });
+    } catch {}
+  }
+}
+
+// ===== BAN CONFIRMATION HANDLER =====
+async function handleBanConfirmation(interaction) {
+  if (!interaction.isButton()) return;
+  
+  try {
+    const customId = interaction.customId;
+    
+    // Check if it's a ban confirmation
+    if (customId.startsWith('am_ban_confirm:')) {
+      const parts = customId.split(':');
+      if (parts.length < 2) return;
+      
+      const messageId = parts[1];
+      
+      // Find the alert in pending actions
+      const state = pendingActions.get(messageId);
+      if (!state) {
+        await interaction.reply({ content: 'This ban request has expired.', ephemeral: true });
+        return;
+      }
+      
+      // Ban the user
+      try {
+        const guild = await interaction.client.guilds.fetch(state.guildId);
+        const member = await guild.members.fetch(state.targetUserId).catch(() => null);
+        
+        if (member) {
+          await member.ban({ reason: `Automod alert: ${state.matchedWord}` });
+          
+          // Update the alert message
+          const originalMessage = await interaction.channel.messages.fetch(messageId).catch(() => null);
+          if (originalMessage) {
+            const newEmbed = EmbedBuilder.from(originalMessage.embeds[0])
+              .setColor('#ef4444')
+              .setFooter({ text: `Banned by ${interaction.user.tag}` });
+            
+            await originalMessage.edit({ embeds: [newEmbed], components: [] });
+          }
+          
+          pendingActions.delete(messageId);
+          
+          await interaction.reply({ 
+            content: `✅ <@${state.targetUserId}> has been banned.`,
+            ephemeral: true 
+          });
+        } else {
+          await interaction.reply({ 
+            content: '❌ User not found in server.',
+            ephemeral: true 
+          });
+        }
+      } catch (banError) {
+        console.error('[Automod] Ban error:', banError);
+        await interaction.reply({ 
+          content: `❌ Failed to ban user: ${banError.message}`,
+          ephemeral: true 
+        });
+      }
+    }
+    
+    // Handle ban cancel
+    if (customId.startsWith('am_ban_cancel:')) {
+      await interaction.reply({ 
+        content: 'Ban cancelled.',
+        ephemeral: true 
+      });
+    }
+  } catch (error) {
+    console.error('[Automod] Ban handler error:', error);
+    try {
+      await interaction.reply({ 
+        content: '❌ Failed to process ban.',
+        ephemeral: true 
+      });
+    } catch {}
+  }
+}
+
 // ===== INIT AUTOMOD =====
 function initAutomod(client) {
   client.automodDB = db;
@@ -396,17 +573,34 @@ function initAutomod(client) {
     checkMessage
   };
 
-  // Handle button interactions for modals (if any)
+  // Setup interaction handlers
   client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton() && !interaction.isModalSubmit()) return;
-
-    // Basic acknowledgment for any other buttons to prevent unhandled errors
-    if (interaction.isButton()) {
-      await interaction.deferUpdate().catch(() => {});
+    try {
+      // Handle modals (warnings)
+      if (interaction.isModalSubmit()) {
+        await handleModal(interaction);
+        return;
+      }
+      
+      // Handle ban confirm/cancel buttons
+      if (interaction.isButton() && (
+        interaction.customId?.startsWith('am_ban_confirm:') || 
+        interaction.customId?.startsWith('am_ban_cancel:')
+      )) {
+        await handleBanConfirmation(interaction);
+        return;
+      }
+      
+      // Ignore other automod buttons (handled in collector)
+      if (interaction.isButton() && interaction.customId?.startsWith('am_')) {
+        return;
+      }
+    } catch (error) {
+      console.error('[Automod] Interaction handler error:', error);
     }
   });
 
-  console.log('[Automod] System initialized - Admin bypass enabled, 15min timeouts');
+  console.log('[Automod] ✅ System initialized - Admin bypass enabled, 15min timeouts');
   return true;
 }
 
