@@ -18,36 +18,38 @@ function saveWarns(data) {
 
 module.exports = {
   name: 'warnremove',
-  description: 'Remove a specific warn from a user. Usage: $warnremove <@user|userID> <warnNumber>',
+  description: 'Remove a specific warn from a user.',
   category: 'mod',
   usage: '$warnremove <@user|userID> <warnNumber>',
   aliases: ['wrnremove'],
   async execute(client, message, args) {
-    if (!message.guild) return message.reply('This command can only be used in a server.');
+    if (!message.guild) return;
 
-    const perms = message.member.permissions;
-    if (!perms.has(PermissionFlagsBits.ModerateMembers) && !perms.has(PermissionFlagsBits.Administrator))
-      return message.reply('You need **Moderate Members** permission or be admin to remove warns.');
+    if (
+      !message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
+      !message.member.permissions.has(PermissionFlagsBits.Administrator)
+    ) {
+      return message.reply('You lack permissions.');
+    }
 
     const targetArg = args.shift();
     const indexArg = args.shift();
-    if (!targetArg || !indexArg) return message.reply('Usage: $warnremove <@user|userID> <warnNumber>');
+
+    if (!targetArg || !indexArg)
+      return message.reply('Usage: $warnremove <user> <number>');
 
     const targetUser =
       message.mentions.users.first() ||
       (await client.users.fetch(targetArg).catch(() => null));
 
-    if (!targetUser) return message.reply('Could not find that user.');
+    if (!targetUser) return message.reply('User not found.');
 
-    const warnIndex = parseInt(indexArg, 10) - 1;
+    const warnIndex = parseInt(indexArg) - 1;
     if (isNaN(warnIndex)) return message.reply('Invalid warn number.');
 
     const warns = loadWarns();
-    if (!warns[targetUser.id] || warns[targetUser.id].length === 0)
-      return message.reply('That user has no warns.');
-
-    if (warnIndex < 0 || warnIndex >= warns[targetUser.id].length)
-      return message.reply('Invalid warn number for this user.');
+    if (!warns[targetUser.id] || !warns[targetUser.id][warnIndex])
+      return message.reply('Warn not found.');
 
     const removed = warns[targetUser.id].splice(warnIndex, 1)[0];
     saveWarns(warns);
@@ -55,11 +57,10 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setColor('#facc15')
       .setTitle('Warn Removed')
-      .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
       .addFields(
-        { name: 'User', value: `${targetUser.tag} (${targetUser.id})`, inline: false },
-        { name: 'Removed by', value: `${message.author.tag} (${message.author.id})`, inline: false },
-        { name: 'Reason of removed warn', value: removed.reason, inline: false },
+        { name: 'User', value: `<@${targetUser.id}>`, inline: false }, // fake ping
+        { name: 'Removed by', value: `<@${message.author.id}>`, inline: false }, // fake ping
+        { name: 'Removed Reason', value: removed.reason, inline: false },
         { name: 'Remaining Warns', value: `${warns[targetUser.id].length}`, inline: false }
       )
       .setTimestamp();
