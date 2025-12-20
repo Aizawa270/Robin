@@ -2,6 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const { Collection } = require('discord.js');
 
+// ===== AUTOMOD HANDLER =====
+const automodHandler = require('./automodHandler');
+
 // 🔒 STRIP REPLY TARGET FROM MENTIONS
 function stripReplyMentions(message) {
   if (!message.reference) return;
@@ -68,6 +71,10 @@ async function handleMessage(client, message) {
   if (message.author.bot) return;
   const content = message.content?.trim();
   if (!content) return;
+
+  // ===== AUTOMOD CHECK =====
+  // Every incoming message goes through automod first
+  await automodHandler.checkMessage(client, message);
 
   // 🔒 APPLY FIX: strip reply mentions globally
   stripReplyMentions(message);
