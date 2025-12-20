@@ -1,14 +1,17 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { colors, prefix } = require('../../config');
+const { colors } = require('../../config');
 
 module.exports = {
   name: 'help',
   description: 'Shows all available commands or commands for a specific category.',
   category: 'utility',
-  usage: '$help [category]',
+  usage: 'help [category]',
   aliases: ['h'],
   async execute(client, message, args) {
     try {
+      // Get current prefix dynamically
+      const prefix = client.getPrefix(message.guild?.id);
+
       // Filter commands: hide hidden ones and mod commands
       const allCommands = Array.from(client.commands.values()).filter(
         cmd => !cmd.hidden && cmd.category?.toLowerCase() !== 'mod'
@@ -49,7 +52,7 @@ module.exports = {
             .setFooter({ text: `Page ${pages.length + 1}` });
 
           chunk.forEach(cmd => {
-            const usage = cmd.usage ? `\nUsage: \`${cmd.usage}\`` : '';
+            const usage = cmd.usage ? `\nUsage: \`${prefix}${cmd.usage.replace(/^\$?/, '')}\`` : '';
             const aliases = cmd.aliases && cmd.aliases.length ? `\nAliases: ${cmd.aliases.join(', ')}` : '';
             embed.addFields({ name: `\`${cmd.name}\``, value: `${cmd.description}${aliases}${usage}`, inline: false });
           });
