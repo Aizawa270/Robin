@@ -163,6 +163,10 @@ if (!client.messageCreateHandlerAttached) {
 // ===== LOAD COMMANDS =====
 loadCommands(client);
 
+// ===== AUTOMOD HANDLER =====
+const { initAutomod } = require('./handlers/automodHandler');
+initAutomod(client); // ← this is the only addition for Step 1
+
 // ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
 
