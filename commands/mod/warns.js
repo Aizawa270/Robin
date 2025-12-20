@@ -18,59 +18,59 @@ module.exports = {
   category: 'mod',
   usage: '$warns <@user|userID>',
   async execute(client, message, args) {
-    if (!message.guild) return message.reply('This command can only be used in a server.');
+    if (!message.guild) return message.reply('Server only.');
 
     const perms = message.member.permissions;
-    const canMod =
-      perms.has(PermissionFlagsBits.ModerateMembers) ||
-      perms.has(PermissionFlagsBits.Administrator);
-
-    if (!canMod)
-      return message.reply('You need **Moderate Members** permission or admin.');
+    if (
+      !perms.has(PermissionFlagsBits.ModerateMembers) &&
+      !perms.has(PermissionFlagsBits.Administrator)
+    ) {
+      return message.reply('No perms.');
+    }
 
     const targetArg = args[0];
-    if (!targetArg) return message.reply('Please mention a user or provide their ID.');
+    if (!targetArg) return message.reply('Provide a user.');
 
     const targetUser =
       message.mentions.users.first() ||
       (await client.users.fetch(targetArg).catch(() => null));
 
-    if (!targetUser) return message.reply('Could not find that user.');
+    if (!targetUser) return message.reply('User not found.');
 
-    // Prefer using automod DB if available
+    const fakePingUser = `<@${targetUser.id}>`;
+
+    // ===== AUTOMOD DB PATH =====
     try {
       if (client.automod && typeof client.automod.listWarns === 'function') {
         const rows = client.automod.listWarns(message.guild.id, targetUser.id) || [];
-        const total = (typeof client.automod.getWarnCount === 'function')
-          ? client.automod.getWarnCount(message.guild.id, targetUser.id)
-          : rows.length;
+        const total =
+          typeof client.automod.getWarnCount === 'function'
+            ? client.automod.getWarnCount(message.guild.id, targetUser.id)
+            : rows.length;
 
-        if (!rows.length) return message.reply(`${targetUser.tag} has no warns.`);
+        if (!rows.length) return message.reply('User has no warns.');
 
         const embed = new EmbedBuilder()
           .setColor('#facc15')
-          .setTitle(`Warns for ${targetUser.tag}`)
+          .setTitle('User Warnings')
+          .setDescription(`Warnings for ${fakePingUser}`)
           .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
           .setTimestamp();
 
-        // Add up to 10 warns (most recent first)
         const slice = rows.slice(0, 10);
+
         for (let i = 0; i < slice.length; i++) {
           const w = slice[i];
-          // columns: moderator_id, reason, timestamp
-          let modText = w.moderator_id || 'Unknown';
-          try {
-            if (w.moderator_id) {
-              const modUser = await client.users.fetch(w.moderator_id).catch(() => null);
-              if (modUser) modText = `${modUser.tag} (${modUser.id})`;
-            }
-          } catch {}
-          const date = w.timestamp ? `<t:${Math.floor(new Date(w.timestamp).getTime() / 1000)}:f>` : 'Unknown';
+          const modPing = w.moderator_id ? `<@${w.moderator_id}>` : 'Unknown';
+          const date = w.timestamp
+            ? `<t:${Math.floor(new Date(w.timestamp).getTime() / 1000)}:f>`
+            : 'Unknown';
+
           embed.addFields({
             name: `Warn #${i + 1}`,
             value:
               `**Reason:** ${w.reason || 'No reason provided'}\n` +
-              `**By:** ${modText}\n` +
+              `**By:** ${modPing}\n` +
               `**Date:** ${date}`,
             inline: false,
           });
@@ -78,37 +78,43 @@ module.exports = {
 
         if (total > 10) {
           embed.addFields({
-            name: 'And more...',
-            value: `Total warns: ${total}`,
+            name: 'More warnings',
+            value: `Total warns: **${total}**`,
           });
         }
 
         return message.reply({ embeds: [embed] });
       }
     } catch (err) {
-      console.error('warns command automod DB error:', err);
-      // fallthrough to file-based fallback
+      console.error('warns automod error:', err);
     }
 
-    // --- Fallback to file-based warns (older format) ---
+    // ===== FILE FALLBACK =====
     const warns = loadWarnsFile();
     const userWarns = warns[targetUser.id] || [];
 
-    if (userWarns.length === 0)
-      return message.reply(`${targetUser.tag} has no warns.`);
+    if (!userWarns.length) return message.reply('User has no warns.');
 
     const embed = new EmbedBuilder()
       .setColor('#facc15')
-      .setTitle(`Warns for ${targetUser.tag}`)
+      .setTitle('User Warnings')
+      .setDescription(`Warnings for ${fakePingUser}`)
       .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
       .setTimestamp();
 
     userWarns.slice(0, 10).forEach((w, i) => {
+      let modPing = 'Unknown';
+
+      if (w.moderator && w.moderator.includes('(')) {
+        const id = w.moderator.match(/\((\d+)\)/)?.[1];
+        if (id) modPing = `<@${id}>`;
+      }
+
       embed.addFields({
         name: `Warn #${i + 1}`,
         value:
           `**Reason:** ${w.reason}\n` +
-          `**By:** ${w.moderator}\n` +
+          `**By:** ${modPing}\n` +
           `**Date:** <t:${Math.floor(new Date(w.timestamp).getTime() / 1000)}:f>`,
         inline: false,
       });
@@ -116,8 +122,8 @@ module.exports = {
 
     if (userWarns.length > 10) {
       embed.addFields({
-        name: 'And more...',
-        value: `Total warns: ${userWarns.length}`,
+        name: 'More warnings',
+        value: `Total warns: **${userWarns.length}**`,
       });
     }
 
