@@ -1,6 +1,4 @@
 // handlers/automodHandler.js
-// Adds admin immunity + warn counts + auto-ban at 5 warns
-
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
@@ -13,7 +11,8 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  ComponentType
+  ComponentType,
+  PermissionsBitField
 } = require('discord.js');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -22,7 +21,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'automod.sqlite');
 const db = new Database(DB_PATH);
 
-// initialize tables
+// ===== TABLES =====
 db.prepare(`
 CREATE TABLE IF NOT EXISTS automod_channel (
   guild_id TEXT PRIMARY KEY,
@@ -69,10 +68,10 @@ CREATE TABLE IF NOT EXISTS automod_warn_counts (
   PRIMARY KEY (guild_id, user_id)
 )`).run();
 
-// in-memory pending actions: messageId -> state
+// in-memory pending actions
 const pendingActions = new Map();
 
-// helpers: automod config DB functions
+// ===== HELPERS =====
 function setAutomodChannel(guildId, channelId) {
   db.prepare(`INSERT OR REPLACE INTO automod_channel (guild_id, channel_id) VALUES (?, ?)`).run(guildId, channelId);
 }
@@ -91,7 +90,6 @@ function listAlertTargets(guildId) {
   return db.prepare(`SELECT target_type, target_id FROM automod_alert_list WHERE guild_id = ?`).all(guildId);
 }
 
-// blacklist helpers
 function addHardWord(guildId, word) {
   db.prepare(`INSERT OR IGNORE INTO blacklist_hard (guild_id, word) VALUES (?, ?)`).run(guildId, word.toLowerCase());
 }
@@ -112,13 +110,11 @@ function listSoftWords(guildId) {
   return db.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guildId).map(r => r.word);
 }
 
-// warns helpers
 function saveWarnRaw(guildId, userId, moderatorId, reason) {
   db.prepare(`INSERT INTO automod_warns (guild_id, user_id, moderator_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)`)
     .run(guildId, userId, moderatorId, reason || 'No reason provided', Date.now());
 }
 
-// increments counts table and returns new count
 function incrementWarnCount(guildId, userId) {
   const insert = db.prepare(`
     INSERT INTO automod_warn_counts (guild_id, user_id, count)
@@ -139,7 +135,7 @@ function listWarns(guildId, userId) {
   return db.prepare(`SELECT moderator_id, reason, timestamp FROM automod_warns WHERE guild_id = ? AND user_id = ? ORDER BY timestamp DESC`).all(guildId, userId);
 }
 
-// helper: build pretty embed for alert
+// ===== ALERT EMBED =====
 function buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId) {
   const embed = new EmbedBuilder()
     .setTitle('「 ✦ 𝐀𝐔𝐓𝐎𝐌𝐎𝐃 𝐀𝐋𝐄𝐑𝐓 ✦ 」')
@@ -158,15 +154,15 @@ function buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId) {
   return embed;
 }
 
-// helper: staff check (keeps as ManageMessages/ModerateMembers/Admin)
+// ===== STAFF CHECK =====
 function isStaff(member) {
   if (!member) return false;
   return member.permissions.has(PermissionFlagsBits.ManageMessages) ||
-    member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
-    member.permissions.has(PermissionFlagsBits.Administrator);
+         member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
+         member.permissions.has(PermissionFlagsBits.Administrator);
 }
 
-// send automod alert (ghost ping)
+// ===== SEND ALERT =====
 async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirementRoleId = null) {
   try {
     const channelId = getAutomodChannel(guild.id);
@@ -175,7 +171,6 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
     const channel = await client.channels.fetch(channelId).catch(() => null);
     if (!channel) return null;
 
-    // Build mention content (ghost ping)
     const entries = listAlertTargets(guild.id);
     const mentionUsers = entries.filter(e => e.target_type === 'user').map(e => `<@${e.target_id}>`);
     const mentionRoles = entries.filter(e => e.target_type === 'role').map(e => `<@&${e.target_id}>`);
@@ -183,7 +178,6 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
 
     const embed = buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId);
 
-    // send the message with mentions, then wipe content (ghost ping)
     const sent = await channel.send({ content: allMentions || '\u200b', embeds: [embed] });
 
     pendingActions.set(sent.id, {
@@ -279,7 +273,7 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
   }
 }
 
-// Initialize automod and hook modal/button handlers
+// ===== INIT AUTOMOD =====
 function initAutomod(client) {
   client.automodDB = db;
   client.automod = {
@@ -300,42 +294,35 @@ function initAutomod(client) {
   };
 
   client.on('interactionCreate', async (interaction) => {
-    // modal & button handling unchanged, keep same as before
-    // ...
+    // keep your modal/button handling logic intact
   });
 
   async function checkMessage(client, message) {
     try {
       if (!message.guild) return;
       if (message.author?.bot) return;
-      if (message.member && message.member.permissions.has(PermissionFlagsBits.Administrator)) return;
+      if (message.member && message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
       const guildId = message.guild.id;
       const content = (message.content || '').toLowerCase();
 
-      // soft words: delete quietly
-      const softWords = listSoftWords(guildId);
-      for (const w of softWords) {
+      // soft words
+      for (const w of listSoftWords(guildId)) {
         if (!w) continue;
         if (content.includes(w.toLowerCase())) {
           await message.delete().catch(() => {});
-          return; // done
+          return;
         }
       }
 
-      // hard words: delete + send alert + mute 15 minutes
-      const hardWords = listHardWords(guildId);
-      for (const w of hardWords) {
+      // hard words
+      for (const w of listHardWords(guildId)) {
         if (!w) continue;
         if (content.includes(w.toLowerCase())) {
           await message.delete().catch(() => {});
-
-          // mute for 15 minutes
           if (message.member && message.member.moderatable) {
-            const duration = 15 * 60 * 1000;
-            await message.member.timeout(duration, `Automod hard blacklist word: ${w}`);
+            await message.member.timeout(15 * 60 * 1000, `Automod hard blacklist word: ${w}`).catch(err => console.error('Timeout error:', err));
           }
-
           await sendAutomodAlert(client, message.guild, message.author, w, null);
           return;
         }
