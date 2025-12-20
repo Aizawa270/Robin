@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: discord-bot
-  cancel-in-progress: true
+  cancel-in-progress: false  # we handle stopping manually
 
 jobs:
   run-bot:
@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout repo (with credentials)
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           persist-credentials: true
@@ -40,6 +40,14 @@ jobs:
           npm ci || npm install
           npm install better-sqlite3@latest --build-from-source || true
           npm rebuild --build-from-source
+
+      - name: Kill previous bot process if running
+        run: |
+          BOT_PID=$(pgrep -f "node index.js") || true
+          if [ ! -z "$BOT_PID" ]; then
+            echo "Killing previous bot process: $BOT_PID"
+            kill -9 $BOT_PID
+          fi
 
       - name: Create .env file from secrets
         run: |
