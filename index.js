@@ -47,6 +47,16 @@ giveawayDB.prepare(`
 `).run();
 client.giveawayDB = giveawayDB;
 
+// Prefixes DB (per-server)
+const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
+prefixDB.prepare(`
+  CREATE TABLE IF NOT EXISTS prefixes (
+    guild_id TEXT PRIMARY KEY,
+    prefix TEXT
+  )
+`).run();
+client.prefixDB = prefixDB;
+
 // ===== MEMORY MAPS =====
 client.afk = new Map();
 client.snipes = new Map();
@@ -65,6 +75,8 @@ client.on('messageDelete', async (message) => {
   if (message.author?.bot) return;
 
   const channelId = message.channel.id;
+
+  // Text snipes
   if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
   const arr = client.snipes.get(channelId);
   arr.unshift({
@@ -75,6 +87,7 @@ client.on('messageDelete', async (message) => {
   });
   if (arr.length > 15) arr.pop();
 
+  // Image snipes
   if (message.attachments.size > 0) {
     if (!client.snipesImage.has(channelId)) client.snipesImage.set(channelId, []);
     const imgArr = client.snipesImage.get(channelId);
@@ -119,14 +132,11 @@ client.on('messageReactionAdd', async (reaction, user) => {
   const arr = client.reactionSnipes.get(channelId);
   arr.unshift({ emoji: reaction.emoji.toString(), user, createdAt: new Date() });
   if (arr.length > 15) arr.pop();
-
-  // Giveaway live tracking handled in startgiveaway.js
 });
 
 client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
   if (reaction.partial) await reaction.fetch();
-  // Giveaway live tracking handled in startgiveaway.js
 });
 
 // ===== READY =====
@@ -156,4 +166,5 @@ loadCommands(client);
 
 // ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
+
 module.exports = client;
