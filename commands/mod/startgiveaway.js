@@ -8,40 +8,58 @@ module.exports = {
   hidden: true,
 
   async execute(client, message, args) {
-    if (!message.member.permissions.has('Administrator')) {
-      return message.reply('Admins only.');
+    if (!message.member.permissions.has('Administrator')) return message.reply('Admins only.');
+    if (!args.length) return message.reply('Usage: `$sgw <name> <duration> <winners> [channel] [role]`');
+
+    // ─── PARSE ARGS ────────────────────────────────
+    // Work backwards: last args are role, channel, winners, duration
+    let role = null;
+    let channel = message.channel;
+    let winnerCount = 1;
+    let durationRaw;
+
+    // Check for role mention or ID
+    if (message.mentions.roles.size) {
+      role = message.mentions.roles.first();
+      args = args.filter(a => !/<@&\d+>/.test(a));
+    } else if (args.length && message.guild.roles.cache.has(args[args.length - 1])) {
+      role = message.guild.roles.cache.get(args[args.length - 1]);
+      args.pop();
     }
 
-    // ─── ARGS ─────────────────────────────────────────
-    const name = args[0];
-    const durationRaw = args[1];
-    const winnerCount = parseInt(args[2]) || 1;
-
-    const channel =
-      message.mentions.channels.first() ||
-      message.guild.channels.cache.get(args[3]) ||
-      message.channel;
-
-    const role =
-      message.mentions.roles.first() ||
-      message.guild.roles.cache.get(args[4]) ||
-      null;
-
-    if (!name || !durationRaw) {
-      return message.reply(
-        'Usage: `$sgw <name> <duration> <winners> [channel] [role]`'
-      );
+    // Check for channel mention or ID
+    if (message.mentions.channels.size) {
+      channel = message.mentions.channels.first();
+      args = args.filter(a => !/<#\d+>/.test(a));
+    } else if (args.length && message.guild.channels.cache.has(args[args.length - 1])) {
+      channel = message.guild.channels.cache.get(args[args.length - 1]);
+      args.pop();
     }
 
-    // ─── DURATION ─────────────────────────────────────
+    // Winner count
+    if (args.length && /^\d+$/.test(args[args.length - 1])) {
+      winnerCount = parseInt(args.pop());
+    }
+
+    // Duration
+    if (args.length && /^\d+[smhd]$/.test(args[args.length - 1])) {
+      durationRaw = args.pop();
+    } else {
+      return message.reply('Invalid duration. Example: `1h`, `7d`');
+    }
+
+    // Remaining args = prize name
+    const name = args.join(' ');
+    if (!name) return message.reply('You need to provide a giveaway name.');
+
+    // ─── PARSE DURATION ────────────────────────────
     const units = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
     const match = durationRaw.match(/^(\d+)([smhd])$/);
-    if (!match) return message.reply('Invalid duration. Example: `1h`, `7d`');
+    if (!match) return message.reply('Invalid duration format. Use `1h`, `7d` etc.');
 
     const duration = parseInt(match[1]) * units[match[2]];
-    if (duration < 5000 || duration > 14 * 86400000) {
+    if (duration < 5000 || duration > 14 * 86400000)
       return message.reply('Duration must be between **5s and 14d**.');
-    }
 
     const endTimestamp = Date.now() + duration;
 
@@ -57,9 +75,9 @@ module.exports = {
           `➤  **Winners:** \`\`${winnerCount}\`\``,
           `➤  **Draw:** <t:${Math.floor(endTimestamp / 1000)}:R>`,
           '',
-          `╰┈➤ **__Requirements:__** ${role ? role.toString() : '\`\`none\`\`'}`,
+          `╰┈➤ **__Requirements:__** ${role ? role.toString() : 'none'}`,
           '',
-          `\`${GIVEAWAY_EMOJI}\` **𝓒𝓵𝓲𝓬𝓴 𝓸𝓷 𝓽𝓱𝓮 __𝓫𝓾𝓽𝓽𝓸𝓷__ 𝓽𝓸 𝓹𝓪𝓻𝓽𝓲𝓬𝓲𝓹𝓪𝓽𝓮.**`,
+          `\`${GIVEAWAY_EMOJI}\` **Click the button to participate.**`,
         ].join('\n')
       )
       .setTimestamp();
@@ -70,24 +88,18 @@ module.exports = {
     // ─── SAVE TO DB ───────────────────────────────────
     client.giveawayDB
       .prepare(
-        `INSERT INTO giveaways 
-        (message_id, channel_id, name, winner_count, end_timestamp) 
-        VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO giveaways (message_id, channel_id, name, winner_count, end_timestamp) 
+         VALUES (?, ?, ?, ?, ?)`
       )
       .run(gwMessage.id, channel.id, name, winnerCount, endTimestamp);
 
     // ─── END TIMER ────────────────────────────────────
-    setTimeout(
-      () => module.exports.endGiveaway(client, gwMessage.id),
-      duration
-    );
+    setTimeout(() => module.exports.endGiveaway(client, gwMessage.id), duration);
   },
 
   // ───────────────────────────────────────────────────
   async endGiveaway(client, messageId) {
-    const g = client.giveawayDB
-      .prepare('SELECT * FROM giveaways WHERE message_id = ?')
-      .get(messageId);
+    const g = client.giveawayDB.prepare('SELECT * FROM giveaways WHERE message_id = ?').get(messageId);
     if (!g) return;
 
     const channel = await client.channels.fetch(g.channel_id);
@@ -146,9 +158,7 @@ module.exports = {
       try {
         const user = await client.users.fetch(id);
         await user.send(`🎉 You have successfully won the **${g.name}** giveaway!`);
-      } catch {
-        // DMs closed, skill issue
-      }
+      } catch {}
     }
 
     // ─── CLEANUP ──────────────────────────────────────
