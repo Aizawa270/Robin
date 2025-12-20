@@ -218,18 +218,22 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
       time: 30 * 60 * 1000
     });
 
+    // ===== FIXED BUTTON COLLECTOR =====
     collector.on('collect', async (interaction) => {
       const custom = interaction.customId;
       const member = interaction.member;
 
+      // CRITICAL FIX 1: Immediately defer to prevent 3-second timeout
+      await interaction.deferUpdate().catch(() => {});
+      
       if (!isStaff(member)) {
-        await interaction.reply({ content: "you aint important enough brochacho😹", ephemeral: true });
+        await interaction.followUp({ content: "you aint important enough brochacho😹", ephemeral: true });
         return;
       }
 
       const state = pendingActions.get(sent.id);
       if (!state || state.handled) {
-        await interaction.reply({ content: "This alert has already been handled.", ephemeral: true });
+        await interaction.followUp({ content: "This alert has already been handled.", ephemeral: true });
         return;
       }
 
@@ -238,7 +242,7 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
         pendingActions.set(sent.id, state);
         const newEmbed = EmbedBuilder.from(embed).setColor('#94a3b8').setFooter({ text: `Ignored by ${interaction.user.tag}` });
         await sent.edit({ embeds: [newEmbed], components: [] });
-        await interaction.reply({ content: `Ignored.`, ephemeral: true });
+        await interaction.followUp({ content: `Ignored.`, ephemeral: true });
         collector.stop('handled');
         return;
       }
@@ -261,7 +265,17 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
         const row1 = new ActionRowBuilder().addComponents(reasonInput);
         modal.addComponents(row1);
 
-        await interaction.showModal(modal);
+        // CRITICAL FIX 2: Wrap modal.show() in try-catch to prevent bot crash
+        try {
+          await interaction.showModal(modal);
+        } catch (error) {
+          console.error('[Automod] Failed to show warning modal. Interaction may have expired:', error.message);
+          // Let the user know with a follow-up message
+          await interaction.followUp({ 
+            content: 'Could not open the warning menu. The interaction may have timed out. Please click the button again if needed.', 
+            ephemeral: true 
+          });
+        }
         return;
       }
 
@@ -270,7 +284,12 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
           new ButtonBuilder().setCustomId(`am_ban_confirm:${sent.id}`).setLabel('Confirm Ban').setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId(`am_ban_cancel:${sent.id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
         );
-        await interaction.reply({ content: `Confirm ban of <@${state.targetUserId}>? (Only first click counts)`, components: [confirmRow], ephemeral: true });
+        // CRITICAL FIX 3: Use followUp after deferUpdate
+        await interaction.followUp({ 
+          content: `Confirm ban of <@${state.targetUserId}>? (Only first click counts)`, 
+          components: [confirmRow], 
+          ephemeral: true 
+        });
         return;
       }
     });
@@ -377,12 +396,11 @@ function initAutomod(client) {
     checkMessage
   };
 
-  // Handle button interactions (keep your existing code or add basic handler)
+  // Handle button interactions for modals (if any)
   client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton() && !interaction.isModalSubmit()) return;
-    
-    // Add your button/modal handling logic here if you have any
-    // For now, we'll just acknowledge to prevent unhandled interaction errors
+
+    // Basic acknowledgment for any other buttons to prevent unhandled errors
     if (interaction.isButton()) {
       await interaction.deferUpdate().catch(() => {});
     }
