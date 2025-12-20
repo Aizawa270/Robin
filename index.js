@@ -139,6 +139,13 @@ client.on('messageReactionRemove', async (reaction, user) => {
   if (reaction.partial) await reaction.fetch();
 });
 
+// ===== PREFIX HANDLER =====
+client.getPrefix = (guildId) => {
+  if (!guildId) return '$';
+  const row = client.prefixDB.prepare('SELECT prefix FROM prefixes WHERE guild_id = ?').get(guildId);
+  return row?.prefix || '$';
+};
+
 // ===== READY =====
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -163,6 +170,33 @@ if (!client.messageCreateHandlerAttached) {
 
 // ===== LOAD COMMANDS =====
 loadCommands(client);
+
+// ===== CHANGEPREFIX COMMAND =====
+const changeprefixCmd = {
+  name: 'changeprefix',
+  description: 'Change the bot prefix for this server.',
+  aliases: [],
+  hidden: true, // hidden from help
+  category: 'admin',
+  usage: '$changeprefix <newPrefix>',
+  async execute(client, message, args) {
+    const ownerIDs = ['YOUR_ID', 'FRIEND_ID']; // replace with your Discord IDs
+    if (!ownerIDs.includes(message.author.id)) return;
+
+    if (!message.guild) return message.reply('This command only works in a server.');
+    const newPrefix = args[0];
+    if (!newPrefix) return message.reply('Provide a new prefix!');
+
+    client.prefixDB.prepare(`
+      INSERT OR REPLACE INTO prefixes (guild_id, prefix) VALUES (?, ?)
+    `).run(message.guild.id, newPrefix);
+
+    message.reply(`Prefix successfully changed to \`${newPrefix}\``);
+  },
+};
+
+// Register changeprefix manually
+client.commands.set(changeprefixCmd.name, changeprefixCmd);
 
 // ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
