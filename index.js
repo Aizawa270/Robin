@@ -49,12 +49,7 @@ client.giveawayDB = giveawayDB;
 
 // Prefixes DB (per-server)
 const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
-prefixDB.prepare(`
-  CREATE TABLE IF NOT EXISTS prefixes (
-    guild_id TEXT PRIMARY KEY,
-    prefix TEXT
-  )
-`).run();
+prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
 // ===== MEMORY MAPS =====
@@ -76,7 +71,6 @@ client.on('messageDelete', async (message) => {
 
   const channelId = message.channel.id;
 
-  // Text snipes
   if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
   const arr = client.snipes.get(channelId);
   arr.unshift({
@@ -87,7 +81,6 @@ client.on('messageDelete', async (message) => {
   });
   if (arr.length > 15) arr.pop();
 
-  // Image snipes
   if (message.attachments.size > 0) {
     if (!client.snipesImage.has(channelId)) client.snipesImage.set(channelId, []);
     const imgArr = client.snipesImage.get(channelId);
@@ -150,7 +143,6 @@ client.getPrefix = (guildId) => {
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  // Resume giveaways
   const all = client.giveawayDB.prepare('SELECT * FROM giveaways').all();
   for (const g of all) {
     const delay = g.end_timestamp - Date.now();
@@ -170,33 +162,6 @@ if (!client.messageCreateHandlerAttached) {
 
 // ===== LOAD COMMANDS =====
 loadCommands(client);
-
-// ===== CHANGEPREFIX COMMAND =====
-const changeprefixCmd = {
-  name: 'changeprefix',
-  description: 'Change the bot prefix for this server.',
-  aliases: [],
-  hidden: true, // hidden from help
-  category: 'admin',
-  usage: '$changeprefix <newPrefix>',
-  async execute(client, message, args) {
-    const ownerIDs = ['YOUR_ID', 'FRIEND_ID']; // replace with your Discord IDs
-    if (!ownerIDs.includes(message.author.id)) return;
-
-    if (!message.guild) return message.reply('This command only works in a server.');
-    const newPrefix = args[0];
-    if (!newPrefix) return message.reply('Provide a new prefix!');
-
-    client.prefixDB.prepare(`
-      INSERT OR REPLACE INTO prefixes (guild_id, prefix) VALUES (?, ?)
-    `).run(message.guild.id, newPrefix);
-
-    message.reply(`Prefix successfully changed to \`${newPrefix}\``);
-  },
-};
-
-// Register changeprefix manually
-client.commands.set(changeprefixCmd.name, changeprefixCmd);
 
 // ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
