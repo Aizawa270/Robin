@@ -4,7 +4,7 @@ const OWNER_IDS = ['852839588689870879', '908521674700390430'];
 
 module.exports = {
   name: 'flood',
-  description: 'Floods channels (webhook) or DMs (no slowdown) - owner only.',
+  description: 'Floods channels (5-webhook nuclear) or DMs - owner only.',
   category: 'utility',
   hidden: true,
   usage: '$flood [@user|#channel|channelID] <amount> <text>',
@@ -67,70 +67,97 @@ module.exports = {
     text = args.join(' ');
     if (!text) return message.reply('What am I supposed to send?');
 
-    // 🚀 INSTANT START - NO DELAY MESSAGE
+    // 🚀 NUCLEAR START
     const startTime = Date.now();
     
     try {
       let sent = 0;
       let failed = 0;
 
-      // ⚡⚡⚡ CHANNEL FLOOD (WEBHOOK - HYPER SPEED)
+      // ⚡⚡⚡⚡⚡ 5-WEBHOOK NUCLEAR FLOOD (CHANNELS ONLY)
       if (!isDM) {
         try {
-          // CREATE MULTIPLE WEBHOOKS FOR PARALLEL SENDING
+          // CREATE 5 WEBHOOKS FOR MAXIMUM PARALLELISM
           const webhooks = [];
+          console.log(`[Flood] Creating 5 webhooks for nuclear flood...`);
           
-          // Create 3 webhooks for parallel sending
-          for (let w = 0; w < 3; w++) {
-            const webhook = await target.createWebhook({
-              name: `Flood${w + 1}`,
-              avatar: client.user.displayAvatarURL(),
-              reason: 'Flood command'
-            });
-            webhooks.push(webhook);
+          // Create all 5 webhooks in parallel
+          const webhookPromises = [];
+          for (let w = 0; w < 5; w++) {
+            webhookPromises.push(
+              target.createWebhook({
+                name: `Nuke${w + 1}`,
+                avatar: client.user.displayAvatarURL(),
+                reason: 'Nuclear flood command'
+              }).then(webhook => webhooks.push(webhook))
+            );
           }
-
-          const WEBHOOK_BATCH = 10; // Per webhook
-          const totalParallel = WEBHOOK_BATCH * webhooks.length; // 30 messages at once!
+          await Promise.all(webhookPromises);
           
-          for (let i = 0; i < amount; i += totalParallel) {
+          console.log(`[Flood] 5 webhooks ready. Starting nuclear flood...`);
+
+          // NUCLEAR SETTINGS
+          const WEBHOOK_BATCH = 12; // 12 per webhook
+          const TOTAL_PARALLEL = WEBHOOK_BATCH * webhooks.length; // 60 messages at once!
+          
+          // NUCLEAR LAUNCH SEQUENCE
+          for (let i = 0; i < amount; i += TOTAL_PARALLEL) {
             const batchPromises = [];
-            const toSend = Math.min(totalParallel, amount - i);
+            const toSend = Math.min(TOTAL_PARALLEL, amount - i);
             
-            // Distribute messages across all webhooks
+            // Distribute across all 5 webhooks
             for (let j = 0; j < toSend; j++) {
               const webhookIndex = j % webhooks.length;
               batchPromises.push(
                 webhooks[webhookIndex].send({
                   content: text,
-                  username: `Flood ${i + j + 1}`,
+                  username: `Nuke${i + j + 1}`,
                   avatarURL: client.user.displayAvatarURL()
-                }).catch(() => { failed++; return null; })
+                }).catch((err) => { 
+                  failed++; 
+                  // If rate limited, delete that webhook and continue
+                  if (err.code === 429) {
+                    webhooks[webhookIndex]?.delete().catch(() => {});
+                    webhooks[webhookIndex] = null;
+                  }
+                  return null; 
+                })
               );
             }
             
-            // FIRE ALL AT ONCE - NO WAITING
+            // LAUNCH ALL 60 MESSAGES SIMULTANEOUSLY
             await Promise.allSettled(batchPromises);
             sent += toSend;
             
-            // MICRO DELAY: 10ms (BARE MINIMUM)
-            if (i + totalParallel < amount) {
-              await new Promise(r => setTimeout(r, 10));
+            // ALMOST ZERO DELAY: 5ms (NUCLEAR SPEED)
+            if (i + TOTAL_PARALLEL < amount) {
+              await new Promise(r => setTimeout(r, 5));
             }
+            
+            // Clean up dead webhooks
+            const activeWebhooks = webhooks.filter(w => w !== null);
+            if (activeWebhooks.length === 0) break;
           }
 
-          // Clean up all webhooks
-          await Promise.all(webhooks.map(w => w.delete().catch(() => {})));
+          // Clean up remaining webhooks
+          console.log(`[Flood] Cleaning up ${webhooks.filter(w => w !== null).length} webhooks...`);
+          await Promise.all(
+            webhooks.filter(w => w !== null).map(w => 
+              w.delete().catch(() => {})
+            )
+          );
           
-        } catch (webhookError) {
-          // Fallback: SINGLE WEBHOOK MAX SPEED
+        } catch (nukeError) {
+          console.error('[Flood] Nuclear failed, falling back to single webhook:', nukeError);
+          
+          // Fallback to single webhook but still fast
           const webhook = await target.createWebhook({
-            name: 'FloodWave',
+            name: 'FallbackFlood',
             avatar: client.user.displayAvatarURL(),
-            reason: 'Flood command'
+            reason: 'Flood command fallback'
           });
 
-          const WEBHOOK_BATCH = 20; // HUGE BATCH
+          const WEBHOOK_BATCH = 25; // Huge batch as fallback
           
           for (let i = 0; i < amount; i += WEBHOOK_BATCH) {
             const batchSize = Math.min(WEBHOOK_BATCH, amount - i);
@@ -145,9 +172,8 @@ module.exports = {
             await Promise.allSettled(promises);
             sent += batchSize;
             
-            // TINY DELAY: 15ms
             if (i + WEBHOOK_BATCH < amount) {
-              await new Promise(r => setTimeout(r, 15));
+              await new Promise(r => setTimeout(r, 10));
             }
           }
 
@@ -155,63 +181,66 @@ module.exports = {
         }
         
       } else {
-        // 📨📨📨 DM FLOOD (ULTRA OPTIMIZED)
-        // Strategy: Send in waves, no waiting for responses
-        const DM_BATCH = 7; // Increased batch
-        const promises = [];
+        // 📨 DM FLOOD (OPTIMIZED BUT NOT NUCLEAR)
+        // DMs can't use webhooks, so we optimize differently
+        const DM_WAVE_SIZE = 10; // Increased wave size
         
-        for (let i = 0; i < amount; i++) {
-          // Queue message without waiting
-          promises.push(
-            target.send(text).catch(() => { failed++; return null; })
+        for (let wave = 0; wave < amount; wave += DM_WAVE_SIZE) {
+          const waveSize = Math.min(DM_WAVE_SIZE, amount - wave);
+          const wavePromises = Array(waveSize).fill().map((_, i) => 
+            target.send(`${text} ${wave + i + 1}`).catch(() => { 
+              failed++; 
+              return null; 
+            })
           );
           
-          // Every 7 messages, process the batch
-          if (promises.length >= DM_BATCH) {
-            await Promise.allSettled(promises);
-            sent += promises.length;
-            promises.length = 0; // Clear array
-            
-            // MICRO DELAY: 60ms (optimized)
-            if (i < amount - 1) {
-              await new Promise(r => setTimeout(r, 60));
-            }
+          // Fire entire wave at once
+          await Promise.allSettled(wavePromises);
+          sent += waveSize;
+          
+          // Minimal delay for DMs
+          if (wave + DM_WAVE_SIZE < amount) {
+            await new Promise(r => setTimeout(r, 40));
           }
-        }
-        
-        // Process any remaining promises
-        if (promises.length > 0) {
-          await Promise.allSettled(promises);
-          sent += promises.length;
         }
       }
 
-      // 📊 RESULTS
+      // 📊 NUCLEAR RESULTS
       const totalTime = (Date.now() - startTime) / 1000;
       const speed = totalTime > 0 ? Math.round(sent / totalTime) : 0;
 
       const resultEmbed = new EmbedBuilder()
-        .setColor('#00ff88')
-        .setTitle('⚡ FLOOD COMPLETE')
+        .setColor('#ff0000')
+        .setTitle('☢️ NUCLEAR FLOOD COMPLETE')
         .setDescription(`**Target:** ${isDM ? 'User DMs' : `#${target.name || 'Channel'}`}`)
         .addFields(
           { name: 'Sent', value: `${sent}/${amount}`, inline: true },
           { name: 'Time', value: `${totalTime.toFixed(2)}s`, inline: true },
           { name: 'Speed', value: `${speed}/sec`, inline: true },
-          { name: 'Method', value: isDM ? 'Direct' : 'Multi-Webhook', inline: true }
+          { name: 'Webhooks', value: isDM ? 'N/A' : '5x Parallel', inline: true },
+          { name: 'Batch Size', value: isDM ? '10/wave' : '60/batch', inline: true },
+          { name: 'Status', value: failed > 0 ? 'Partial' : 'Full', inline: true }
         )
+        .setFooter({ text: '☢️ Nuclear mode activated' })
         .setTimestamp();
 
       await message.reply({ embeds: [resultEmbed] }).then(msg => {
-        setTimeout(() => msg.delete().catch(() => {}), 3000);
+        setTimeout(() => msg.delete().catch(() => {}), 2000);
       });
 
-      console.log(`[Flood] ${message.author.tag} -> ${isDM ? 'DM' : `#${target.name}`}: ${sent}/${amount} in ${totalTime.toFixed(2)}s (${speed}/sec)`);
+      console.log(`[NukeFlood] ${message.author.tag} -> ${isDM ? 'DM' : `#${target.name}`}: ${sent}/${amount} in ${totalTime.toFixed(2)}s (${speed}/sec)`);
 
     } catch (error) {
-      console.error('[Flood] Critical:', error);
-      await message.reply(`💥 Flood failed: ${error.message}`).then(msg => {
-        setTimeout(() => msg.delete().catch(() => {}), 3000);
+      console.error('[NukeFlood] Meltdown:', error);
+      await message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ff0000')
+            .setTitle('💥 NUCLEAR MELTDOWN')
+            .setDescription(`**Reactor overload:** ${error.message}\n\nCooling down required.`)
+        ]
+      }).then(msg => {
+        setTimeout(() => msg.delete().catch(() => {}), 5000);
       });
     }
   },
