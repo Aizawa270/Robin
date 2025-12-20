@@ -3,6 +3,17 @@ const path = require('path');
 const { Collection } = require('discord.js');
 const { prefix } = require('../config');
 
+// 🔒 STRIP REPLY TARGET FROM MENTIONS
+function stripReplyMentions(message) {
+  if (!message.reference) return;
+
+  const repliedUserId = message.mentions?.repliedUser?.id;
+  if (!repliedUserId) return;
+
+  message.mentions.users.delete(repliedUserId);
+  message.mentions.members?.delete(repliedUserId);
+}
+
 function loadCommands(client) {
   client.commands = new Collection();
   client.aliases = new Collection();
@@ -58,6 +69,9 @@ async function handleMessage(client, message) {
   if (message.author.bot) return;
   const content = message.content?.trim();
   if (!content) return;
+
+  // 🔒 APPLY FIX HERE (GLOBAL)
+  stripReplyMentions(message);
 
   // ===== AFK REMOVAL =====
   if (client.afk?.has(message.author.id)) {
