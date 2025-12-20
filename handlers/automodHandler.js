@@ -144,7 +144,7 @@ function buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId) {
     .setDescription([
       `➤  **Target:** ${targetUser.tag}`,
       `➤  **Trigger:** \`${matchedWord}\``,
-      `➤  **Channel:** ${guild ? `<#${guild.systemChannelId || ''}>` : 'unknown'}`,
+      `➤  **Channel:** ${guild ? '<#${guild.systemChannelId || ''}>' : 'unknown'}`,
       `➤  **Time:** <t:${Math.floor(Date.now() / 1000)}:R>`,
       '',
       `╰┈➤ **__Requirements:__** ${requirementRoleId ? `<@&${requirementRoleId}>` : '\`\`none\`\`'}`,
@@ -166,10 +166,16 @@ function isStaff(member) {
 async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirementRoleId = null) {
   try {
     const channelId = getAutomodChannel(guild.id);
-    if (!channelId) return null;
+    if (!channelId) {
+      console.log(`[Automod] No alert channel set for guild ${guild.id}`);
+      return null;
+    }
 
     const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (!channel) return null;
+    if (!channel) {
+      console.log(`[Automod] Could not find channel ${channelId} in guild ${guild.id}`);
+      return null;
+    }
 
     const entries = listAlertTargets(guild.id);
     const mentionUsers = entries.filter(e => e.target_type === 'user').map(e => `<@${e.target_id}>`);
@@ -179,6 +185,7 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
     const embed = buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId);
 
     const sent = await channel.send({ content: allMentions || '\u200b', embeds: [embed] });
+    console.log(`[Automod] Alert sent to ${channel.name} for ${targetUser.tag}`);
 
     pendingActions.set(sent.id, {
       guildId: guild.id,
@@ -268,8 +275,77 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
 
     return sent;
   } catch (err) {
-    console.error('sendAutomodAlert error', err);
+    console.error('[Automod] sendAlert error:', err);
     return null;
+  }
+}
+
+// ===== MAIN AUTOMOD CHECK =====
+async function checkMessage(client, message) {
+  try {
+    // Basic checks
+    if (!message.guild) return;
+    if (!message.member) return;
+    if (message.author.bot) return;
+    
+    // ADMIN BYPASS - FIXED
+    if (message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return;
+    }
+    
+    const guildId = message.guild.id;
+    const content = (message.content || '').toLowerCase();
+    
+    // Check soft words (delete only)
+    const softWords = listSoftWords(guildId);
+    for (const word of softWords) {
+      if (word && content.includes(word.toLowerCase())) {
+        await message.delete().catch(() => {});
+        console.log(`[Automod] Soft word "${word}" triggered by ${message.author.tag}`);
+        return;
+      }
+    }
+    
+    // Check hard words (delete + 15min timeout + alert)
+    const hardWords = listHardWords(guildId);
+    for (const word of hardWords) {
+      if (word && content.includes(word.toLowerCase())) {
+        console.log(`[Automod] Hard word "${word}" triggered by ${message.author.tag}`);
+        
+        // Delete message
+        await message.delete().catch(() => {});
+        
+        // 15 MINUTE TIMEOUT (900,000 ms)
+        if (message.member && message.member.moderatable) {
+          try {
+            await message.member.timeout(15 * 60 * 1000, `Automod: Triggered "${word}"`);
+            console.log(`[Automod] ${message.author.tag} timed out for 15 minutes`);
+          } catch (err) {
+            console.error(`[Automod] Failed to timeout ${message.author.tag}:`, err.message);
+          }
+        }
+        
+        // Send alert to channel
+        const alertSent = await sendAutomodAlert(client, message.guild, message.author, word, null);
+        if (!alertSent) {
+          console.log(`[Automod] Alert failed to send for ${message.author.tag}`);
+        }
+        
+        return;
+      }
+    }
+    
+    // Check for Discord invites
+    const inviteRegex = /(discord\.gg|discordapp\.com\/invite|discord\.com\/invite)\/[A-Za-z0-9]+/i;
+    if (inviteRegex.test(message.content)) {
+      await message.delete().catch(() => {});
+      console.log(`[Automod] Invite link detected from ${message.author.tag}`);
+      
+      await sendAutomodAlert(client, message.guild, message.author, 'Discord Invite Link', null);
+    }
+    
+  } catch (err) {
+    console.error('[Automod] checkMessage error:', err);
   }
 }
 
@@ -290,61 +366,31 @@ function initAutomod(client) {
     listSoftWords,
     saveWarn: saveWarnRaw,
     listWarns,
-    getWarnCount
+    getWarnCount,
+    checkMessage // MAKE SURE THIS IS EXPOSED
   };
 
+  // Handle button interactions
   client.on('interactionCreate', async (interaction) => {
-    // keep your modal/button handling logic intact
+    if (!interaction.isButton() && !interaction.isModalSubmit()) return;
+    
+    // Your existing button/modal handling code here
+    // (Keep whatever you already have)
   });
 
-  async function checkMessage(client, message) {
-    try {
-      if (!message.guild) return;
-      if (message.author?.bot) return;
-      if (message.member && message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-
-      const guildId = message.guild.id;
-      const content = (message.content || '').toLowerCase();
-
-      // soft words
-      for (const w of listSoftWords(guildId)) {
-        if (!w) continue;
-        if (content.includes(w.toLowerCase())) {
-          await message.delete().catch(() => {});
-          return;
-        }
-      }
-
-      // hard words
-      for (const w of listHardWords(guildId)) {
-        if (!w) continue;
-        if (content.includes(w.toLowerCase())) {
-          await message.delete().catch(() => {});
-          if (message.member && message.member.moderatable) {
-            await message.member.timeout(15 * 60 * 1000, `Automod hard blacklist word: ${w}`).catch(err => console.error('Timeout error:', err));
-          }
-          await sendAutomodAlert(client, message.guild, message.author, w, null);
-          return;
-        }
-      }
-
-      // invite links
-      const inviteRegex = /(discord\.gg|discordapp\.com\/invite)\/[A-Za-z0-9]+/i;
-      if (inviteRegex.test(content)) {
-        await message.delete().catch(() => {});
-        await sendAutomodAlert(client, message.guild, message.author, 'discord invite', null);
-        return;
-      }
-
-    } catch (err) {
-      console.error('automod check error', err);
-    }
-  }
-
-  client.automod.checkMessage = checkMessage;
-  client.automod._internal = { pendingActions, db };
-
-  console.log('[Automod] Initialized with warn-counts + admin immunity + fixed blacklist.');
+  console.log('[Automod] System initialized - Admin bypass enabled, 15min timeouts');
 }
 
-module.exports = { initAutomod, db };
+module.exports = { 
+  initAutomod, 
+  db,
+  checkMessage, // Export this too
+  setAutomodChannel,
+  getAutomodChannel,
+  addHardWord,
+  removeHardWord,
+  listHardWords,
+  addSoftWord,
+  removeSoftWord,
+  listSoftWords
+};
