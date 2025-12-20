@@ -1,17 +1,16 @@
 const { EmbedBuilder } = require('discord.js');
 
-const OWNER_IDS = ['852839588689870879', '908521674700390430']; // Both owner IDs
-const MAX_FLOOD = 1000; // Max 1000 messages
+const OWNER_IDS = ['852839588689870879', '908521674700390430'];
+const MAX_CHANNEL_FLOOD = 500; // Increased
+const MAX_DM_FLOOD = 150; // Increased
 
 module.exports = {
   name: 'flood',
-  description: 'Floods a channel, user DMs, or specific channel (owner only).',
+  description: 'Floods channels (webhook) or DMs (optimized) - owner only.',
   category: 'utility',
   hidden: true,
   usage: '$flood [@user|#channel|channelID] <amount> <text>',
   async execute(client, message, args) {
-
-    // 🔒 Owner lock - BOTH IDs
     if (!OWNER_IDS.includes(message.author.id)) {
       return message.reply({
         embeds: [
@@ -29,7 +28,7 @@ module.exports = {
     let amount;
     let text;
 
-    // Target detection (same as before)
+    // 🎯 TARGET DETECTION
     const firstArg = args[0];
     const userMention = message.mentions.users.first();
     
@@ -64,75 +63,117 @@ module.exports = {
     }
 
     amount = parseInt(args[0]);
-    if (isNaN(amount) || amount < 1) {
-      return message.reply('Amount must be a number greater than 0.');
-    }
+    if (isNaN(amount) || amount < 1) return message.reply('Amount must be a number greater than 0.');
     args.shift();
-
-    if (amount > MAX_FLOOD) {
-      amount = MAX_FLOOD;
-    }
 
     text = args.join(' ');
     if (!text) return message.reply('What am I supposed to send?');
 
-    // ⚡⚡⚡ ULTIMATE FAST ENGINE ⚡⚡⚡
+    const maxAmount = isDM ? MAX_DM_FLOOD : MAX_CHANNEL_FLOOD;
+    if (amount > maxAmount) amount = maxAmount;
+
+    // 🚀 NO START MESSAGE - INSTANT START
+    const startTime = Date.now();
+    
     try {
-      const startTime = Date.now();
-      const startMsg = await message.reply(`⚡ **FLOODING ${amount} MESSAGES**...`);
-      
-      // DANGEROUSLY FAST SETTINGS
-      const MEGA_BATCH = isDM ? 25 : 50; // Send 50 at once in channels!
-      const messages = Array(amount).fill(text);
       let sent = 0;
       let failed = 0;
-      
-      // Process in MEGA batches
-      for (let i = 0; i < messages.length; i += MEGA_BATCH) {
-        const batch = messages.slice(i, i + MEGA_BATCH);
-        const promises = batch.map(msg => 
-          target.send(msg).catch(() => {
-            failed++;
-            return null;
-          })
-        );
+
+      // ⚡ CHANNEL FLOOD (WEBHOOK - MAX SPEED)
+      if (!isDM) {
+        try {
+          const webhook = await target.createWebhook({
+            name: 'FloodWave',
+            avatar: client.user.displayAvatarURL(),
+            reason: 'Flood command'
+          });
+
+          const WEBHOOK_BATCH = 15; // MAX BATCH SIZE
+          
+          for (let i = 0; i < amount; i += WEBHOOK_BATCH) {
+            const batchSize = Math.min(WEBHOOK_BATCH, amount - i);
+            const promises = Array(batchSize).fill().map((_, j) => 
+              webhook.send({
+                content: text,
+                username: `Flood ${i + j + 1}`,
+                avatarURL: client.user.displayAvatarURL()
+              }).catch(() => { failed++; return null; })
+            );
+            
+            await Promise.allSettled(promises);
+            sent += batchSize;
+            
+            // MINIMAL DELAY: 20ms (ALMOST NONE)
+            if (i + WEBHOOK_BATCH < amount) {
+              await new Promise(r => setTimeout(r, 20));
+            }
+          }
+
+          await webhook.delete().catch(() => {});
+          
+        } catch (webhookError) {
+          // Fallback to direct messages if webhook fails
+          const BATCH_SIZE = 8;
+          for (let i = 0; i < amount; i += BATCH_SIZE) {
+            const batchSize = Math.min(BATCH_SIZE, amount - i);
+            const promises = Array(batchSize).fill().map(() => 
+              target.send(text).catch(() => { failed++; return null; })
+            );
+            
+            await Promise.allSettled(promises);
+            sent += batchSize;
+            
+            if (i + BATCH_SIZE < amount) {
+              await new Promise(r => setTimeout(r, 100));
+            }
+          }
+        }
         
-        // Send ALL in parallel - NO WAITING
-        await Promise.allSettled(promises);
-        sent += batch.length;
+      } else {
+        // 📨 DM FLOOD (MAX SPEED FOR DMS)
+        const DM_BATCH = 5;
         
-        // Micro delay ONLY if rate limited
-        if (failed > sent * 0.1) { // If 10% failed, slow down slightly
-          await new Promise(r => setTimeout(r, 10));
+        for (let i = 0; i < amount; i += DM_BATCH) {
+          const batchSize = Math.min(DM_BATCH, amount - i);
+          const promises = Array(batchSize).fill().map(() => 
+            target.send(text).catch(() => { failed++; return null; })
+          );
+          
+          await Promise.allSettled(promises);
+          sent += batchSize;
+          
+          // DM DELAY: 80ms (MINIMUM)
+          if (i + DM_BATCH < amount) {
+            await new Promise(r => setTimeout(r, 80));
+          }
         }
       }
-      
+
+      // 📊 RESULTS
       const totalTime = (Date.now() - startTime) / 1000;
       const speed = totalTime > 0 ? Math.round(sent / totalTime) : 0;
-      
-      // Quick result
-      await startMsg.edit({
-        embeds: [
-          new EmbedBuilder()
-            .setColor('#00ff88')
-            .setTitle('⚡ FLOOD COMPLETE')
-            .setDescription(`**Target:** ${isDM ? 'User DMs' : 'Channel'}`)
-            .addFields(
-              { name: 'Sent', value: `${sent}/${amount}`, inline: true },
-              { name: 'Time', value: `${totalTime.toFixed(2)}s`, inline: true },
-              { name: 'Speed', value: `${speed}/sec`, inline: true },
-              { name: 'Batch Size', value: `${MEGA_BATCH}`, inline: true }
-            )
-        ]
-      }).then(msg => {
+
+      const resultEmbed = new EmbedBuilder()
+        .setColor('#00ff88')
+        .setTitle('⚡ FLOOD COMPLETE')
+        .setDescription(`**Target:** ${isDM ? 'User DMs' : `#${target.name || 'Channel'}`}`)
+        .addFields(
+          { name: 'Method', value: isDM ? 'Direct Messages' : 'Webhook', inline: true },
+          { name: 'Sent', value: `${sent}/${amount}`, inline: true },
+          { name: 'Time', value: `${totalTime.toFixed(2)}s`, inline: true },
+          { name: 'Speed', value: `${speed}/sec`, inline: true }
+        )
+        .setTimestamp();
+
+      await message.reply({ embeds: [resultEmbed] }).then(msg => {
         setTimeout(() => msg.delete().catch(() => {}), 3000);
       });
-      
-      console.log(`[Flood] ${message.author.tag} -> ${target.name || 'DM'}: ${sent}/${amount} in ${totalTime.toFixed(2)}s (${speed}/sec)`);
-      
+
+      console.log(`[Flood] ${message.author.tag} -> ${isDM ? 'DM' : `#${target.name}`}: ${sent}/${amount} in ${totalTime.toFixed(2)}s (${speed}/sec)`);
+
     } catch (error) {
       console.error('[Flood] Critical:', error);
-      await message.reply(`💥 Flood crashed: ${error.message}`).then(msg => {
+      await message.reply(`💥 Flood failed: ${error.message}`).then(msg => {
         setTimeout(() => msg.delete().catch(() => {}), 3000);
       });
     }
