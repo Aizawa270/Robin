@@ -8,9 +8,9 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    const memberPerms = message.member.permissions;
-    if (!memberPerms.has(PermissionFlagsBits.ModerateMembers) &&
-        !memberPerms.has(PermissionFlagsBits.Administrator)) {
+    const perms = message.member.permissions;
+    if (!perms.has(PermissionFlagsBits.ModerateMembers) &&
+        !perms.has(PermissionFlagsBits.Administrator)) {
       return message.reply('You need **Timeout Members** or admin permission.');
     }
 
@@ -34,14 +34,19 @@ module.exports = {
       }
     }
 
+    // 🔹 Fake blue pings for embeds
+    const unmutedList = unmuted.length ? unmuted.map(m => `<@${m.id}>`).join('\n') : 'None';
+    const failedList = failed.length ? failed.map(m => `<@${m.id}>`).join('\n') : 'None';
+    const modFakePing = `<@${message.author.id}>`;
+
     const embed = new EmbedBuilder()
       .setColor('#22c55e')
       .setTitle('Users Unmuted')
       .setThumbnail(message.guild.iconURL({ dynamic: true, size: 1024 }))
       .addFields(
-        { name: 'Unmuted Users', value: unmuted.length ? unmuted.map(m => `<@${m.id}>`).join('\n') : 'None', inline: false },
-        { name: 'Failed', value: failed.length ? failed.map(m => `<@${m.id}>`).join('\n') : 'None', inline: false },
-        { name: 'Unmuted by', value: message.author.tag, inline: false },
+        { name: 'Unmuted Users', value: unmutedList, inline: false },
+        { name: 'Failed', value: failedList, inline: false },
+        { name: 'Unmuted by', value: modFakePing, inline: false },
       )
       .setTimestamp();
 
