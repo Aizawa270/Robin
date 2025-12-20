@@ -7,11 +7,8 @@ module.exports = {
   category: 'mod',
   usage: '$unban <userID>',
   async execute(client, message, args) {
-    if (!message.guild) {
-      return message.reply('This command can only be used in a server.');
-    }
+    if (!message.guild) return message.reply('This command can only be used in a server.');
 
-    // Mods with Ban Members permission can unban
     if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
       return message.reply('You need the **Ban Members** permission to use this command.');
     }
@@ -35,18 +32,20 @@ module.exports = {
 
     try {
       const banInfo = await message.guild.bans.fetch(userId).catch(() => null);
-      if (!banInfo) {
-        return message.reply('That user is not banned or the ID is invalid.');
-      }
+      if (!banInfo) return message.reply('That user is not banned or the ID is invalid.');
 
       await message.guild.bans.remove(userId, `Unbanned by ${message.author.tag}`);
+
+      // 🔹 Fake pings
+      const fakeUserPing = `<@${banInfo.user.id}>`;
+      const fakeModPing = `<@${message.author.id}>`;
 
       const embed = new EmbedBuilder()
         .setColor('#22c55e') // green for unban
         .setTitle('User Unbanned')
         .addFields(
-          { name: 'User', value: `${banInfo.user.tag} (${banInfo.user.id})`, inline: false },
-          { name: 'Unbanned by', value: `${message.author.tag} (${message.author.id})`, inline: false },
+          { name: 'User', value: fakeUserPing, inline: false },
+          { name: 'Unbanned by', value: fakeModPing, inline: false },
         )
         .setTimestamp();
 
