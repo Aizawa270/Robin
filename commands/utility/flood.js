@@ -4,7 +4,7 @@ const OWNER_IDS = ['852839588689870879', '908521674700390430'];
 
 module.exports = {
   name: 'flood',
-  description: 'Floods channels with 10 webhooks firing individually - maximum speed.',
+  description: 'Floods channels with 20 webhooks - brute force until done.',
   category: 'utility',
   hidden: true,
   usage: '$flood [@user|#channel|channelID] <amount> <text>',
@@ -67,155 +67,134 @@ module.exports = {
     text = args.join(' ');
     if (!text) return message.reply('What am I supposed to send?');
 
-    // 🚀 HYPER SPEED START
+    // 🚀 BRUTE FORCE START
     const startTime = Date.now();
-    console.log(`[Flood] Starting hyper flood of ${amount} messages...`);
+    console.log(`[Flood] Starting brute force flood of ${amount} messages...`);
 
     try {
       let sent = 0;
       let failed = 0;
-      let activeWebhooks = 0;
 
-      // 🔥 CHANNEL FLOOD WITH INDIVIDUAL WEBHOOK FIRING
+      // 🔥 CHANNEL FLOOD - BRUTE FORCE MODE
       if (!isDM) {
-        // Create 15 webhooks for redundancy (some will die)
-        console.log(`[Flood] Creating 15 webhooks for hyper flood...`);
+        // Create as many webhooks as possible (try 20)
+        console.log(`[Flood] Creating maximum webhooks...`);
         
         const webhooks = [];
-        for (let w = 0; w < 15; w++) {
-          try {
-            const webhook = await target.createWebhook({
-              name: `Flood${w + 1}`,
+        const createPromises = [];
+        
+        for (let w = 0; w < 20; w++) {
+          createPromises.push(
+            target.createWebhook({
+              name: `Flood${w + 1}_${Date.now()}`,
               avatar: client.user.displayAvatarURL(),
-              reason: 'Hyper flood'
-            });
-            webhooks.push(webhook);
-          } catch (err) {
-            console.log(`[Flood] Webhook ${w + 1} failed to create: ${err.message}`);
-          }
+              reason: 'Brute force flood'
+            }).then(webhook => {
+              webhooks.push(webhook);
+              console.log(`[Flood] Webhook ${w + 1} created`);
+            }).catch(err => {
+              console.log(`[Flood] Webhook ${w + 1} failed: ${err.code || err.message}`);
+            })
+          );
         }
-
+        
+        await Promise.allSettled(createPromises);
+        
         if (webhooks.length === 0) {
           throw new Error('Failed to create any webhooks');
         }
+        
+        console.log(`[Flood] ${webhooks.length} webhooks ready. Starting brute force...`);
 
-        console.log(`[Flood] ${webhooks.length} webhooks ready. Starting individual fire...`);
-
-        // 🔥 INDIVIDUAL FIRE SYSTEM - NO BATCHES, NO WAITING
-        const floodPromises = webhooks.map((webhook, index) => {
-          return new Promise(async (resolve) => {
-            const webhookId = index + 1;
-            let webhookSent = 0;
-            let webhookFailed = 0;
-            activeWebhooks++;
-            
-            // Function to send next message immediately
-            const sendNext = async () => {
-              if (sent >= amount) {
-                activeWebhooks--;
-                resolve({ sent: webhookSent, failed: webhookFailed });
-                return;
-              }
-
-              const currentCount = sent + 1;
+        // 🔥 INFINITE SEND LOOP - NO STOPPING
+        const sendLoop = async (webhook, webhookId) => {
+          while (sent < amount) {
+            try {
+              // NO DELAY, NO WAITING - JUST SEND
+              await webhook.send({
+                content: text,
+                username: `Flood${webhookId}`,
+                avatarURL: client.user.displayAvatarURL()
+              });
+              
               sent++;
-              webhookSent++;
-
-              try {
-                // Send without waiting for response
-                webhook.send({
-                  content: text,
-                  username: `Flood${webhookId}`,
-                  avatarURL: client.user.displayAvatarURL()
-                }).then(() => {
-                  // Success - immediately send next
-                  if (sent < amount) {
-                    process.nextTick(sendNext);
-                  } else {
-                    activeWebhooks--;
-                    resolve({ sent: webhookSent, failed: webhookFailed });
-                  }
-                }).catch((err) => {
-                  // Failure - webhook is likely dead
-                  webhookFailed++;
-                  failed++;
-                  activeWebhooks--;
-                  
-                  // Try to recreate webhook once
-                  if (activeWebhooks < 10 && sent < amount) {
-                    try {
-                      const newWebhook = await target.createWebhook({
-                        name: `FloodR${webhookId}`,
-                        avatar: client.user.displayAvatarURL(),
-                        reason: 'Replacement'
-                      });
-                      activeWebhooks++;
-                      // Start new webhook
-                      const sendWithNew = async () => {
-                        if (sent >= amount) return;
-                        try {
-                          await newWebhook.send({
-                            content: text,
-                            username: `FloodR${webhookId}`,
-                            avatarURL: client.user.displayAvatarURL()
-                          });
-                          sent++;
-                          if (sent < amount) process.nextTick(sendWithNew);
-                        } catch {
-                          // New webhook also died, give up
-                        }
-                      };
-                      process.nextTick(sendWithNew);
-                    } catch {
-                      // Couldn't recreate
-                    }
-                  }
-                  
-                  resolve({ sent: webhookSent, failed: webhookFailed });
-                });
-              } catch (err) {
-                // Immediate error
-                webhookFailed++;
-                failed++;
-                activeWebhooks--;
-                resolve({ sent: webhookSent, failed: webhookFailed });
+              
+              // Update counter every 100 messages
+              if (sent % 100 === 0) {
+                console.log(`[Flood] Progress: ${sent}/${amount} (${webhooks.length} webhooks active)`);
               }
-            };
-
-            // Start the chain
-            for (let i = 0; i < 3; i++) { // Start 3 parallel chains per webhook
-              if (sent < amount) {
-                process.nextTick(sendNext);
+              
+            } catch (err) {
+              failed++;
+              
+              // If webhook is dead, remove it and break this loop
+              if (err.code === 10015 || err.code === 429 || err.message.includes('rate limit')) {
+                console.log(`[Flood] Webhook ${webhookId} died`);
+                const index = webhooks.indexOf(webhook);
+                if (index > -1) {
+                  webhooks.splice(index, 1);
+                }
+                break;
               }
+              
+              // If unknown error, wait 100ms and continue
+              await new Promise(r => setTimeout(r, 100));
             }
-          });
+          }
+        };
+
+        // Start ALL webhooks simultaneously
+        const floodPromises = [];
+        webhooks.forEach((webhook, index) => {
+          floodPromises.push(sendLoop(webhook, index + 1));
         });
 
-        // Start all webhooks
-        console.log(`[Flood] All webhooks firing individually...`);
+        console.log(`[Flood] All ${webhooks.length} webhooks firing continuously...`);
 
-        // Monitor progress
-        const progressInterval = setInterval(() => {
-          console.log(`[Flood] Progress: ${sent}/${amount} (${activeWebhooks} active webhooks)`);
-          if (sent >= amount || activeWebhooks === 0) {
-            clearInterval(progressInterval);
+        // Monitor and create NEW webhooks as old ones die
+        const webhookManager = setInterval(async () => {
+          if (sent >= amount) {
+            clearInterval(webhookManager);
+            return;
           }
-        }, 1000);
+          
+          // If we're running low on webhooks, create more
+          if (webhooks.length < 5) {
+            console.log(`[Flood] Creating replacement webhooks (currently: ${webhooks.length})`);
+            
+            for (let w = 0; w < 10 - webhooks.length; w++) {
+              try {
+                const newWebhook = await target.createWebhook({
+                  name: `FloodR${Date.now()}`,
+                  avatar: client.user.displayAvatarURL(),
+                  reason: 'Replacement'
+                });
+                
+                webhooks.push(newWebhook);
+                // Start this new webhook
+                floodPromises.push(sendLoop(newWebhook, `R${w}`));
+                console.log(`[Flood] Replacement webhook created`);
+              } catch (err) {
+                // Can't create more, that's fine
+              }
+            }
+          }
+        }, 2000); // Check every 2 seconds
 
-        // Wait for completion or timeout
+        // Wait for completion or 5 minute timeout
+        const timeout = Math.max(30000, amount * 200); // At least 30 seconds
         await Promise.race([
           Promise.allSettled(floodPromises),
-          new Promise(resolve => setTimeout(resolve, Math.min(amount * 100, 30000))) // Max 30 seconds
+          new Promise(resolve => setTimeout(resolve, timeout))
         ]);
 
-        clearInterval(progressInterval);
+        clearInterval(webhookManager);
 
-        // Force stop any remaining
-        const remaining = amount - sent;
-        if (remaining > 0 && remaining < 100) {
-          console.log(`[Flood] Sending final ${remaining} messages...`);
+        // FINAL PUSH - if we're close but not done
+        if (sent < amount && amount - sent < 50) {
+          console.log(`[Flood] Final push: ${amount - sent} messages remaining`);
           const finalPromises = [];
-          for (let i = 0; i < remaining; i++) {
+          for (let i = sent; i < amount; i++) {
             if (webhooks[0]) {
               finalPromises.push(
                 webhooks[0].send({
@@ -229,35 +208,33 @@ module.exports = {
           await Promise.allSettled(finalPromises);
         }
 
-        // Cleanup
+        // Cleanup whatever webhooks are left
         console.log(`[Flood] Cleaning up ${webhooks.length} webhooks...`);
         for (const webhook of webhooks) {
           try {
             await webhook.delete().catch(() => {});
           } catch {
-            // Ignore
+            // Ignore cleanup errors
           }
         }
 
       } else {
-        // 📨 DM FLOOD
-        // Send in rapid succession with minimal delay
-        const sendDM = async (index) => {
-          if (sent >= amount) return;
+        // 📨 DM FLOOD - Just brute force it
+        console.log(`[Flood] Starting DM brute force...`);
+        
+        while (sent < amount) {
           try {
-            await target.send(`${text} ${index + 1}`);
+            await target.send(text);
             sent++;
-          } catch {
+            
+            // Minimal delay every 5 messages to not get instantly blocked
+            if (sent % 5 === 0) {
+              await new Promise(r => setTimeout(r, 50));
+            }
+          } catch (err) {
             failed++;
-          }
-        };
-
-        // Send as fast as possible
-        for (let i = 0; i < amount; i++) {
-          sendDM(i);
-          // Tiny delay to prevent immediate block
-          if (i % 5 === 0) {
-            await new Promise(r => setTimeout(r, 10));
+            // Wait 500ms on error then continue
+            await new Promise(r => setTimeout(r, 500));
           }
         }
       }
@@ -267,27 +244,27 @@ module.exports = {
       const speed = totalTime > 0 ? Math.round(sent / totalTime) : 0;
 
       const resultEmbed = new EmbedBuilder()
-        .setColor('#00ff00')
-        .setTitle('⚡ HYPER FLOOD COMPLETE')
+        .setColor(sent >= amount * 0.9 ? '#00ff00' : '#ffaa00')
+        .setTitle(sent >= amount ? '✅ FLOOD COMPLETE' : '⚠️ FLOOD PARTIAL')
         .setDescription(`**Target:** ${isDM ? 'User DMs' : `#${target.name || 'Channel'}`}`)
         .addFields(
-          { name: 'Sent', value: `${sent}/${amount}`, inline: true },
+          { name: 'Success', value: `${sent}/${amount}`, inline: true },
           { name: 'Failed', value: `${failed}`, inline: true },
-          { name: 'Total Time', value: `${totalTime.toFixed(2)}s`, inline: true },
-          { name: 'Average Speed', value: `${speed}/sec`, inline: true },
-          { name: 'Peak Speed', value: `${Math.round(speed * 1.5)}/sec`, inline: true },
-          { name: 'Webhooks Used', value: isDM ? 'N/A' : '15 + Replacements', inline: true }
+          { name: 'Completion', value: `${Math.round((sent / amount) * 100)}%`, inline: true },
+          { name: 'Time', value: `${totalTime.toFixed(2)}s`, inline: true },
+          { name: 'Avg Speed', value: `${speed}/sec`, inline: true },
+          { name: 'Status', value: sent >= amount ? 'Complete' : 'Partial', inline: true }
         )
-        .setFooter({ text: 'Individual fire system - No delays' })
+        .setFooter({ text: 'Brute force mode - No stops until done' })
         .setTimestamp();
 
       const resultMsg = await message.reply({ embeds: [resultEmbed] });
       
       setTimeout(() => {
         resultMsg.delete().catch(() => {});
-      }, 3000);
+      }, 5000);
 
-      console.log(`[Flood] COMPLETE: ${sent}/${amount} in ${totalTime.toFixed(2)}s (${speed}/sec)`);
+      console.log(`[Flood] FINAL: ${sent}/${amount} in ${totalTime.toFixed(2)}s (${speed}/sec)`);
 
     } catch (error) {
       console.error('[Flood] Fatal error:', error);
@@ -295,7 +272,7 @@ module.exports = {
         embeds: [
           new EmbedBuilder()
             .setColor('#ff0000')
-            .setTitle('💥 HYPER FLOOD FAILED')
+            .setTitle('💥 FLOOD FAILED')
             .setDescription(`**Error:** ${error.message}`)
         ]
       }).then(msg => {
