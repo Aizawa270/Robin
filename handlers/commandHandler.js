@@ -19,18 +19,31 @@ function loadCommands(client) {
   client.brokenCommands = [];
 
   const commandsPath = path.join(__dirname, '..', 'commands');
-  if (!fs.existsSync(commandsPath)) return console.warn('No commands folder found.');
+  if (!fs.existsSync(commandsPath)) {
+    console.warn('No commands folder found.');
+    return;
+  }
 
   const categories = fs.readdirSync(commandsPath);
 
   for (const category of categories) {
     const categoryPath = path.join(commandsPath, category);
     let stat;
-    try { stat = fs.statSync(categoryPath); } catch { continue; }
+    try { 
+      stat = fs.statSync(categoryPath); 
+    } catch { 
+      continue; 
+    }
 
     if (stat.isFile() && category.endsWith('.js')) {
-      try { registerCommand(client, require(categoryPath), categoryPath); }
-      catch (err) { client.brokenCommands.push({ file: categoryPath, error: err.stack || String(err) }); }
+      try { 
+        registerCommand(client, require(categoryPath), categoryPath); 
+      } catch (err) { 
+        client.brokenCommands.push({ 
+          file: categoryPath, 
+          error: err.stack || String(err) 
+        }); 
+      }
       continue;
     }
 
@@ -39,18 +52,38 @@ function loadCommands(client) {
     const files = fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'));
     for (const file of files) {
       const filePath = path.join(categoryPath, file);
-      try { registerCommand(client, require(filePath), filePath); }
-      catch (err) { client.brokenCommands.push({ file: filePath, error: err.stack || String(err) }); }
+      try { 
+        registerCommand(client, require(filePath), filePath); 
+      } catch (err) { 
+        client.brokenCommands.push({ 
+          file: filePath, 
+          error: err.stack || String(err) 
+        }); 
+      }
     }
   }
 
-  console.log(`Loaded ${client.commands.size} commands. Broken: ${client.brokenCommands.length}`);
+  console.log(`✅ Loaded ${client.commands.size} commands. Broken: ${client.brokenCommands.length}`);
+  
+  // Log broken commands for debugging
+  if (client.brokenCommands.length > 0) {
+    console.warn('Broken commands:');
+    client.brokenCommands.forEach(cmd => {
+      console.warn(`  ${cmd.file}: ${cmd.error.split('\n')[0]}`);
+    });
+  }
 }
 
 function registerCommand(client, command, filePath = 'unknown') {
-  if (!command || typeof command !== 'object') throw new Error(`Invalid command export in ${filePath}`);
-  if (!command.name || typeof command.name !== 'string') throw new Error(`Missing name in ${filePath}`);
-  if (typeof command.execute !== 'function') throw new Error(`Missing execute() in ${command.name}`);
+  if (!command || typeof command !== 'object') {
+    throw new Error(`Invalid command export in ${filePath}`);
+  }
+  if (!command.name || typeof command.name !== 'string') {
+    throw new Error(`Missing name in ${filePath}`);
+  }
+  if (typeof command.execute !== 'function') {
+    throw new Error(`Missing execute() in ${command.name}`);
+  }
 
   if (!command.description) command.description = 'No description.';
   if (!command.usage) command.usage = '';
@@ -59,9 +92,13 @@ function registerCommand(client, command, filePath = 'unknown') {
 
   client.commands.set(command.name.toLowerCase(), command);
 
-  for (const a of command.aliases) {
-    if (!client.aliases.has(a.toLowerCase())) client.aliases.set(a.toLowerCase(), command);
+  for (const alias of command.aliases) {
+    if (!client.aliases.has(alias.toLowerCase())) {
+      client.aliases.set(alias.toLowerCase(), command);
+    }
   }
+  
+  console.log(`  ↳ Loaded: ${command.name} (${command.category})`);
 }
 
 async function handleMessage(client, message) {
@@ -76,7 +113,9 @@ async function handleMessage(client, message) {
   // ===== AFK REMOVAL =====
   if (client.afk?.has(message.author.id)) {
     client.afk.delete(message.author.id);
-    try { await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`); } catch {}
+    try { 
+      await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`); 
+    } catch {} 
   }
 
   // ===== AFK MENTION =====
@@ -104,10 +143,13 @@ async function handleMessage(client, message) {
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!cmd) return;
 
-    try { await cmd.execute(client, message, parts); } 
-    catch (err) {
-      console.error(`Prefixless error (${cmdName}):`, err);
-      try { await message.reply('Something went wrong while executing that command.'); } catch {}
+    try { 
+      await cmd.execute(client, message, parts); 
+    } catch (err) {
+      console.error(`❌ Prefixless error (${cmdName}):`, err);
+      try { 
+        await message.reply('Something went wrong while executing that command.'); 
+      } catch {}
     }
     return;
   }
@@ -122,10 +164,13 @@ async function handleMessage(client, message) {
   const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
   if (!cmd) return;
 
-  try { await cmd.execute(client, message, args); }
-  catch (err) {
-    console.error(`Command execution error (${cmdName}):`, err);
-    try { await message.reply('Something went wrong while executing that command.'); } catch {}
+  try { 
+    await cmd.execute(client, message, args); 
+  } catch (err) {
+    console.error(`❌ Command execution error (${cmdName}):`, err);
+    try { 
+      await message.reply('Something went wrong while executing that command.'); 
+    } catch {}
   }
 }
 
