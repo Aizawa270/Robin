@@ -11,7 +11,7 @@ module.exports = {
       return message.reply('This command can only be used in a server.');
     }
 
-    // Admin only
+    // 🔒 Admin only
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
       return message.reply('Only administrators can use this command.');
     }
@@ -20,14 +20,13 @@ module.exports = {
       return message.reply('You need to provide at least **1 user** to ban.');
     }
 
-    // Extract reason (everything after user mentions/IDs)
     const reason = 'Mass ban issued by staff';
 
-    // Collect IDs from mentions + raw IDs
+    // Collect user IDs
     const userIds = new Set();
 
     // Mentions
-    message.mentions.users.forEach(user => userIds.add(user.id));
+    message.mentions.users.forEach(u => userIds.add(u.id));
 
     // Raw IDs
     for (const arg of args) {
@@ -53,10 +52,21 @@ module.exports = {
           reason: `${reason} (by ${message.author.tag})`,
         });
         banned.push(userId);
-      } catch (err) {
+      } catch {
         failed.push(userId);
       }
     }
+
+    // 🔹 Fake pings
+    const bannedList = banned.length
+      ? banned.map(id => `• <@${id}>`).join('\n')
+      : 'None';
+
+    const failedList = failed.length
+      ? failed.map(id => `• <@${id}>`).join('\n')
+      : 'None';
+
+    const fakeModPing = `<@${message.author.id}>`;
 
     const embed = new EmbedBuilder()
       .setColor('#dc2626')
@@ -64,23 +74,19 @@ module.exports = {
       .addFields(
         {
           name: 'Banned Users',
-          value: banned.length
-            ? banned.map(id => `• \`${id}\``).join('\n')
-            : 'None',
+          value: bannedList,
           inline: false,
         },
         {
           name: 'Failed',
-          value: failed.length
-            ? failed.map(id => `• \`${id}\``).join('\n')
-            : 'None',
+          value: failedList,
           inline: false,
         },
         {
           name: 'Banned by',
-          value: `${message.author.tag}`,
+          value: fakeModPing,
           inline: false,
-        }
+        },
       )
       .setTimestamp();
 
