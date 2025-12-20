@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const { Collection } = require('discord.js');
-const { prefix } = require('../config');
 
 // 🔒 STRIP REPLY TARGET FROM MENTIONS
 function stripReplyMentions(message) {
@@ -70,7 +69,7 @@ async function handleMessage(client, message) {
   const content = message.content?.trim();
   if (!content) return;
 
-  // 🔒 APPLY FIX HERE (GLOBAL)
+  // 🔒 APPLY FIX: strip reply mentions globally
   stripReplyMentions(message);
 
   // ===== AFK REMOVAL =====
@@ -93,7 +92,9 @@ async function handleMessage(client, message) {
     }
   }
 
-  const isPrefixed = content.startsWith(prefix);
+  // ===== PREFIX DETECTION =====
+  const prefixUsed = client.getPrefix(message.guild?.id);
+  const isPrefixed = content.startsWith(prefixUsed);
 
   // ===== PREFIXLESS =====
   if (!isPrefixed && client.prefixless?.has(message.author.id)) {
@@ -107,13 +108,13 @@ async function handleMessage(client, message) {
       console.error(`Prefixless error (${cmdName}):`, err);
       try { await message.reply('Something went wrong while executing that command.'); } catch {}
     }
-    return; // HARD STOP
+    return;
   }
 
   // ===== PREFIXED =====
   if (!isPrefixed) return;
 
-  const args = content.slice(prefix.length).trim().split(/\s+/);
+  const args = content.slice(prefixUsed.length).trim().split(/\s+/);
   const cmdName = args.shift()?.toLowerCase();
   if (!cmdName) return;
 
