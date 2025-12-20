@@ -60,6 +60,15 @@ client.edits = new Map();
 client.reactionSnipes = new Map();
 client.giveaways = new Map();
 
+// ===== IMPORT AUTOMOD EARLY =====
+let automodModule;
+try {
+  automodModule = require('./handlers/automodHandler');
+  console.log('✅ Automod module loaded');
+} catch (e) {
+  console.warn('⚠️ Could not load automod module:', e.message);
+}
+
 // ===== MESSAGE DELETE =====
 client.on('messageDelete', async (message) => {
   if (!message.guild) return;
@@ -150,8 +159,19 @@ client.getPrefix = (guildId) => {
 
 // ===== READY =====
 client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
+  // Initialize automod IMMEDIATELY when bot is ready
+  if (automodModule && typeof automodModule.initAutomod === 'function') {
+    try {
+      automodModule.initAutomod(client);
+      console.log('✅ Automod system initialized');
+    } catch (e) {
+      console.error('❌ Failed to init automod:', e.message);
+    }
+  }
+
+  // Load giveaways
   const all = client.giveawayDB.prepare('SELECT * FROM giveaways').all();
   for (const g of all) {
     const delay = g.end_timestamp - Date.now();
@@ -161,17 +181,6 @@ client.once('ready', async () => {
       setTimeout(() => require('./commands/startgiveaway').endGiveaway(client, g.message_id), delay);
     }
   }
-  
-  // Initialize automod AFTER bot is ready
-  try {
-    const am = require('./handlers/automodHandler');
-    if (am && typeof am.initAutomod === 'function') {
-      am.initAutomod(client);
-      console.log('✅ Automod system initialized');
-    }
-  } catch (e) {
-    console.warn('Failed to init automod handler:', e.message);
-  }
 });
 
 // ===== MESSAGE CREATE (COMMAND HANDLER + AUTOMOD) =====
@@ -179,10 +188,18 @@ if (!client.messageCreateHandlerAttached) {
   client.on('messageCreate', async (message) => {
     // Handle commands first
     await handleMessage(client, message);
-    
+
     // Then run automod check on EVERY message
     try {
-      // Check if automod is initialized
+      // If automod isn't initialized yet, try to initialize it NOW
+      if (!client.automod || !client.automod.checkMessage) {
+        if (automodModule && typeof automodModule.initAutomod === 'function') {
+          automodModule.initAutomod(client);
+          console.log('[Automod] Initialized via message event');
+        }
+      }
+      
+      // Now run the automod check
       if (client.automod && client.automod.checkMessage) {
         await client.automod.checkMessage(client, message);
       }
