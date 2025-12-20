@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const Database = require('better-sqlite3');
 
@@ -47,7 +47,7 @@ giveawayDB.prepare(`
 `).run();
 client.giveawayDB = giveawayDB;
 
-// Prefixes DB (per-server) — ensure this exists BEFORE getPrefix is used
+// Prefixes DB (per-server)
 const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
@@ -136,7 +136,7 @@ client.on('messageReactionRemove', async (reaction, user) => {
   }
 });
 
-// ===== DYNAMIC PREFIX (IMPORTANT) =====
+// ===== DYNAMIC PREFIX =====
 client.getPrefix = (guildId) => {
   if (!guildId) return '$';
   try {
@@ -171,7 +171,6 @@ if (!client.messageCreateHandlerAttached) {
     try {
       const am = require('./handlers/automodHandler');
       if (am && am.db && am.initAutomod) {
-        // soft blacklist delete
         const softWords = am.db.prepare('SELECT word FROM blacklist_soft WHERE guild_id = ?').all(message.guild?.id || '');
         for (const w of softWords) {
           if (!w.word) continue;
@@ -181,7 +180,6 @@ if (!client.messageCreateHandlerAttached) {
           }
         }
 
-        // hard blacklist delete + 15m mute + alert
         const hardWords = am.db.prepare('SELECT word FROM blacklist_hard WHERE guild_id = ?').all(message.guild?.id || '');
         for (const w of hardWords) {
           if (!w.word) continue;
@@ -189,15 +187,15 @@ if (!client.messageCreateHandlerAttached) {
             await message.delete().catch(() => {});
 
             const member = await message.guild.members.fetch(message.author.id).catch(() => null);
-            if (member && !member.permissions.has('Administrator')) {
-              await member.timeout(15 * 60 * 1000, `Triggered hard blacklist word: ${w.word}`).catch(() => {});
+            if (member && !member.permissions.has(PermissionsBitField.Flags.Administrator) && member.moderatable) {
+              await member.timeout(15 * 60 * 1000, `Triggered hard blacklist word: ${w.word}`).catch(err => console.error('Timeout error:', err));
             }
 
-            if (am.initAutomod) await am.initAutomod(client); // ensure alert channel is configured
+            if (am.initAutomod) await am.initAutomod(client);
             if (am.db) {
               const automodModule = require('./handlers/automodHandler');
               if (automodModule && automodModule.initAutomod) {
-                if (automodModule && automodModule.automod && automodModule.automod.checkMessage) {
+                if (automodModule.automod && automodModule.automod.checkMessage) {
                   await automodModule.automod.checkMessage(client, message).catch(() => {});
                 }
               }
