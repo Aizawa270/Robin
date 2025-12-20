@@ -22,41 +22,31 @@ module.exports = {
   category: 'mod',
   usage: '$warn <@user|userID> <reason>',
   async execute(client, message, args) {
-    if (!message.guild) return message.reply('This command can only be used in a server.');
+    if (!message.guild) return;
 
-    const perms = message.member.permissions;
-    const canMod =
-      perms.has(PermissionFlagsBits.ModerateMembers) ||
-      perms.has(PermissionFlagsBits.Administrator);
-
-    if (!canMod)
-      return message.reply('You need **Moderate Members** permission or admin.');
+    if (
+      !message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
+      !message.member.permissions.has(PermissionFlagsBits.Administrator)
+    ) {
+      return message.reply('You lack permissions.');
+    }
 
     const targetArg = args.shift();
     const reason = args.join(' ') || 'No reason provided';
 
-    if (!targetArg)
-      return message.reply('Mention a user or provide a valid ID.');
+    if (!targetArg) return message.reply('Provide a user.');
 
     const targetUser =
       message.mentions.users.first() ||
       (await client.users.fetch(targetArg).catch(() => null));
 
-    if (!targetUser)
-      return message.reply('Could not find that user.');
-
-    if (targetUser.id === message.author.id)
-      return message.reply('You cannot warn yourself.');
-
-    if (targetUser.id === client.user.id)
-      return message.reply('I cannot warn myself.');
+    if (!targetUser) return message.reply('User not found.');
 
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member)
-      return message.reply('That user is not in this server.');
+    if (!member) return message.reply('User not in server.');
 
     if (member.permissions.has(PermissionFlagsBits.Administrator))
-      return message.reply('You cannot warn an administrator.');
+      return message.reply('Admins are immune.');
 
     const warns = loadWarns();
     if (!warns[targetUser.id]) warns[targetUser.id] = [];
@@ -67,80 +57,43 @@ module.exports = {
       timestamp: new Date().toISOString(),
     });
 
-    const warnCount = warns[targetUser.id].length;
-
-    // 🔨 SAVE FIRST
     saveWarns(warns);
 
-    // 🚨 AUTO-BAN AT 5 WARNS
+    const warnCount = warns[targetUser.id].length;
+
+    // AUTO BAN
     if (warnCount >= 5) {
       try {
-        await member.ban({
-          reason: `Reached 5 warns | Last reason: ${reason}`,
-        });
-
+        await member.ban({ reason: `Reached 5 warns | ${reason}` });
         delete warns[targetUser.id];
         saveWarns(warns);
 
         const banEmbed = new EmbedBuilder()
           .setColor('#ef4444')
-          .setTitle('User Banned (Warn Limit Reached)')
-          .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
+          .setTitle('User Banned')
           .addFields(
-            {
-              name: 'User',
-              value: `${targetUser.tag} (${targetUser.id})`,
-              inline: false,
-            },
-            {
-              name: 'Banned by',
-              value: `${message.author.tag} (${message.author.id})`,
-              inline: false,
-            },
-            {
-              name: 'Reason',
-              value: 'Reached **5 warnings**',
-              inline: false,
-            },
+            { name: 'User', value: `<@${targetUser.id}>`, inline: false },
+            { name: 'Reason', value: 'Reached **5 warnings**', inline: false }
           )
           .setTimestamp();
 
         return message.reply({ embeds: [banEmbed] });
-      } catch (err) {
-        console.error('Auto-ban failed:', err);
-        return message.reply('User hit 5 warns but I could not ban them.');
+      } catch {
+        return message.reply('Failed to ban user.');
       }
     }
 
-    // ⚠️ NORMAL WARN EMBED
-    const warnEmbed = new EmbedBuilder()
+    const embed = new EmbedBuilder()
       .setColor('#facc15')
       .setTitle('User Warned')
-      .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
       .addFields(
-        {
-          name: 'User',
-          value: `${targetUser.tag} (${targetUser.id})`,
-          inline: false,
-        },
-        {
-          name: 'Warned by',
-          value: `${message.author.tag} (${message.author.id})`,
-          inline: false,
-        },
-        {
-          name: 'Reason',
-          value: reason,
-          inline: false,
-        },
-        {
-          name: 'Total Warns',
-          value: `${warnCount}/5`,
-          inline: false,
-        },
+        { name: 'User', value: `<@${targetUser.id}>`, inline: false }, // fake blue ping
+        { name: 'Moderator', value: `<@${message.author.id}>`, inline: false }, // fake blue ping
+        { name: 'Reason', value: reason, inline: false },
+        { name: 'Total Warns', value: `${warnCount}/5`, inline: false }
       )
       .setTimestamp();
 
-    await message.reply({ embeds: [warnEmbed] });
+    await message.reply({ embeds: [embed] });
   },
 };
