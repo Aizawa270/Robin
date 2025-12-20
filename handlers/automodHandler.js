@@ -1,4 +1,6 @@
-// handlers/automodHandler.js
+// handlers/automodHandler.js (updated)
+// Adds admin immunity + warn counts + auto-ban at 5 warns
+
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
@@ -20,7 +22,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'automod.sqlite');
 const db = new Database(DB_PATH);
 
-// initialize tables
+// initialize tables (warn history + warn counts + config)
 db.prepare(`
 CREATE TABLE IF NOT EXISTS automod_channel (
   guild_id TEXT PRIMARY KEY,
@@ -59,10 +61,19 @@ CREATE TABLE IF NOT EXISTS automod_warns (
   timestamp INTEGER
 )`).run();
 
-// In-memory state for live pending actions: alertMessageId -> state
+// new table: quick counts per user per guild
+db.prepare(`
+CREATE TABLE IF NOT EXISTS automod_warn_counts (
+  guild_id TEXT,
+  user_id TEXT,
+  count INTEGER DEFAULT 0,
+  PRIMARY KEY (guild_id, user_id)
+)`).run();
+
+// in-memory pending actions: messageId -> state
 const pendingActions = new Map();
 
-// ===== DB helpers =====
+// helpers: automod config DB functions
 function setAutomodChannel(guildId, channelId) {
   db.prepare(`INSERT OR REPLACE INTO automod_channel (guild_id, channel_id) VALUES (?, ?)`).run(guildId, channelId);
 }
@@ -81,6 +92,7 @@ function listAlertTargets(guildId) {
   return db.prepare(`SELECT target_type, target_id FROM automod_alert_list WHERE guild_id = ?`).all(guildId);
 }
 
+// blacklist helpers
 function addHardWord(guildId, word) {
   db.prepare(`INSERT OR IGNORE INTO blacklist_hard (guild_id, word) VALUES (?, ?)`).run(guildId, word.toLowerCase());
 }
@@ -101,27 +113,36 @@ function listSoftWords(guildId) {
   return db.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guildId).map(r => r.word);
 }
 
-function saveWarn(guildId, userId, moderatorId, reason) {
+// warns helpers
+function saveWarnRaw(guildId, userId, moderatorId, reason) {
   db.prepare(`INSERT INTO automod_warns (guild_id, user_id, moderator_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)`)
     .run(guildId, userId, moderatorId, reason || 'No reason provided', Date.now());
 }
-function listWarnsDB(guildId, userId) {
+
+// increments counts table and returns new count
+function incrementWarnCount(guildId, userId) {
+  // try insert, or update
+  const insert = db.prepare(`
+    INSERT INTO automod_warn_counts (guild_id, user_id, count)
+    VALUES (?, ?, 1)
+    ON CONFLICT(guild_id, user_id) DO UPDATE SET count = automod_warn_counts.count + 1
+  `);
+  insert.run(guildId, userId);
+  const row = db.prepare(`SELECT count FROM automod_warn_counts WHERE guild_id = ? AND user_id = ?`).get(guildId, userId);
+  return row?.count || 0;
+}
+
+function getWarnCount(guildId, userId) {
+  const row = db.prepare(`SELECT count FROM automod_warn_counts WHERE guild_id = ? AND user_id = ?`).get(guildId, userId);
+  return row?.count || 0;
+}
+
+function listWarns(guildId, userId) {
   return db.prepare(`SELECT moderator_id, reason, timestamp FROM automod_warns WHERE guild_id = ? AND user_id = ? ORDER BY timestamp DESC`).all(guildId, userId);
 }
 
-// ===== helpers =====
-function isStaff(member) {
-  if (!member) return false;
-  try {
-    return member.permissions.has(PermissionFlagsBits.ManageMessages) ||
-      member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
-      member.permissions.has(PermissionFlagsBits.Administrator);
-  } catch {
-    return false;
-  }
-}
-
-function buildAlertEmbed(originChannelId, guild, targetUser, matchedWord, requirementRoleId) {
+// helper: build pretty embed for alert
+function buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId) {
   const embed = new EmbedBuilder()
     .setTitle('「 ✦ 𝐀𝐔𝐓𝐎𝐌𝐎𝐃 𝐀𝐋𝐄𝐑𝐓 ✦ 」')
     .setColor('#f43f5e')
@@ -129,237 +150,230 @@ function buildAlertEmbed(originChannelId, guild, targetUser, matchedWord, requir
     .setDescription([
       `➤  **Target:** ${targetUser.tag}`,
       `➤  **Trigger:** \`${matchedWord}\``,
-      `➤  **Channel:** ${originChannelId ? `<#${originChannelId}>` : 'Unknown'}`,
+      `➤  **Channel:** ${guild ? `<#${guild.systemChannelId || ''}>` : 'unknown'}`,
       `➤  **Time:** <t:${Math.floor(Date.now() / 1000)}:R>`,
       '',
       `╰┈➤ **__Requirements:__** ${requirementRoleId ? `<@&${requirementRoleId}>` : '\`\`none\`\`'}`,
       '',
       `**Actions:** Use the buttons below to Warn / Ban / Ignore.`
-    ].join('\n'))
-    .setFooter({ text: 'First staff to act will take the action' });
+    ].join('\n'));
   return embed;
 }
 
-// ===== sendAutomodAlert =====
-async function sendAutomodAlert(client, guild, originChannelId, targetUser, matchedWord, requirementRoleId = null) {
+// helper: staff check (keeps as ManageMessages/ModerateMembers/Admin)
+function isStaff(member) {
+  if (!member) return false;
+  return member.permissions.has(PermissionFlagsBits.ManageMessages) ||
+    member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
+    member.permissions.has(PermissionFlagsBits.Administrator);
+}
+
+// send automod alert (ghost ping)
+async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirementRoleId = null) {
   try {
     const channelId = getAutomodChannel(guild.id);
     if (!channelId) return null;
+
     const channel = await client.channels.fetch(channelId).catch(() => null);
     if (!channel) return null;
 
-    // Build list of mentions (users & roles) so they receive the ghost ping
+    // Build mention content (ghost ping)
     const entries = listAlertTargets(guild.id);
-    const mentionRoles = entries.filter(e => e.target_type === 'role').map(e => `<@&${e.target_id}>`);
     const mentionUsers = entries.filter(e => e.target_type === 'user').map(e => `<@${e.target_id}>`);
+    const mentionRoles = entries.filter(e => e.target_type === 'role').map(e => `<@&${e.target_id}>`);
     const allMentions = [...mentionRoles, ...mentionUsers].join(' ');
 
-    const embed = buildAlertEmbed(originChannelId, guild, targetUser, matchedWord, requirementRoleId);
+    const embed = buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId);
 
-    // Send message with mentions visible to trigger ghost ping, then remove content quickly
+    // send the message with mentions, then wipe content (ghost ping)
     const sent = await channel.send({ content: allMentions || '\u200b', embeds: [embed] });
 
-    // Save pending state keyed by alert message id
     pendingActions.set(sent.id, {
       guildId: guild.id,
       targetUserId: targetUser.id,
       matchedWord,
-      originChannelId,
       handled: false,
-      alertMessageId: sent.id
     });
 
-    // Buttons row
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`am_warn:${sent.id}`).setLabel('Warn').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`am_ban:${sent.id}`).setLabel('Ban').setStyle(ButtonStyle.Danger),
       new ButtonBuilder().setCustomId(`am_ignore:${sent.id}`).setLabel('Ignore').setStyle(ButtonStyle.Secondary)
     );
 
-    // edit to add buttons (or you can send with components directly)
-    await sent.edit({ components: [row] }).catch(() => {});
+    await sent.edit({ components: [row] });
 
-    // remove visible mentions shortly after (ghost ping delivered)
+    // quick clear content to hide mentions (let ping deliver)
     setTimeout(() => {
-      try { sent.edit({ content: '\u200b' }).catch(() => {}); } catch {}
+      try { sent.edit({ content: '\u200b' }); } catch {}
     }, 1200);
 
-    // Collector to ensure first-staff behavior — will be handled in initAutomod's interactionCreate as well
-    // Keep collector just to auto-clean after timeout
-    const collector = sent.createMessageComponentCollector({ componentType: ComponentType.Button, time: 30 * 60 * 1000 });
-    collector.on('end', () => {
-      // If still pending and not handled, remove components
+    // collector for 30 mins
+    const collector = sent.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: 30 * 60 * 1000
+    });
+
+    collector.on('collect', async (interaction) => {
+      const custom = interaction.customId;
+      const member = interaction.member;
+
+      if (!isStaff(member)) {
+        await interaction.reply({ content: "you aint important enough brochacho😹", ephemeral: true });
+        return;
+      }
+
       const state = pendingActions.get(sent.id);
+      if (!state || state.handled) {
+        await interaction.reply({ content: "This alert has already been handled.", ephemeral: true });
+        return;
+      }
+
+      // IGNORE
+      if (custom === `am_ignore:${sent.id}`) {
+        state.handled = true;
+        pendingActions.set(sent.id, state);
+        const newEmbed = EmbedBuilder.from(embed).setColor('#94a3b8').setFooter({ text: `Ignored by ${interaction.user.tag}` });
+        await sent.edit({ embeds: [newEmbed], components: [] });
+        await interaction.reply({ content: `Ignored.`, ephemeral: true });
+        collector.stop('handled');
+        return;
+      }
+
+      // WARN -> open modal for reason (only first click)
+      if (custom === `am_warn:${sent.id}`) {
+        state.handled = true; // reserve the action so others can't take it
+        pendingActions.set(sent.id, state);
+
+        const modal = new ModalBuilder()
+          .setCustomId(`am_warn_modal:${sent.id}`)
+          .setTitle('Warn Reason');
+
+        const reasonInput = new TextInputBuilder()
+          .setCustomId('warn_reason')
+          .setLabel('Reason for warning')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+          .setPlaceholder('Type the reason and then submit');
+
+        const row1 = new ActionRowBuilder().addComponents(reasonInput);
+        modal.addComponents(row1);
+
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // BAN -> ephemeral confirm
+      if (custom === `am_ban:${sent.id}`) {
+        // show ephemeral confirmation with 2 buttons
+        const confirmRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`am_ban_confirm:${sent.id}`).setLabel('Confirm Ban').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(`am_ban_cancel:${sent.id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+        );
+        await interaction.reply({ content: `Confirm ban of <@${state.targetUserId}>? (Only first click counts)`, components: [confirmRow], ephemeral: true });
+        return;
+      }
+    });
+
+    collector.on('end', () => {
       pendingActions.delete(sent.id);
-      try { sent.edit({ components: [] }).catch(() => {}); } catch {}
+      try { sent.edit({ components: [] }); } catch {}
     });
 
     return sent;
   } catch (err) {
-    console.error('sendAutomodAlert error:', err);
+    console.error('sendAutomodAlert error', err);
     return null;
   }
 }
 
-// ===== checkMessage (exported) =====
-async function checkMessage(client, message) {
-  try {
-    if (!message.guild) return false;
-    if (message.author?.bot) return false;
-
-    const guildId = message.guild.id;
-    const content = (message.content || '').toLowerCase();
-
-    // soft words (silent delete)
-    const softWords = listSoftWords(guildId);
-    for (const w of softWords) {
-      if (!w) continue;
-      if (content.includes(w.toLowerCase())) {
-        await message.delete().catch(() => {});
-        return { acted: true, type: 'soft' };
-      }
-    }
-
-    // hard words -> delete + alert
-    const hardWords = listHardWords(guildId);
-    for (const w of hardWords) {
-      if (!w) continue;
-      if (content.includes(w.toLowerCase())) {
-        await message.delete().catch(() => {});
-        await sendAutomodAlert(client, message.guild, message.channel.id, message.author, w, null);
-        return { acted: true, type: 'hard', word: w };
-      }
-    }
-
-    // discord invite detection (basic)
-    const inviteRegex = /(discord\.gg|discordapp\.com\/invite)\/[A-Za-z0-9]+/i;
-    if (inviteRegex.test(content)) {
-      await message.delete().catch(() => {});
-      await sendAutomodAlert(client, message.guild, message.channel.id, message.author, 'discord invite', null);
-      return { acted: true, type: 'invite' };
-    }
-
-    // no action
-    return { acted: false };
-  } catch (err) {
-    console.error('automod check error', err);
-    return { acted: false, error: err };
-  }
-}
-
-// ===== initAutomod: attach interaction handlers (modals & ban confirm) =====
+// Initialize automod and hook modal/button handlers
 function initAutomod(client) {
-  // expose helper methods via client.automod
-  client.automod = client.automod || {};
-  client.automod.db = db;
-  client.automod.setAutomodChannel = setAutomodChannel;
-  client.automod.getAutomodChannel = getAutomodChannel;
-  client.automod.addAlertTarget = addAlertTarget;
-  client.automod.removeAlertTarget = removeAlertTarget;
-  client.automod.listAlertTargets = listAlertTargets;
-  client.automod.addHardWord = addHardWord;
-  client.automod.removeHardWord = removeHardWord;
-  client.automod.listHardWords = listHardWords;
-  client.automod.addSoftWord = addSoftWord;
-  client.automod.removeSoftWord = removeSoftWord;
-  client.automod.listSoftWords = listSoftWords;
-  client.automod.saveWarn = saveWarn;
-  client.automod.listWarns = listWarnsDB;
+  client.automodDB = db;
+  client.automod = {
+    setAutomodChannel,
+    getAutomodChannel,
+    addAlertTarget,
+    removeAlertTarget,
+    listAlertTargets,
+    addHardWord,
+    removeHardWord,
+    listHardWords,
+    addSoftWord,
+    removeSoftWord,
+    listSoftWords,
+    saveWarn: saveWarnRaw,
+    listWarns,
+    getWarnCount
+  };
 
+  // INTERACTIONS: modal submit + ban confirm
   client.on('interactionCreate', async (interaction) => {
     try {
-      // Modal submit (warn reason)
       if (interaction.isModalSubmit()) {
         const custom = interaction.customId;
-        if (custom?.startsWith('am_warn_modal:')) {
+        if (custom && custom.startsWith('am_warn_modal:')) {
           const msgId = custom.split(':')[1];
+          const reason = interaction.fields.getTextInputValue('warn_reason').slice(0, 1000);
           const state = pendingActions.get(msgId);
           if (!state) {
-            await interaction.reply({ content: 'This alert is no longer available.', ephemeral: true }).catch(() => {});
+            await interaction.reply({ content: 'This alert is no longer available.', ephemeral: true });
             return;
           }
-          const reason = interaction.fields.getTextInputValue('warn_reason').slice(0, 1000);
-          saveWarn(state.guildId, state.targetUserId, interaction.user.id, reason);
 
-          // update original alert embed
+          // persist warn history
+          saveWarnRaw(state.guildId, state.targetUserId, interaction.user.id, reason);
+          // increment count & get new count
+          const newCount = incrementWarnCount(state.guildId, state.targetUserId);
+
+          // edit original alert embed to reflect warned & who warned
           const channelId = getAutomodChannel(state.guildId);
           const channel = await client.channels.fetch(channelId).catch(() => null);
           if (channel) {
             const msg = await channel.messages.fetch(msgId).catch(() => null);
             if (msg) {
               const oldEmbed = msg.embeds[0];
-              const newEmbed = EmbedBuilder.from(oldEmbed).setColor('#f59e0b').setFooter({ text: `Warned by ${interaction.user.tag}` });
+              const newEmbed = EmbedBuilder.from(oldEmbed).setColor('#f59e0b').setFooter({ text: `Warned by ${interaction.user.tag} — total warns: ${newCount}` });
               await msg.edit({ embeds: [newEmbed], components: [] }).catch(() => {});
             }
           }
 
           pendingActions.delete(msgId);
-          await interaction.reply({ content: 'User warned and reason saved.', ephemeral: true }).catch(() => {});
+
+          // notify the moderator (ephemeral)
+          await interaction.reply({ content: `User warned and reason saved. Total warns: ${newCount}`, ephemeral: true });
+
+          // Auto-ban at threshold (5)
+          const BAN_THRESHOLD = 5;
+          if (newCount >= BAN_THRESHOLD) {
+            try {
+              const guild = client.guilds.cache.get(state.guildId) || await client.guilds.fetch(state.guildId);
+              const member = await guild.members.fetch(state.targetUserId).catch(() => null);
+              if (member) {
+                await member.ban({ reason: `Automod auto-ban after ${newCount} warns (triggered by ${interaction.user.tag})` });
+                // edit original alert embed to show banned
+                if (channel) {
+                  const msg = await channel.messages.fetch(msgId).catch(() => null);
+                  if (msg) {
+                    const oldEmbed = msg.embeds[0];
+                    const newEmbed = EmbedBuilder.from(oldEmbed).setColor('#ef4444').setFooter({ text: `Auto-banned after ${newCount} warns` });
+                    await msg.edit({ embeds: [newEmbed], components: [] }).catch(() => {});
+                  }
+                }
+                // optional: clear warn counts record or keep for audit — we'll keep for history
+              }
+            } catch (err) {
+              console.error('Auto-ban error:', err);
+            }
+          }
+
+          return;
         }
-        return;
       }
 
-      // Button interactions
+      // Button interactions (ban confirm/cancel)
       if (interaction.isButton()) {
         const id = interaction.customId;
-        // warn button pressed
-        if (id.startsWith('am_warn:')) {
-          const msgId = id.split(':')[1];
-          const state = pendingActions.get(msgId);
-          if (!state) {
-            await interaction.reply({ content: 'This alert expired.', ephemeral: true }).catch(() => {});
-            return;
-          }
-          if (!isStaff(interaction.member)) {
-            await interaction.reply({ content: "you aint important enough brochacho😹", ephemeral: true }).catch(() => {});
-            return;
-          }
-          if (state.handled) {
-            await interaction.reply({ content: 'Already handled.', ephemeral: true }).catch(() => {});
-            return;
-          }
-          // reserve and open modal
-          state.handled = true;
-          pendingActions.set(msgId, state);
-          const modal = new ModalBuilder().setCustomId(`am_warn_modal:${msgId}`).setTitle('Warn Reason');
-          const reasonInput = new TextInputBuilder()
-            .setCustomId('warn_reason')
-            .setLabel('Reason for warning')
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(true)
-            .setPlaceholder('Type the reason and then submit');
-          const row1 = new ActionRowBuilder().addComponents(reasonInput);
-          modal.addComponents(row1);
-          await interaction.showModal(modal).catch(() => {});
-          return;
-        }
-
-        // ban button pressed -> ask for confirmation ephemeral
-        if (id.startsWith('am_ban:')) {
-          const msgId = id.split(':')[1];
-          const state = pendingActions.get(msgId);
-          if (!state) {
-            await interaction.reply({ content: 'This alert expired.', ephemeral: true }).catch(() => {});
-            return;
-          }
-          if (!isStaff(interaction.member)) {
-            await interaction.reply({ content: "you aint important enough brochacho😹", ephemeral: true }).catch(() => {});
-            return;
-          }
-          if (state.handled) {
-            await interaction.reply({ content: 'Already handled.', ephemeral: true }).catch(() => {});
-            return;
-          }
-          // show confirm buttons ephemeral
-          const confirmRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`am_ban_confirm:${msgId}`).setLabel('Confirm Ban').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`am_ban_cancel:${msgId}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
-          );
-          await interaction.reply({ content: `Confirm ban of <@${state.targetUserId}>? (Only first click counts)`, components: [confirmRow], ephemeral: true }).catch(() => {});
-          return;
-        }
-
-        // ban confirm
         if (id.startsWith('am_ban_confirm:')) {
           const msgId = id.split(':')[1];
           const state = pendingActions.get(msgId);
@@ -367,21 +381,16 @@ function initAutomod(client) {
             await interaction.update({ content: 'Alert expired.', components: [], ephemeral: true }).catch(() => {});
             return;
           }
-          // final permission check
-          if (!isStaff(interaction.member)) {
-            await interaction.update({ content: "you aint important enough brochacho😹", components: [], ephemeral: true }).catch(() => {});
-            return;
-          }
           try {
             const guild = client.guilds.cache.get(state.guildId) || await client.guilds.fetch(state.guildId);
             const member = await guild.members.fetch(state.targetUserId).catch(() => null);
             if (!member) {
-              await interaction.update({ content: 'Could not find the user in the guild.', components: [], ephemeral: true }).catch(() => {});
+              await interaction.update({ content: 'Could not find the user in the guild.', components: [], ephemeral: true });
               pendingActions.delete(msgId);
               return;
             }
             await member.ban({ reason: `Automod ban by ${interaction.user.tag} (via alert)` });
-            // edit original alert embed
+            // edit alert embed
             const channelId = getAutomodChannel(state.guildId);
             const channel = await client.channels.fetch(channelId).catch(() => null);
             if (channel) {
@@ -393,7 +402,7 @@ function initAutomod(client) {
               }
             }
             pendingActions.delete(msgId);
-            await interaction.update({ content: `User <@${state.targetUserId}> banned.`, components: [], ephemeral: true }).catch(() => {});
+            await interaction.update({ content: `User <@${state.targetUserId}> banned.`, components: [], ephemeral: true });
           } catch (err) {
             console.error('Automod ban error:', err);
             await interaction.update({ content: 'Failed to ban — check permissions.', components: [], ephemeral: true }).catch(() => {});
@@ -401,65 +410,69 @@ function initAutomod(client) {
           return;
         }
 
-        // ban cancel
         if (id.startsWith('am_ban_cancel:')) {
           await interaction.update({ content: 'Ban cancelled.', components: [], ephemeral: true }).catch(() => {});
           return;
         }
-
-        // ignore button (if pressed directly)
-        if (id.startsWith('am_ignore:')) {
-          const msgId = id.split(':')[1];
-          const state = pendingActions.get(msgId);
-          if (!state) {
-            await interaction.reply({ content: 'Alert expired.', ephemeral: true }).catch(() => {});
-            return;
-          }
-          if (!isStaff(interaction.member)) {
-            await interaction.reply({ content: "you aint important enough brochacho😹", ephemeral: true }).catch(() => {});
-            return;
-          }
-          // mark as ignored and edit embed
-          pendingActions.delete(msgId);
-          const channelId = getAutomodChannel(state.guildId);
-          const channel = await client.channels.fetch(channelId).catch(() => null);
-          if (channel) {
-            const msg = await channel.messages.fetch(msgId).catch(() => null);
-            if (msg) {
-              const oldEmbed = msg.embeds[0];
-              const newEmbed = EmbedBuilder.from(oldEmbed).setColor('#94a3b8').setFooter({ text: `Ignored by ${interaction.user.tag}` });
-              await msg.edit({ embeds: [newEmbed], components: [] }).catch(() => {});
-            }
-          }
-          await interaction.reply({ content: 'Ignored.', ephemeral: true }).catch(() => {});
-          return;
-        }
       }
     } catch (err) {
-      console.error('automod interaction error', err);
+      console.error('automod interaction handler error', err);
     }
   });
 
-  console.log('[Automod] Initialized.');
+  // main checkMessage: called from your command handler
+  async function checkMessage(client, message) {
+    try {
+      if (!message.guild) return;
+      if (message.author?.bot) return;
+
+      // IMMUNITY: administrators should not trigger automod
+      if (message.member && message.member.permissions.has(PermissionFlagsBits.Administrator)) return;
+
+      const guildId = message.guild.id;
+      const content = (message.content || '').toLowerCase();
+
+      // soft words: delete quietly (no logs)
+      const softWords = listSoftWords(guildId);
+      for (const w of softWords) {
+        if (!w) continue;
+        if (content.includes(w.toLowerCase())) {
+          await message.delete().catch(() => {});
+          return; // done
+        }
+      }
+
+      // hard words: delete + send alert
+      const hardWords = listHardWords(guildId);
+      for (const w of hardWords) {
+        if (!w) continue;
+        if (content.includes(w.toLowerCase())) {
+          await message.delete().catch(() => {});
+          await sendAutomodAlert(client, message.guild, message.author, w, null);
+          return;
+        }
+      }
+
+      // invite links (simple regex)
+      const inviteRegex = /(discord\.gg|discordapp\.com\/invite)\/[A-Za-z0-9]+/i;
+      if (inviteRegex.test(content)) {
+        await message.delete().catch(() => {});
+        await sendAutomodAlert(client, message.guild, message.author, 'discord invite', null);
+        return;
+      }
+
+      // add other filters here...
+    } catch (err) {
+      console.error('automod check error', err);
+    }
+  }
+
+  // attach to client
+  client.automod = client.automod || {};
+  client.automod.checkMessage = checkMessage;
+  client.automod._internal = { pendingActions, db };
+
+  console.log('[Automod] Initialized with warn-counts + admin immunity.');
 }
 
-// Export API
-module.exports = {
-  initAutomod,
-  checkMessage,
-  db,
-  // convenience exports so other code can call these helpers if needed
-  setAutomodChannel,
-  getAutomodChannel,
-  addAlertTarget,
-  removeAlertTarget,
-  listAlertTargets,
-  addHardWord,
-  removeHardWord,
-  listHardWords,
-  addSoftWord,
-  removeSoftWord,
-  listSoftWords,
-  saveWarn,
-  listWarnsDB
-};
+module.exports = { initAutomod, db };
