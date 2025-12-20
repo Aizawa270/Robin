@@ -154,18 +154,23 @@ client.once('ready', async () => {
   }
 });
 
-// ===== MESSAGE CREATE (COMMAND HANDLER) =====
+// ===== MESSAGE CREATE (COMMAND HANDLER + AUTOMOD) =====
 if (!client.messageCreateHandlerAttached) {
-  client.on('messageCreate', (message) => handleMessage(client, message));
+  client.on('messageCreate', async (message) => {
+    await handleMessage(client, message); // existing command handling
+    const { checkMessage } = require('./handlers/automodHandler'); // automod check
+    await checkMessage(client, message);
+  });
   client.messageCreateHandlerAttached = true;
 }
 
 // ===== LOAD COMMANDS =====
 loadCommands(client);
 
-// ===== AUTOMOD HANDLER =====
-const { initAutomod } = require('./handlers/automodHandler');
-initAutomod(client); // ← this is the only addition for Step 1
+// ===== AUTOMOD HANDLER INIT =====
+const { initAutomod, handleInteractions } = require('./handlers/automodHandler');
+initAutomod(client);
+handleInteractions(client);
 
 // ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
