@@ -137,7 +137,6 @@ client.on('messageReactionRemove', async (reaction, user) => {
 });
 
 // ===== DYNAMIC PREFIX (IMPORTANT) =====
-// Define this BEFORE message handling so handleMessage can call it safely.
 client.getPrefix = (guildId) => {
   if (!guildId) return '$';
   try {
@@ -167,18 +166,48 @@ client.once('ready', async () => {
 // ===== MESSAGE CREATE (COMMAND HANDLER + AUTOMOD) =====
 if (!client.messageCreateHandlerAttached) {
   client.on('messageCreate', async (message) => {
-    // keep your existing flow: command handling first (which uses getPrefix)
     await handleMessage(client, message);
 
-    // automod check (if you have automod handler)
     try {
-      const automod = require('./handlers/automodHandler');
-      if (automod && automod.checkMessage) {
-        await automod.checkMessage(client, message);
+      const am = require('./handlers/automodHandler');
+      if (am && am.db && am.initAutomod) {
+        // soft blacklist delete
+        const softWords = am.db.prepare('SELECT word FROM blacklist_soft WHERE guild_id = ?').all(message.guild?.id || '');
+        for (const w of softWords) {
+          if (!w.word) continue;
+          if (message.content.toLowerCase().includes(w.word.toLowerCase())) {
+            await message.delete().catch(() => {});
+            break;
+          }
+        }
+
+        // hard blacklist delete + 15m mute + alert
+        const hardWords = am.db.prepare('SELECT word FROM blacklist_hard WHERE guild_id = ?').all(message.guild?.id || '');
+        for (const w of hardWords) {
+          if (!w.word) continue;
+          if (message.content.toLowerCase().includes(w.word.toLowerCase())) {
+            await message.delete().catch(() => {});
+
+            const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+            if (member && !member.permissions.has('Administrator')) {
+              await member.timeout(15 * 60 * 1000, `Triggered hard blacklist word: ${w.word}`).catch(() => {});
+            }
+
+            if (am.initAutomod) await am.initAutomod(client); // ensure alert channel is configured
+            if (am.db) {
+              const automodModule = require('./handlers/automodHandler');
+              if (automodModule && automodModule.initAutomod) {
+                if (automodModule && automodModule.automod && automodModule.automod.checkMessage) {
+                  await automodModule.automod.checkMessage(client, message).catch(() => {});
+                }
+              }
+            }
+            break;
+          }
+        }
       }
     } catch (e) {
-      // don't kill bot if automod has issues
-      console.error('automod check error (from index):', e);
+      console.error('Automod index.js error:', e);
     }
   });
   client.messageCreateHandlerAttached = true;
@@ -187,7 +216,7 @@ if (!client.messageCreateHandlerAttached) {
 // ===== LOAD COMMANDS =====
 loadCommands(client);
 
-// ===== AUTOMOD HANDLER INIT (if using it) =====
+// ===== AUTOMOD HANDLER INIT =====
 try {
   const am = require('./handlers/automodHandler');
   if (am && typeof am.initAutomod === 'function') am.initAutomod(client);
