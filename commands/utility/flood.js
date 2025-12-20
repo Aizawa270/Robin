@@ -1,11 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 
-const OWNER_ID = '852839588689870879';
-const MAX_FLOOD = 500; // Increased limit
-const CHANNEL_BATCH_SIZE = 20; // Max batch for channels
-const CHANNEL_BATCH_DELAY = 30; // Almost no delay
-const DM_BATCH_SIZE = 10; // For DMs
-const DM_BATCH_DELAY = 50; // Minimal for DMs
+const OWNER_IDS = ['852839588689870879', '908521674700390430']; // Both owner IDs
+const MAX_FLOOD = 1000; // Max 1000 messages
 
 module.exports = {
   name: 'flood',
@@ -15,8 +11,8 @@ module.exports = {
   usage: '$flood [@user|#channel|channelID] <amount> <text>',
   async execute(client, message, args) {
 
-    // 🔒 Owner lock
-    if (message.author.id !== OWNER_ID) {
+    // 🔒 Owner lock - BOTH IDs
+    if (!OWNER_IDS.includes(message.author.id)) {
       return message.reply({
         embeds: [
           new EmbedBuilder()
@@ -28,40 +24,32 @@ module.exports = {
 
     if (!args.length) return message.reply('Usage: `$flood [@user|#channel|channelID] <amount> <text>`');
 
-    let target = message.channel; // Default: current channel
+    let target = message.channel;
     let isDM = false;
     let amount;
     let text;
 
-    // Check first arg for user mention, channel mention, or channel ID
+    // Target detection (same as before)
     const firstArg = args[0];
-    
-    // If @user mention → DM flood
     const userMention = message.mentions.users.first();
+    
     if (userMention) {
       try {
         target = await userMention.createDM();
         isDM = true;
-        args.shift(); // Remove user mention from args
+        args.shift();
       } catch (err) {
-        return message.reply(`❌ Could not DM ${userMention.tag}. They might have DMs closed.`);
+        return message.reply(`❌ Could not DM ${userMention.tag}.`);
       }
-    }
-    // If #channel mention → flood that channel
-    else if (message.mentions.channels.first()) {
+    } else if (message.mentions.channels.first()) {
       target = message.mentions.channels.first();
-      args.shift(); // Remove channel mention from args
-    }
-    // If numeric ID (could be user or channel)
-    else if (firstArg?.match(/^\d{17,20}$/)) {
-      // Try to get channel first
+      args.shift();
+    } else if (firstArg?.match(/^\d{17,20}$/)) {
       const channel = message.guild?.channels.cache.get(firstArg);
       if (channel && channel.isTextBased()) {
         target = channel;
         args.shift();
-      } 
-      // If not channel, try user
-      else {
+      } else {
         const user = await client.users.fetch(firstArg).catch(() => null);
         if (user) {
           try {
@@ -69,20 +57,17 @@ module.exports = {
             isDM = true;
             args.shift();
           } catch (err) {
-            return message.reply(`❌ Could not DM ${user.tag}. They might have DMs closed.`);
+            return message.reply(`❌ Could not DM ${user.tag}.`);
           }
-        } else {
-          return message.reply('❌ Could not find user or channel with that ID.');
         }
       }
     }
 
-    // Get amount
     amount = parseInt(args[0]);
     if (isNaN(amount) || amount < 1) {
       return message.reply('Amount must be a number greater than 0.');
     }
-    args.shift(); // Remove amount from args
+    args.shift();
 
     if (amount > MAX_FLOOD) {
       amount = MAX_FLOOD;
@@ -91,74 +76,63 @@ module.exports = {
     text = args.join(' ');
     if (!text) return message.reply('What am I supposed to send?');
 
-    // Choose settings - ULTRA FAST
-    const batchSize = isDM ? DM_BATCH_SIZE : CHANNEL_BATCH_SIZE;
-    const batchDelay = isDM ? DM_BATCH_DELAY : CHANNEL_BATCH_DELAY;
-
-    // ⚡ INSTANT FLOOD - NO COOLDOWN, NO DELAYS
+    // ⚡⚡⚡ ULTIMATE FAST ENGINE ⚡⚡⚡
     try {
-      let sentCount = 0;
-      let failedCount = 0;
       const startTime = Date.now();
+      const startMsg = await message.reply(`⚡ **FLOODING ${amount} MESSAGES**...`);
       
-      // Send initial "starting" message and delete it immediately
-      const startTimeMsg = await message.reply(`⚡ **FLOODING ${amount} MESSAGES**...`);
-      await startTimeMsg.delete().catch(() => {});
-
-      // Ultra-fast flood loop
-      for (let i = 0; i < amount; i += batchSize) {
-        const currentBatchSize = Math.min(batchSize, amount - i);
-        const batchPromises = [];
+      // DANGEROUSLY FAST SETTINGS
+      const MEGA_BATCH = isDM ? 25 : 50; // Send 50 at once in channels!
+      const messages = Array(amount).fill(text);
+      let sent = 0;
+      let failed = 0;
+      
+      // Process in MEGA batches
+      for (let i = 0; i < messages.length; i += MEGA_BATCH) {
+        const batch = messages.slice(i, i + MEGA_BATCH);
+        const promises = batch.map(msg => 
+          target.send(msg).catch(() => {
+            failed++;
+            return null;
+          })
+        );
         
-        // Create batch promises
-        for (let j = 0; j < currentBatchSize; j++) {
-          batchPromises.push(
-            target.send(text).catch(err => {
-              failedCount++;
-              return null;
-            })
-          );
-        }
+        // Send ALL in parallel - NO WAITING
+        await Promise.allSettled(promises);
+        sent += batch.length;
         
-        // Send batch
-        await Promise.allSettled(batchPromises);
-        sentCount += currentBatchSize;
-        
-        // Tiny delay only if not last batch
-        if (i + batchSize < amount) {
-          await new Promise(resolve => setTimeout(resolve, batchDelay));
+        // Micro delay ONLY if rate limited
+        if (failed > sent * 0.1) { // If 10% failed, slow down slightly
+          await new Promise(r => setTimeout(r, 10));
         }
       }
-
-      // Calculate stats
+      
       const totalTime = (Date.now() - startTime) / 1000;
-      const messagesPerSecond = totalTime > 0 ? Math.round(sentCount / totalTime) : 0;
-
-      // Quick result embed
-      const resultEmbed = new EmbedBuilder()
-        .setColor('#00ff88')
-        .setTitle('⚡ FLOOD COMPLETE')
-        .setDescription(`**Target:** ${isDM ? `${target.recipient?.tag || 'User'} (DMs)` : target.name ? `#${target.name}` : 'Channel'}`)
-        .addFields(
-          { name: 'Sent', value: `${sentCount}/${amount}`, inline: true },
-          { name: 'Time', value: `${totalTime.toFixed(2)}s`, inline: true },
-          { name: 'Speed', value: `${messagesPerSecond}/sec`, inline: true },
-          { name: 'Failed', value: `${failedCount}`, inline: true },
-          { name: 'Batch Size', value: `${batchSize}`, inline: true }
-        )
-        .setFooter({ text: 'Owner command' })
-        .setTimestamp();
-
-      await message.reply({ embeds: [resultEmbed] }).then(msg => {
-        setTimeout(() => msg.delete().catch(() => {}), 5000);
+      const speed = totalTime > 0 ? Math.round(sent / totalTime) : 0;
+      
+      // Quick result
+      await startMsg.edit({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#00ff88')
+            .setTitle('⚡ FLOOD COMPLETE')
+            .setDescription(`**Target:** ${isDM ? 'User DMs' : 'Channel'}`)
+            .addFields(
+              { name: 'Sent', value: `${sent}/${amount}`, inline: true },
+              { name: 'Time', value: `${totalTime.toFixed(2)}s`, inline: true },
+              { name: 'Speed', value: `${speed}/sec`, inline: true },
+              { name: 'Batch Size', value: `${MEGA_BATCH}`, inline: true }
+            )
+        ]
+      }).then(msg => {
+        setTimeout(() => msg.delete().catch(() => {}), 3000);
       });
-
-      // Log
-      console.log(`[Flood] ${message.author.tag} -> ${target.name || target.recipient?.tag || 'target'}: ${sentCount}/${amount} in ${totalTime.toFixed(2)}s (${messagesPerSecond}/sec)`);
-
+      
+      console.log(`[Flood] ${message.author.tag} -> ${target.name || 'DM'}: ${sent}/${amount} in ${totalTime.toFixed(2)}s (${speed}/sec)`);
+      
     } catch (error) {
-      console.error('[Flood] Error:', error);
-      await message.reply(`💥 Flood failed: ${error.message}`).then(msg => {
+      console.error('[Flood] Critical:', error);
+      await message.reply(`💥 Flood crashed: ${error.message}`).then(msg => {
         setTimeout(() => msg.delete().catch(() => {}), 3000);
       });
     }
