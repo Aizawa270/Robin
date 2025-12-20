@@ -1,9 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { Collection } = require('discord.js');
-
-// ===== AUTOMOD HANDLER =====
-const automodHandler = require('./automodHandler');
+const automod = require('./automodHandler'); // ✅ added automod import
 
 // 🔒 STRIP REPLY TARGET FROM MENTIONS
 function stripReplyMentions(message) {
@@ -69,12 +67,12 @@ function registerCommand(client, command, filePath = 'unknown') {
 
 async function handleMessage(client, message) {
   if (message.author.bot) return;
+
   const content = message.content?.trim();
   if (!content) return;
 
   // ===== AUTOMOD CHECK =====
-  // Every incoming message goes through automod first
-  await automodHandler.checkMessage(client, message);
+  await automod.checkMessage(client, message); // ✅ added automod message check
 
   // 🔒 APPLY FIX: strip reply mentions globally
   stripReplyMentions(message);
