@@ -92,7 +92,7 @@ async function handleMessage(client, message) {
     }
   }
 
-  // ===== PREFIX DETECTION =====
+  // ===== DYNAMIC PREFIX =====
   const prefixUsed = client.getPrefix(message.guild?.id);
   const isPrefixed = content.startsWith(prefixUsed);
 
