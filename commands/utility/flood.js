@@ -1,12 +1,10 @@
 const { EmbedBuilder } = require('discord.js');
 
 const OWNER_IDS = ['852839588689870879', '908521674700390430'];
-const MAX_CHANNEL_FLOOD = 500; // Increased
-const MAX_DM_FLOOD = 150; // Increased
 
 module.exports = {
   name: 'flood',
-  description: 'Floods channels (webhook) or DMs (optimized) - owner only.',
+  description: 'Floods channels (webhook) or DMs (no slowdown) - owner only.',
   category: 'utility',
   hidden: true,
   usage: '$flood [@user|#channel|channelID] <amount> <text>',
@@ -69,26 +67,70 @@ module.exports = {
     text = args.join(' ');
     if (!text) return message.reply('What am I supposed to send?');
 
-    const maxAmount = isDM ? MAX_DM_FLOOD : MAX_CHANNEL_FLOOD;
-    if (amount > maxAmount) amount = maxAmount;
-
-    // 🚀 NO START MESSAGE - INSTANT START
+    // 🚀 INSTANT START - NO DELAY MESSAGE
     const startTime = Date.now();
     
     try {
       let sent = 0;
       let failed = 0;
 
-      // ⚡ CHANNEL FLOOD (WEBHOOK - MAX SPEED)
+      // ⚡⚡⚡ CHANNEL FLOOD (WEBHOOK - HYPER SPEED)
       if (!isDM) {
         try {
+          // CREATE MULTIPLE WEBHOOKS FOR PARALLEL SENDING
+          const webhooks = [];
+          
+          // Create 3 webhooks for parallel sending
+          for (let w = 0; w < 3; w++) {
+            const webhook = await target.createWebhook({
+              name: `Flood${w + 1}`,
+              avatar: client.user.displayAvatarURL(),
+              reason: 'Flood command'
+            });
+            webhooks.push(webhook);
+          }
+
+          const WEBHOOK_BATCH = 10; // Per webhook
+          const totalParallel = WEBHOOK_BATCH * webhooks.length; // 30 messages at once!
+          
+          for (let i = 0; i < amount; i += totalParallel) {
+            const batchPromises = [];
+            const toSend = Math.min(totalParallel, amount - i);
+            
+            // Distribute messages across all webhooks
+            for (let j = 0; j < toSend; j++) {
+              const webhookIndex = j % webhooks.length;
+              batchPromises.push(
+                webhooks[webhookIndex].send({
+                  content: text,
+                  username: `Flood ${i + j + 1}`,
+                  avatarURL: client.user.displayAvatarURL()
+                }).catch(() => { failed++; return null; })
+              );
+            }
+            
+            // FIRE ALL AT ONCE - NO WAITING
+            await Promise.allSettled(batchPromises);
+            sent += toSend;
+            
+            // MICRO DELAY: 10ms (BARE MINIMUM)
+            if (i + totalParallel < amount) {
+              await new Promise(r => setTimeout(r, 10));
+            }
+          }
+
+          // Clean up all webhooks
+          await Promise.all(webhooks.map(w => w.delete().catch(() => {})));
+          
+        } catch (webhookError) {
+          // Fallback: SINGLE WEBHOOK MAX SPEED
           const webhook = await target.createWebhook({
             name: 'FloodWave',
             avatar: client.user.displayAvatarURL(),
             reason: 'Flood command'
           });
 
-          const WEBHOOK_BATCH = 15; // MAX BATCH SIZE
+          const WEBHOOK_BATCH = 20; // HUGE BATCH
           
           for (let i = 0; i < amount; i += WEBHOOK_BATCH) {
             const batchSize = Math.min(WEBHOOK_BATCH, amount - i);
@@ -103,49 +145,44 @@ module.exports = {
             await Promise.allSettled(promises);
             sent += batchSize;
             
-            // MINIMAL DELAY: 20ms (ALMOST NONE)
+            // TINY DELAY: 15ms
             if (i + WEBHOOK_BATCH < amount) {
-              await new Promise(r => setTimeout(r, 20));
+              await new Promise(r => setTimeout(r, 15));
             }
           }
 
           await webhook.delete().catch(() => {});
+        }
+        
+      } else {
+        // 📨📨📨 DM FLOOD (ULTRA OPTIMIZED)
+        // Strategy: Send in waves, no waiting for responses
+        const DM_BATCH = 7; // Increased batch
+        const promises = [];
+        
+        for (let i = 0; i < amount; i++) {
+          // Queue message without waiting
+          promises.push(
+            target.send(text).catch(() => { failed++; return null; })
+          );
           
-        } catch (webhookError) {
-          // Fallback to direct messages if webhook fails
-          const BATCH_SIZE = 8;
-          for (let i = 0; i < amount; i += BATCH_SIZE) {
-            const batchSize = Math.min(BATCH_SIZE, amount - i);
-            const promises = Array(batchSize).fill().map(() => 
-              target.send(text).catch(() => { failed++; return null; })
-            );
-            
+          // Every 7 messages, process the batch
+          if (promises.length >= DM_BATCH) {
             await Promise.allSettled(promises);
-            sent += batchSize;
+            sent += promises.length;
+            promises.length = 0; // Clear array
             
-            if (i + BATCH_SIZE < amount) {
-              await new Promise(r => setTimeout(r, 100));
+            // MICRO DELAY: 60ms (optimized)
+            if (i < amount - 1) {
+              await new Promise(r => setTimeout(r, 60));
             }
           }
         }
         
-      } else {
-        // 📨 DM FLOOD (MAX SPEED FOR DMS)
-        const DM_BATCH = 5;
-        
-        for (let i = 0; i < amount; i += DM_BATCH) {
-          const batchSize = Math.min(DM_BATCH, amount - i);
-          const promises = Array(batchSize).fill().map(() => 
-            target.send(text).catch(() => { failed++; return null; })
-          );
-          
+        // Process any remaining promises
+        if (promises.length > 0) {
           await Promise.allSettled(promises);
-          sent += batchSize;
-          
-          // DM DELAY: 80ms (MINIMUM)
-          if (i + DM_BATCH < amount) {
-            await new Promise(r => setTimeout(r, 80));
-          }
+          sent += promises.length;
         }
       }
 
@@ -158,10 +195,10 @@ module.exports = {
         .setTitle('⚡ FLOOD COMPLETE')
         .setDescription(`**Target:** ${isDM ? 'User DMs' : `#${target.name || 'Channel'}`}`)
         .addFields(
-          { name: 'Method', value: isDM ? 'Direct Messages' : 'Webhook', inline: true },
           { name: 'Sent', value: `${sent}/${amount}`, inline: true },
           { name: 'Time', value: `${totalTime.toFixed(2)}s`, inline: true },
-          { name: 'Speed', value: `${speed}/sec`, inline: true }
+          { name: 'Speed', value: `${speed}/sec`, inline: true },
+          { name: 'Method', value: isDM ? 'Direct' : 'Multi-Webhook', inline: true }
         )
         .setTimestamp();
 
