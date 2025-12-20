@@ -3,6 +3,7 @@ const { colors } = require('../../config');
 
 module.exports = {
   name: 'avatar',
+  aliases: ['av', 'pfp'], // ✅ added aliases
   description: "Shows a user's avatar.",
   category: 'info',
   usage: '$avatar [@user]',
@@ -12,7 +13,11 @@ module.exports = {
       (args[0] && await client.users.fetch(args[0]).catch(() => null)) ||
       message.author;
 
-    const avatarUrl = user.displayAvatarURL({ size: 2048, extension: 'png', forceStatic: false });
+    const avatarUrl = user.displayAvatarURL({
+      size: 2048,
+      extension: 'png',
+      forceStatic: false
+    });
 
     const embed = new EmbedBuilder()
       .setColor(colors.avatar)
