@@ -161,51 +161,33 @@ client.once('ready', async () => {
       setTimeout(() => require('./commands/startgiveaway').endGiveaway(client, g.message_id), delay);
     }
   }
+  
+  // Initialize automod AFTER bot is ready
+  try {
+    const am = require('./handlers/automodHandler');
+    if (am && typeof am.initAutomod === 'function') {
+      am.initAutomod(client);
+      console.log('✅ Automod system initialized');
+    }
+  } catch (e) {
+    console.warn('Failed to init automod handler:', e.message);
+  }
 });
 
 // ===== MESSAGE CREATE (COMMAND HANDLER + AUTOMOD) =====
 if (!client.messageCreateHandlerAttached) {
   client.on('messageCreate', async (message) => {
+    // Handle commands first
     await handleMessage(client, message);
-
+    
+    // Then run automod check on EVERY message
     try {
-      const am = require('./handlers/automodHandler');
-      if (am && am.db && am.initAutomod) {
-        const softWords = am.db.prepare('SELECT word FROM blacklist_soft WHERE guild_id = ?').all(message.guild?.id || '');
-        for (const w of softWords) {
-          if (!w.word) continue;
-          if (message.content.toLowerCase().includes(w.word.toLowerCase())) {
-            await message.delete().catch(() => {});
-            break;
-          }
-        }
-
-        const hardWords = am.db.prepare('SELECT word FROM blacklist_hard WHERE guild_id = ?').all(message.guild?.id || '');
-        for (const w of hardWords) {
-          if (!w.word) continue;
-          if (message.content.toLowerCase().includes(w.word.toLowerCase())) {
-            await message.delete().catch(() => {});
-
-            const member = await message.guild.members.fetch(message.author.id).catch(() => null);
-            if (member && !member.permissions.has(PermissionsBitField.Flags.Administrator) && member.moderatable) {
-              await member.timeout(15 * 60 * 1000, `Triggered hard blacklist word: ${w.word}`).catch(err => console.error('Timeout error:', err));
-            }
-
-            if (am.initAutomod) await am.initAutomod(client);
-            if (am.db) {
-              const automodModule = require('./handlers/automodHandler');
-              if (automodModule && automodModule.initAutomod) {
-                if (automodModule.automod && automodModule.automod.checkMessage) {
-                  await automodModule.automod.checkMessage(client, message).catch(() => {});
-                }
-              }
-            }
-            break;
-          }
-        }
+      // Check if automod is initialized
+      if (client.automod && client.automod.checkMessage) {
+        await client.automod.checkMessage(client, message);
       }
     } catch (e) {
-      console.error('Automod index.js error:', e);
+      console.error('Automod check error:', e.message);
     }
   });
   client.messageCreateHandlerAttached = true;
@@ -213,14 +195,6 @@ if (!client.messageCreateHandlerAttached) {
 
 // ===== LOAD COMMANDS =====
 loadCommands(client);
-
-// ===== AUTOMOD HANDLER INIT =====
-try {
-  const am = require('./handlers/automodHandler');
-  if (am && typeof am.initAutomod === 'function') am.initAutomod(client);
-} catch (e) {
-  console.warn('Failed to init automod handler (ignored):', e);
-}
 
 // ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
