@@ -75,6 +75,7 @@ const pendingActions = new Map();
 function setAutomodChannel(guildId, channelId) {
   db.prepare(`INSERT OR REPLACE INTO automod_channel (guild_id, channel_id) VALUES (?, ?)`).run(guildId, channelId);
 }
+
 function getAutomodChannel(guildId) {
   const r = db.prepare(`SELECT channel_id FROM automod_channel WHERE guild_id = ?`).get(guildId);
   return r?.channel_id || null;
@@ -83,9 +84,11 @@ function getAutomodChannel(guildId) {
 function addAlertTarget(guildId, type, id) {
   db.prepare(`INSERT OR IGNORE INTO automod_alert_list (guild_id, target_type, target_id) VALUES (?, ?, ?)`).run(guildId, type, id);
 }
+
 function removeAlertTarget(guildId, type, id) {
   db.prepare(`DELETE FROM automod_alert_list WHERE guild_id = ? AND target_type = ? AND target_id = ?`).run(guildId, type, id);
 }
+
 function listAlertTargets(guildId) {
   return db.prepare(`SELECT target_type, target_id FROM automod_alert_list WHERE guild_id = ?`).all(guildId);
 }
@@ -93,9 +96,11 @@ function listAlertTargets(guildId) {
 function addHardWord(guildId, word) {
   db.prepare(`INSERT OR IGNORE INTO blacklist_hard (guild_id, word) VALUES (?, ?)`).run(guildId, word.toLowerCase());
 }
+
 function removeHardWord(guildId, word) {
   db.prepare(`DELETE FROM blacklist_hard WHERE guild_id = ? AND word = ?`).run(guildId, word.toLowerCase());
 }
+
 function listHardWords(guildId) {
   return db.prepare(`SELECT word FROM blacklist_hard WHERE guild_id = ?`).all(guildId).map(r => r.word);
 }
@@ -103,9 +108,11 @@ function listHardWords(guildId) {
 function addSoftWord(guildId, word) {
   db.prepare(`INSERT OR IGNORE INTO blacklist_soft (guild_id, word) VALUES (?, ?)`).run(guildId, word.toLowerCase());
 }
+
 function removeSoftWord(guildId, word) {
   db.prepare(`DELETE FROM blacklist_soft WHERE guild_id = ? AND word = ?`).run(guildId, word.toLowerCase());
 }
+
 function listSoftWords(guildId) {
   return db.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guildId).map(r => r.word);
 }
@@ -136,7 +143,7 @@ function listWarns(guildId, userId) {
 }
 
 // ===== ALERT EMBED =====
-function buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId) {
+function buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId, channelId) {
   const embed = new EmbedBuilder()
     .setTitle('「 ✦ 𝐀𝐔𝐓𝐎𝐌𝐎𝐃 𝐀𝐋𝐄𝐑𝐓 ✦ 」')
     .setColor('#f43f5e')
@@ -144,7 +151,7 @@ function buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId) {
     .setDescription([
       `➤  **Target:** ${targetUser.tag}`,
       `➤  **Trigger:** \`${matchedWord}\``,
-      `➤  **Channel:** ${guild ? '<#${guild.systemChannelId || ''}>' : 'unknown'}`,
+      `➤  **Channel:** ${channelId ? `<#${channelId}>` : 'Unknown'}`,
       `➤  **Time:** <t:${Math.floor(Date.now() / 1000)}:R>`,
       '',
       `╰┈➤ **__Requirements:__** ${requirementRoleId ? `<@&${requirementRoleId}>` : '\`\`none\`\`'}`,
@@ -163,17 +170,17 @@ function isStaff(member) {
 }
 
 // ===== SEND ALERT =====
-async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirementRoleId = null) {
+async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirementRoleId = null, channelId = null) {
   try {
-    const channelId = getAutomodChannel(guild.id);
-    if (!channelId) {
+    const alertChannelId = getAutomodChannel(guild.id);
+    if (!alertChannelId) {
       console.log(`[Automod] No alert channel set for guild ${guild.id}`);
       return null;
     }
 
-    const channel = await client.channels.fetch(channelId).catch(() => null);
+    const channel = await client.channels.fetch(alertChannelId).catch(() => null);
     if (!channel) {
-      console.log(`[Automod] Could not find channel ${channelId} in guild ${guild.id}`);
+      console.log(`[Automod] Could not find channel ${alertChannelId} in guild ${guild.id}`);
       return null;
     }
 
@@ -182,7 +189,7 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, requirem
     const mentionRoles = entries.filter(e => e.target_type === 'role').map(e => `<@&${e.target_id}>`);
     const allMentions = [...mentionRoles, ...mentionUsers].join(' ');
 
-    const embed = buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId);
+    const embed = buildAlertEmbed(guild, targetUser, matchedWord, requirementRoleId, channelId);
 
     const sent = await channel.send({ content: allMentions || '\u200b', embeds: [embed] });
     console.log(`[Automod] Alert sent to ${channel.name} for ${targetUser.tag}`);
@@ -287,15 +294,15 @@ async function checkMessage(client, message) {
     if (!message.guild) return;
     if (!message.member) return;
     if (message.author.bot) return;
-    
+
     // ADMIN BYPASS - FIXED
     if (message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return;
     }
-    
+
     const guildId = message.guild.id;
     const content = (message.content || '').toLowerCase();
-    
+
     // Check soft words (delete only)
     const softWords = listSoftWords(guildId);
     for (const word of softWords) {
@@ -305,16 +312,16 @@ async function checkMessage(client, message) {
         return;
       }
     }
-    
+
     // Check hard words (delete + 15min timeout + alert)
     const hardWords = listHardWords(guildId);
     for (const word of hardWords) {
       if (word && content.includes(word.toLowerCase())) {
         console.log(`[Automod] Hard word "${word}" triggered by ${message.author.tag}`);
-        
+
         // Delete message
         await message.delete().catch(() => {});
-        
+
         // 15 MINUTE TIMEOUT (900,000 ms)
         if (message.member && message.member.moderatable) {
           try {
@@ -324,26 +331,26 @@ async function checkMessage(client, message) {
             console.error(`[Automod] Failed to timeout ${message.author.tag}:`, err.message);
           }
         }
-        
+
         // Send alert to channel
-        const alertSent = await sendAutomodAlert(client, message.guild, message.author, word, null);
+        const alertSent = await sendAutomodAlert(client, message.guild, message.author, word, null, message.channel.id);
         if (!alertSent) {
           console.log(`[Automod] Alert failed to send for ${message.author.tag}`);
         }
-        
+
         return;
       }
     }
-    
+
     // Check for Discord invites
     const inviteRegex = /(discord\.gg|discordapp\.com\/invite|discord\.com\/invite)\/[A-Za-z0-9]+/i;
     if (inviteRegex.test(message.content)) {
       await message.delete().catch(() => {});
       console.log(`[Automod] Invite link detected from ${message.author.tag}`);
-      
-      await sendAutomodAlert(client, message.guild, message.author, 'Discord Invite Link', null);
+
+      await sendAutomodAlert(client, message.guild, message.author, 'Discord Invite Link', null, message.channel.id);
     }
-    
+
   } catch (err) {
     console.error('[Automod] checkMessage error:', err);
   }
@@ -367,30 +374,41 @@ function initAutomod(client) {
     saveWarn: saveWarnRaw,
     listWarns,
     getWarnCount,
-    checkMessage // MAKE SURE THIS IS EXPOSED
+    checkMessage
   };
 
-  // Handle button interactions
+  // Handle button interactions (keep your existing code or add basic handler)
   client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton() && !interaction.isModalSubmit()) return;
     
-    // Your existing button/modal handling code here
-    // (Keep whatever you already have)
+    // Add your button/modal handling logic here if you have any
+    // For now, we'll just acknowledge to prevent unhandled interaction errors
+    if (interaction.isButton()) {
+      await interaction.deferUpdate().catch(() => {});
+    }
   });
 
   console.log('[Automod] System initialized - Admin bypass enabled, 15min timeouts');
+  return true;
 }
 
+// ===== EXPORTS =====
 module.exports = { 
   initAutomod, 
   db,
-  checkMessage, // Export this too
+  checkMessage,
   setAutomodChannel,
   getAutomodChannel,
+  addAlertTarget,
+  removeAlertTarget,
+  listAlertTargets,
   addHardWord,
   removeHardWord,
   listHardWords,
   addSoftWord,
   removeSoftWord,
-  listSoftWords
+  listSoftWords,
+  saveWarn: saveWarnRaw,
+  listWarns,
+  getWarnCount
 };
