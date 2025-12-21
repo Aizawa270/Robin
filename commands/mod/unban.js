@@ -1,5 +1,6 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { colors } = require('../../config');
+const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'unban',
@@ -35,6 +36,9 @@ module.exports = {
       if (!banInfo) return message.reply('That user is not banned or the ID is invalid.');
 
       await message.guild.bans.remove(userId, `Unbanned by ${message.author.tag}`);
+
+      // 🔹 Log to modstats
+      logModAction(client, message.guild.id, message.author.id, userId, 'unban', 'No reason provided');
 
       // 🔹 Fake pings
       const fakeUserPing = `<@${banInfo.user.id}>`;
