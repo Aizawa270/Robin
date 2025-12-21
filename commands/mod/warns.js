@@ -1,19 +1,8 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
-
-const WARN_FILE = path.join(__dirname, '../../warns.json');
-
-function loadWarnsFile() {
-  try {
-    return JSON.parse(fs.readFileSync(WARN_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
-}
 
 module.exports = {
   name: 'warns',
+  aliases: ['warnings'],
   description: 'Shows all warns for a user.',
   category: 'mod',
   usage: '$warns <@user|userID>',
@@ -37,93 +26,113 @@ module.exports = {
 
     if (!targetUser) return message.reply('User not found.');
 
-    const fakePingUser = `<@${targetUser.id}>`;
-
-    // ===== AUTOMOD DB PATH =====
+    // ===== GET ALL WARNS (AUTOMOD + FILE) =====
+    let allWarnings = [];
+    let totalCount = 0;
+    
     try {
+      // 1. Get automod warnings from SQLite
       if (client.automod && typeof client.automod.listWarns === 'function') {
-        const rows = client.automod.listWarns(message.guild.id, targetUser.id) || [];
-        const total =
-          typeof client.automod.getWarnCount === 'function'
-            ? client.automod.getWarnCount(message.guild.id, targetUser.id)
-            : rows.length;
-
-        if (!rows.length) return message.reply('User has no warns.');
-
-        const embed = new EmbedBuilder()
-          .setColor('#facc15')
-          .setTitle('User Warnings')
-          .setDescription(`Warnings for ${fakePingUser}`)
-          .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
-          .setTimestamp();
-
-        const slice = rows.slice(0, 10);
-
-        for (let i = 0; i < slice.length; i++) {
-          const w = slice[i];
-          const modPing = w.moderator_id ? `<@${w.moderator_id}>` : 'Unknown';
-          const date = w.timestamp
-            ? `<t:${Math.floor(new Date(w.timestamp).getTime() / 1000)}:f>`
-            : 'Unknown';
-
-          embed.addFields({
-            name: `Warn #${i + 1}`,
-            value:
-              `**Reason:** ${w.reason || 'No reason provided'}\n` +
-              `**By:** ${modPing}\n` +
-              `**Date:** ${date}`,
-            inline: false,
+        const automodWarns = client.automod.listWarns(message.guild.id, targetUser.id) || [];
+        automodWarns.forEach(warn => {
+          allWarnings.push({
+            reason: warn.reason || 'No reason provided',
+            moderator: warn.moderator_id ? `<@${warn.moderator_id}>` : 'System (Automod)',
+            timestamp: warn.timestamp,
+            source: 'automod'
           });
-        }
-
-        if (total > 10) {
-          embed.addFields({
-            name: 'More warnings',
-            value: `Total warns: **${total}**`,
-          });
-        }
-
-        return message.reply({ embeds: [embed] });
+        });
       }
+      
+      // 2. Get file warnings (legacy)
+      const fs = require('fs');
+      const path = require('path');
+      const WARN_FILE = path.join(__dirname, '../../warns.json');
+      
+      if (fs.existsSync(WARN_FILE)) {
+        try {
+          const warns = JSON.parse(fs.readFileSync(WARN_FILE, 'utf8'));
+          const userWarns = warns[targetUser.id] || [];
+          
+          userWarns.forEach(w => {
+            let modPing = 'Unknown';
+            if (w.moderator && w.moderator.includes('(')) {
+              const id = w.moderator.match(/\((\d+)\)/)?.[1];
+              if (id) modPing = `<@${id}>`;
+            }
+            
+            allWarnings.push({
+              reason: w.reason || 'No reason provided',
+              moderator: modPing,
+              timestamp: w.timestamp,
+              source: 'file'
+            });
+          });
+        } catch (fileErr) {
+          console.log('File warn load error:', fileErr.message);
+        }
+      }
+      
+      totalCount = allWarnings.length;
+      
+      // Sort by timestamp (newest first)
+      allWarnings.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      
     } catch (err) {
-      console.error('warns automod error:', err);
+      console.error('warns error:', err);
+      return message.reply('Error loading warnings.');
     }
 
-    // ===== FILE FALLBACK =====
-    const warns = loadWarnsFile();
-    const userWarns = warns[targetUser.id] || [];
+    // ===== SHOW RESULTS =====
+    if (totalCount === 0) {
+      const embed = new EmbedBuilder()
+        .setColor('#22c55e')
+        .setTitle('✅ No Warnings')
+        .setDescription(`**${targetUser.tag}** has no warnings.`)
+        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
+        .setFooter({ 
+          text: `Requested by ${message.author.tag}`,
+          iconURL: message.author.displayAvatarURL({ size: 64 })
+        })
+        .setTimestamp();
+      
+      return message.reply({ embeds: [embed] });
+    }
 
-    if (!userWarns.length) return message.reply('User has no warns.');
-
+    // ===== BUILD EMBED WITH WARNINGS =====
     const embed = new EmbedBuilder()
-      .setColor('#facc15')
-      .setTitle('User Warnings')
-      .setDescription(`Warnings for ${fakePingUser}`)
+      .setColor('#f59e0b')
+      .setTitle(`⚠️ ${targetUser.tag}'s Warnings`)
+      .setDescription(`Total warnings: **${totalCount}**`)
       .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
+      .setFooter({ 
+        text: `Requested by ${message.author.tag}`,
+        iconURL: message.author.displayAvatarURL({ size: 64 })
+      })
       .setTimestamp();
 
-    userWarns.slice(0, 10).forEach((w, i) => {
-      let modPing = 'Unknown';
-
-      if (w.moderator && w.moderator.includes('(')) {
-        const id = w.moderator.match(/\((\d+)\)/)?.[1];
-        if (id) modPing = `<@${id}>`;
-      }
-
+    // Add up to 5 most recent warnings
+    const recentWarns = allWarnings.slice(0, 5);
+    
+    for (let i = 0; i < recentWarns.length; i++) {
+      const warn = recentWarns[i];
+      const date = warn.timestamp 
+        ? `<t:${Math.floor(new Date(warn.timestamp).getTime() / 1000)}:R>`
+        : 'Unknown time';
+      
       embed.addFields({
-        name: `Warn #${i + 1}`,
-        value:
-          `**Reason:** ${w.reason}\n` +
-          `**By:** ${modPing}\n` +
-          `**Date:** <t:${Math.floor(new Date(w.timestamp).getTime() / 1000)}:f>`,
-        inline: false,
+        name: `Warning ${i + 1}`,
+        value: `**Reason:** ${warn.reason}\n**By:** ${warn.moderator}\n**When:** ${date}`,
+        inline: false
       });
-    });
+    }
 
-    if (userWarns.length > 10) {
+    // Add note if there are more warnings
+    if (totalCount > 5) {
       embed.addFields({
-        name: 'More warnings',
-        value: `Total warns: **${userWarns.length}**`,
+        name: '📝 Note',
+        value: `Showing 5 most recent warnings out of ${totalCount} total.`,
+        inline: false
       });
     }
 
