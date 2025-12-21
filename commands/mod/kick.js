@@ -1,5 +1,6 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { colors } = require('../../config');
+const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'kick',
@@ -53,6 +54,9 @@ module.exports = {
 
     try {
       await targetMember.kick(`${reason} (kicked by ${message.author.tag})`);
+
+      // 🔹 Log to modstats
+      logModAction(client, message.guild.id, message.author.id, targetUser.id, 'kick', reason);
 
       const fakeUserPing = `<@${targetUser.id}>`;
       const fakeModPing = `<@${message.author.id}>`;
