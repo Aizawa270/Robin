@@ -3,6 +3,7 @@ const { colors } = require('../../config');
 
 module.exports = {
   name: 'servericon',
+  aliases: ['sicon', 'serveravatar'],
   description: 'Shows the server icon.',
   category: 'info',
   usage: '$servericon',
@@ -18,9 +19,14 @@ module.exports = {
     }
 
     const embed = new EmbedBuilder()
-      .setColor(colors.servericon)
-      .setTitle('Server Icon')
-      .setImage(iconUrl);
+      .setColor(colors?.servericon || '#5865F2')
+      .setTitle(`${guild.name}'s Icon`)
+      .setImage(iconUrl)
+      .setFooter({ 
+        text: `Requested by ${message.author.tag}`,
+        iconURL: message.author.displayAvatarURL({ size: 64 })
+      })
+      .setTimestamp();
 
     await message.reply({ embeds: [embed] });
   },
