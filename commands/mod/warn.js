@@ -3,20 +3,33 @@ const fs = require('fs');
 const path = require('path');
 const { logModAction } = require('../../handlers/modstatsHelper');
 
-// Warns are stored in automod database, not JSON
-function getWarnsFromDB(client, guildId, userId) {
+// Path to your existing warns.json
+const WARN_FILE = path.join(__dirname, '../../warns.json');
+
+// Load existing warns from JSON
+function loadWarns() {
   try {
-    return client.automodDB.prepare(`
-      SELECT * FROM automod_warns 
-      WHERE guild_id = ? AND user_id = ?
-      ORDER BY timestamp DESC
-    `).all(guildId, userId);
-  } catch (error) {
-    console.error('Error getting warns from DB:', error);
-    return [];
+    if (fs.existsSync(WARN_FILE)) {
+      return JSON.parse(fs.readFileSync(WARN_FILE, 'utf8'));
+    }
+    return {};
+  } catch {
+    return {};
   }
 }
 
+// Save warns to JSON
+function saveWarns(data) {
+  try {
+    fs.writeFileSync(WARN_FILE, JSON.stringify(data, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error saving warns to JSON:', error);
+    return false;
+  }
+}
+
+// Add warn to SQLite database
 function addWarnToDB(client, guildId, userId, moderatorId, reason) {
   try {
     // Insert warn
@@ -38,7 +51,8 @@ function addWarnToDB(client, guildId, userId, moderatorId, reason) {
   }
 }
 
-function getWarnCount(client, guildId, userId) {
+// Get warn count from SQLite
+function getWarnCountFromDB(client, guildId, userId) {
   try {
     const row = client.automodDB.prepare(`
       SELECT count FROM automod_warn_counts 
@@ -52,6 +66,7 @@ function getWarnCount(client, guildId, userId) {
   }
 }
 
+// Clear warns from SQLite (for auto-ban)
 function clearWarnsFromDB(client, guildId, userId) {
   try {
     // Delete warns
@@ -107,16 +122,33 @@ module.exports = {
 
     const guildId = message.guild.id;
 
-    // Add warn to database
-    const success = addWarnToDB(client, guildId, targetUser.id, message.author.id, reason);
-    if (!success) {
+    // 1. ADD TO SQLITE DATABASE (for automod system)
+    const dbSuccess = addWarnToDB(client, guildId, targetUser.id, message.author.id, reason);
+    
+    if (!dbSuccess) {
       return message.reply('Failed to add warning to database.');
     }
 
-    // Get updated count
-    const warnCount = getWarnCount(client, guildId, targetUser.id);
+    // 2. ADD TO JSON FILE (for your existing warns.js)
+    const warns = loadWarns();
+    if (!warns[targetUser.id]) warns[targetUser.id] = [];
 
-    // 🔹 Log to modstats (warn action)
+    warns[targetUser.id].unshift({
+      reason: reason,
+      moderator: `${message.author.tag} (${message.author.id})`,
+      timestamp: new Date().toISOString(),
+    });
+
+    const jsonSuccess = saveWarns(warns);
+    
+    if (!jsonSuccess) {
+      console.warn('Failed to save warn to JSON file, but SQLite entry was successful.');
+    }
+
+    // Get total warn count (from SQLite for consistency)
+    const warnCount = getWarnCountFromDB(client, guildId, targetUser.id);
+
+    // 🔹 Log to modstats
     logModAction(client, guildId, message.author.id, targetUser.id, 'warn', reason);
 
     // AUTO BAN at 5 warns
@@ -124,18 +156,22 @@ module.exports = {
       try {
         await member.ban({ reason: `Reached 5 warns | ${reason}` });
         
-        // Clear warns after ban
+        // Clear warns from both systems after ban
         clearWarnsFromDB(client, guildId, targetUser.id);
+        
+        // Remove from JSON file
+        delete warns[targetUser.id];
+        saveWarns(warns);
         
         // 🔹 Log ban to modstats
         logModAction(client, guildId, 'AUTO-BAN-SYSTEM', targetUser.id, 'ban', `Auto-ban for reaching 5 warnings: ${reason}`);
 
         const banEmbed = new EmbedBuilder()
           .setColor('#ef4444')
-          .setTitle('⚠️ User Auto-Banned')
+          .setTitle('User Auto-Banned')
           .addFields(
             { name: 'User', value: `<@${targetUser.id}>`, inline: false },
-            { name: 'Reason', value: `Reached **5 warnings** (Automatic)`, inline: false },
+            { name: 'Reason', value: `Reached 5 warnings (Automatic)`, inline: false },
             { name: 'Warning Count', value: `5/5`, inline: false }
           )
           .setTimestamp();
