@@ -1,4 +1,5 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'unmute',
@@ -52,6 +53,9 @@ module.exports = {
 
     try {
       await member.timeout(null, `${reason} (unmuted by ${message.author.tag})`);
+
+      // 🔹 Log to modstats
+      logModAction(client, message.guild.id, message.author.id, targetUser.id, 'unmute', reason);
 
       // 🔹 Fake pings
       const fakeUserPing = `<@${targetUser.id}>`;
