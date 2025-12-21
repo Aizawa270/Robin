@@ -42,7 +42,7 @@ function listAlertTargets(guildId) {
 function addHardWord(guildId, word) {
   const lowerWord = word.toLowerCase();
   this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_hard (guild_id, word) VALUES (?, ?)`).run(guildId, lowerWord);
-  
+
   // Update cache
   if (!this.blacklistCache.has(guildId)) {
     this.blacklistCache.set(guildId, { hard: [], soft: [] });
@@ -51,20 +51,20 @@ function addHardWord(guildId, word) {
   if (!cache.hard.includes(lowerWord)) {
     cache.hard.push(lowerWord);
   }
-  
+
   return true;
 }
 
 function removeHardWord(guildId, word) {
   const lowerWord = word.toLowerCase();
   this.automodDB.prepare(`DELETE FROM blacklist_hard WHERE guild_id = ? AND word = ?`).run(guildId, lowerWord);
-  
+
   // Update cache
   if (this.blacklistCache.has(guildId)) {
     const cache = this.blacklistCache.get(guildId);
     cache.hard = cache.hard.filter(w => w !== lowerWord);
   }
-  
+
   return true;
 }
 
@@ -80,7 +80,7 @@ function listHardWords(guildId) {
 function addSoftWord(guildId, word) {
   const lowerWord = word.toLowerCase();
   this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_soft (guild_id, word) VALUES (?, ?)`).run(guildId, lowerWord);
-  
+
   // Update cache
   if (!this.blacklistCache.has(guildId)) {
     this.blacklistCache.set(guildId, { hard: [], soft: [] });
@@ -89,20 +89,20 @@ function addSoftWord(guildId, word) {
   if (!cache.soft.includes(lowerWord)) {
     cache.soft.push(lowerWord);
   }
-  
+
   return true;
 }
 
 function removeSoftWord(guildId, word) {
   const lowerWord = word.toLowerCase();
   this.automodDB.prepare(`DELETE FROM blacklist_soft WHERE guild_id = ? AND word = ?`).run(guildId, lowerWord);
-  
+
   // Update cache
   if (this.blacklistCache.has(guildId)) {
     const cache = this.blacklistCache.get(guildId);
     cache.soft = cache.soft.filter(w => w !== lowerWord);
   }
-  
+
   return true;
 }
 
@@ -140,6 +140,29 @@ function isStaff(member) {
          member.permissions.has(PermissionFlagsBits.Administrator);
 }
 
+// ===== MODSTATS LOGGING HELPER =====
+function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
+  try {
+    if (!client.modstatsDB) {
+      console.error('[ModStats] Database not available');
+      return false;
+    }
+
+    const timestamp = Date.now();
+    const stmt = client.modstatsDB.prepare(
+      'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    
+    stmt.run(guildId, moderatorId, targetId, actionType, reason || 'No reason provided', duration, timestamp);
+    
+    console.log(`[ModStats] Logged ${actionType} by ${moderatorId} on ${targetId}`);
+    return true;
+  } catch (error) {
+    console.error('[ModStats] Failed to log action:', error);
+    return false;
+  }
+}
+
 // ===== SEND ALERT =====
 async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelId = null) {
   try {
@@ -160,9 +183,27 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelI
     const mentionRoles = entries.filter(e => e.target_type === 'role').map(e => `<@&${e.target_id}>`);
     const allMentions = [...mentionRoles, ...mentionUsers].join(' ');
 
+    // 🔹 GHOST PING: Send mention then delete it
+    if (allMentions.trim()) {
+      try {
+        const pingMessage = await channel.send({ 
+          content: allMentions,
+          allowedMentions: { parse: ['users', 'roles'] }
+        });
+        
+        // Delete the ping message after 100ms (ghost ping)
+        setTimeout(() => {
+          pingMessage.delete().catch(() => {});
+        }, 100);
+      } catch (pingError) {
+        console.log('[Automod] Failed to send ghost ping:', pingError.message);
+      }
+    }
+
     const embed = buildAlertEmbed(guild, targetUser, matchedWord, channelId);
 
-    const sent = await channel.send({ content: allMentions || '\u200b', embeds: [embed] });
+    // Send embed without mentions (ghost ping already sent)
+    const sent = await channel.send({ embeds: [embed] });
     console.log(`[Automod] Alert sent to ${channel.name} for ${targetUser.tag}`);
 
     pendingActions.set(sent.id, {
@@ -339,6 +380,9 @@ async function checkMessage(message) {
             try {
               await message.member.timeout(15 * 60 * 1000, `Automod: Triggered "${word}"`);
               console.log(`[Automod] ${message.author.tag} timed out for 15 minutes`);
+              
+              // 🔹 Log mute to modstats (automod timeout)
+              logModAction(this, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'mute', `Automod: Triggered "${word}"`, '15m');
             } catch (err) {
               console.error(`[Automod] Failed to timeout ${message.author.tag}:`, err.message);
             }
@@ -385,10 +429,12 @@ async function handleModal(interaction) {
       const targetUserId = parts[2];
       const reason = interaction.fields.getTextInputValue('warn_reason');
 
-      // Save the warning to database
       const client = interaction.client;
+      const guildId = interaction.guildId;
+
+      // Save the warning to database
       client.automodDB.prepare(`INSERT INTO automod_warns (guild_id, user_id, moderator_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)`)
-        .run(interaction.guildId, targetUserId, interaction.user.id, reason || 'No reason provided', Date.now());
+        .run(guildId, targetUserId, interaction.user.id, reason || 'No reason provided', Date.now());
 
       // Update warn count
       const insert = client.automodDB.prepare(`
@@ -396,7 +442,10 @@ async function handleModal(interaction) {
         VALUES (?, ?, 1)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET count = automod_warn_counts.count + 1
       `);
-      insert.run(interaction.guildId, targetUserId);
+      insert.run(guildId, targetUserId);
+
+      // 🔹 Log automod warn to modstats
+      logModAction(client, guildId, interaction.user.id, targetUserId, 'warn', `AUTOMOD: ${reason || 'No reason provided'}`);
 
       // Update the alert message
       const originalMessage = await interaction.channel.messages.fetch(messageId).catch(() => null);
@@ -473,7 +522,11 @@ async function handleBanConfirmation(interaction) {
         const member = await guild.members.fetch(state.targetUserId).catch(() => null);
 
         if (member) {
-          await member.ban({ reason: `Automod alert: ${state.matchedWord}` });
+          const banReason = `Automod alert: ${state.matchedWord}`;
+          await member.ban({ reason: banReason });
+
+          // 🔹 Log automod ban to modstats
+          logModAction(interaction.client, state.guildId, interaction.user.id, state.targetUserId, 'ban', `AUTOMOD BAN: ${banReason}`);
 
           // Update the alert message
           const originalMessage = await interaction.channel.messages.fetch(messageId).catch(() => null);
