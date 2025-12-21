@@ -113,32 +113,33 @@ function getModLeaderboard(client, guildId, limit = 10) {
 }
 
 /**
- * Format duration for display
- * @param {string} durationStr - Duration string (1h, 30m, etc.)
- * @returns {string} Formatted duration
+ * Get all actions for a specific target user
+ * @param {Object} client - Discord client
+ * @param {string} guildId - Guild ID
+ * @param {string} targetId - Target user ID
+ * @param {number} limit - Max actions to return
+ * @returns {Array} Array of actions
  */
-function formatDuration(durationStr) {
-    if (!durationStr) return 'Permanent';
-    
-    const match = durationStr.match(/^(\d+)(s|m|h|d)$/i);
-    if (!match) return durationStr;
-    
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
-    
-    const units = {
-        s: 'seconds',
-        m: 'minutes',
-        h: 'hours',
-        d: 'days'
-    };
-    
-    return `${value} ${units[unit] || unit}`;
+function getTargetActions(client, guildId, targetId, limit = 20) {
+    try {
+        const actions = client.modstatsDB.prepare(`
+            SELECT action_type, moderator_id, reason, duration, timestamp
+            FROM modstats
+            WHERE guild_id = ? AND target_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        `).all(guildId, targetId, limit);
+
+        return actions;
+    } catch (error) {
+        console.error('[ModStats] Failed to get target actions:', error);
+        return [];
+    }
 }
 
 module.exports = {
     logModAction,
     getModStats,
     getModLeaderboard,
-    formatDuration
+    getTargetActions
 };
