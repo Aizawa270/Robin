@@ -64,7 +64,7 @@ function loadCommands(client) {
   }
 
   console.log(`✅ Loaded ${client.commands.size} commands. Broken: ${client.brokenCommands.length}`);
-  
+
   // Log broken commands for debugging
   if (client.brokenCommands.length > 0) {
     console.warn('Broken commands:');
@@ -97,8 +97,18 @@ function registerCommand(client, command, filePath = 'unknown') {
       client.aliases.set(alias.toLowerCase(), command);
     }
   }
-  
+
   console.log(`  ↳ Loaded: ${command.name} (${command.category})`);
+}
+
+// ===== PREFIX HELPER =====
+function getCurrentPrefix(client, guildId) {
+  try {
+    const prefix = client.getPrefix(guildId);
+    return prefix || '!'; // Default to ! if no prefix set
+  } catch {
+    return '!';
+  }
 }
 
 async function handleMessage(client, message) {
@@ -143,12 +153,17 @@ async function handleMessage(client, message) {
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!cmd) return;
 
+    // ✅ FIX: Attach prefix to message for commands to use
+    message.prefix = prefixUsed;
+    
     try { 
       await cmd.execute(client, message, parts); 
     } catch (err) {
       console.error(`❌ Prefixless error (${cmdName}):`, err);
+      // ✅ FIX: Use dynamic prefix in error message
+      const currentPrefix = getCurrentPrefix(client, message.guild?.id);
       try { 
-        await message.reply('Something went wrong while executing that command.'); 
+        await message.reply(`Something went wrong while executing that command. Use **${currentPrefix}help** for commands.`); 
       } catch {}
     }
     return;
@@ -164,12 +179,17 @@ async function handleMessage(client, message) {
   const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
   if (!cmd) return;
 
+  // ✅ FIX: Attach prefix to message for commands to use
+  message.prefix = prefixUsed;
+
   try { 
     await cmd.execute(client, message, args); 
   } catch (err) {
     console.error(`❌ Command execution error (${cmdName}):`, err);
+    // ✅ FIX: Use dynamic prefix in error message
+    const currentPrefix = getCurrentPrefix(client, message.guild?.id);
     try { 
-      await message.reply('Something went wrong while executing that command.'); 
+      await message.reply(`Something went wrong while executing that command. Use **${currentPrefix}help** for commands.`); 
     } catch {}
   }
 }
