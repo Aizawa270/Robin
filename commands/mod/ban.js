@@ -1,5 +1,6 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { colors } = require('../../config');
+const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'ban',
@@ -60,6 +61,9 @@ module.exports = {
       await message.guild.bans.create(targetUser.id, {
         reason: `${reason} (banned by ${message.author.tag})`,
       });
+
+      // 🔹 Log to modstats
+      logModAction(client, message.guild.id, message.author.id, targetUser.id, 'ban', reason);
 
       const fakeUserPing = `<@${targetUser.id}>`;
       const fakeModPing = `<@${message.author.id}>`;
