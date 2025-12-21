@@ -1,5 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
-const { getModStats, formatDuration } = require('../../handlers/modstatsHelper');
+const { getModStats } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'modstats',
@@ -18,7 +18,7 @@ module.exports = {
                            message.member.permissions.has('Administrator');
       
       if (!canViewOthers) {
-        return message.reply('You need **Moderate Members** permission to view other moderators\' stats.');
+        return message.reply('You need Moderate Members permission to view other moderators stats.');
       }
       
       const targetArg = args[0];
@@ -52,7 +52,7 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setColor('#8b5cf6')
-        .setTitle(`📊 Moderation Statistics`)
+        .setTitle(`Moderation Statistics`)
         .setDescription(`Statistics for **${targetUser.tag}**`)
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
@@ -64,7 +64,7 @@ module.exports = {
           { name: 'Kicks', value: `${stats.kicks}`, inline: true },
           { name: 'Mutes', value: `${stats.mutes}`, inline: true },
           { name: 'Unmutes', value: `${stats.unmutes}`, inline: true },
-          { name: 'Rank', value: 'Calculating...', inline: true }
+          { name: 'Rank', value: '...', inline: true }
         )
         .setFooter({ text: `Moderator ID: ${moderatorId}` })
         .setTimestamp();
@@ -84,19 +84,9 @@ module.exports = {
             if (targetUser) targetName = targetUser.username;
           } catch {}
           
-          const actionEmoji = {
-            'warn': '⚠️',
-            'warnremove': '✅',
-            'ban': '🔨',
-            'unban': '🔓',
-            'mute': '🔇',
-            'unmute': '🔊',
-            'kick': '👢'
-          }[action.action_type] || '📝';
-          
-          recentText += `${actionEmoji} **${action.action_type.toUpperCase()}** ${targetName} ${timeAgo}\n`;
+          recentText += `${action.action_type.toUpperCase()} ${targetName} ${timeAgo}\n`;
           if (action.reason && action.reason !== 'No reason provided') {
-            recentText += `   ↳ *${action.reason.substring(0, 50)}${action.reason.length > 50 ? '...' : ''}*\n`;
+            recentText += `   - ${action.reason.substring(0, 50)}${action.reason.length > 50 ? '...' : ''}\n`;
           }
         }
         
@@ -121,11 +111,8 @@ module.exports = {
         const rank = rankIndex + 1;
         const totalModerators = leaderboard.length;
         embed.fields[8].value = `#${rank}/${totalModerators}`;
-        
-        // Add percentile
-        const percentile = Math.round((1 - (rank / totalModerators)) * 100);
-        if (percentile >= 90) embed.fields[8].value += ` 🏆`;
-        else if (percentile >= 75) embed.fields[8].value += ` ⭐`;
+      } else {
+        embed.fields[8].value = 'Not ranked';
       }
 
       await message.reply({ embeds: [embed] });
