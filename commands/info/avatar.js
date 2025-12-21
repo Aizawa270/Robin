@@ -3,7 +3,7 @@ const { colors } = require('../../config');
 
 module.exports = {
   name: 'avatar',
-  aliases: ['av', 'pfp'], // ✅ added aliases
+  aliases: ['av', 'pfp'],
   description: "Shows a user's avatar.",
   category: 'info',
   usage: '$avatar [@user]',
@@ -20,11 +20,12 @@ module.exports = {
     });
 
     const embed = new EmbedBuilder()
-      .setColor(colors.avatar)
+      .setColor(colors.avatar || '#5865F2') // fallback color
       .setTitle('User Avatar')
       .setDescription(`${user}`)
       .setImage(avatarUrl)
-      .setFooter({ text: `${user.tag}` });
+      .setFooter({ text: `Requested by ${message.author.tag}` }) // footer shows who requested
+      .setTimestamp(); // timestamp at bottom
 
     await message.reply({ embeds: [embed] });
   },
