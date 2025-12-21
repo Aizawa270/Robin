@@ -52,6 +52,63 @@ const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
+// ===== AUTOMOD DATABASE (FIXED) =====
+const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
+client.automodDB = automodDB;
+
+// Create automod tables
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS automod_channel (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT
+  )
+`).run();
+
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS automod_alert_list (
+    guild_id TEXT,
+    target_type TEXT,
+    target_id TEXT,
+    PRIMARY KEY (guild_id, target_type, target_id)
+  )
+`).run();
+
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS blacklist_hard (
+    guild_id TEXT,
+    word TEXT,
+    PRIMARY KEY (guild_id, word)
+  )
+`).run();
+
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS blacklist_soft (
+    guild_id TEXT,
+    word TEXT,
+    PRIMARY KEY (guild_id, word)
+  )
+`).run();
+
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS automod_warns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT,
+    user_id TEXT,
+    moderator_id TEXT,
+    reason TEXT,
+    timestamp INTEGER
+  )
+`).run();
+
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS automod_warn_counts (
+    guild_id TEXT,
+    user_id TEXT,
+    count INTEGER DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+  )
+`).run();
+
 // ===== MEMORY MAPS =====
 client.afk = new Map();
 client.snipes = new Map();
@@ -59,6 +116,9 @@ client.snipesImage = new Map();
 client.edits = new Map();
 client.reactionSnipes = new Map();
 client.giveaways = new Map();
+
+// ===== BLACKLIST CACHE =====
+client.blacklistCache = new Map();
 
 // ===== IMPORT AUTOMOD EARLY =====
 let automodModule;
@@ -161,7 +221,22 @@ client.getPrefix = (guildId) => {
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // Initialize automod IMMEDIATELY when bot is ready
+  // ===== LOAD BLACKLIST CACHE =====
+  console.log('[Blacklist] Loading cache from database...');
+  const guilds = client.automodDB.prepare(`SELECT DISTINCT guild_id FROM blacklist_hard UNION SELECT DISTINCT guild_id FROM blacklist_soft`).all();
+  
+  for (const { guild_id } of guilds) {
+    const hardWords = client.automodDB.prepare(`SELECT word FROM blacklist_hard WHERE guild_id = ?`).all(guild_id).map(r => r.word);
+    const softWords = client.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guild_id).map(r => r.word);
+    
+    client.blacklistCache.set(guild_id, {
+      hard: hardWords,
+      soft: softWords
+    });
+  }
+  console.log(`[Blacklist] Cache loaded for ${guilds.length} guilds`);
+
+  // ===== INIT AUTOMOD =====
   if (automodModule && typeof automodModule.initAutomod === 'function') {
     try {
       automodModule.initAutomod(client);
@@ -171,7 +246,7 @@ client.once('ready', async () => {
     }
   }
 
-  // Load giveaways
+  // ===== LOAD GIVEAWAYS =====
   const all = client.giveawayDB.prepare('SELECT * FROM giveaways').all();
   for (const g of all) {
     const delay = g.end_timestamp - Date.now();
@@ -191,17 +266,9 @@ if (!client.messageCreateHandlerAttached) {
 
     // Then run automod check on EVERY message
     try {
-      // If automod isn't initialized yet, try to initialize it NOW
-      if (!client.automod || !client.automod.checkMessage) {
-        if (automodModule && typeof automodModule.initAutomod === 'function') {
-          automodModule.initAutomod(client);
-          console.log('[Automod] Initialized via message event');
-        }
-      }
-      
       // Now run the automod check
       if (client.automod && client.automod.checkMessage) {
-        await client.automod.checkMessage(client, message);
+        await client.automod.checkMessage(message);
       }
     } catch (e) {
       console.error('Automod check error:', e.message);
