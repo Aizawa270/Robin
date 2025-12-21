@@ -109,6 +109,34 @@ automodDB.prepare(`
   )
 `).run();
 
+// ===== MODSTATS DATABASE (NEW) =====
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS modstats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    moderator_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    reason TEXT,
+    duration TEXT,
+    timestamp INTEGER NOT NULL
+  )
+`).run();
+
+// Create indexes for faster queries
+automodDB.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_modstats_moderator 
+  ON modstats (guild_id, moderator_id)
+`).run();
+
+automodDB.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_modstats_target 
+  ON modstats (guild_id, target_id)
+`).run();
+
+// Store reference for easy access
+client.modstatsDB = automodDB;
+
 // ===== MEMORY MAPS =====
 client.afk = new Map();
 client.snipes = new Map();
@@ -224,11 +252,11 @@ client.once('ready', async () => {
   // ===== LOAD BLACKLIST CACHE =====
   console.log('[Blacklist] Loading cache from database...');
   const guilds = client.automodDB.prepare(`SELECT DISTINCT guild_id FROM blacklist_hard UNION SELECT DISTINCT guild_id FROM blacklist_soft`).all();
-  
+
   for (const { guild_id } of guilds) {
     const hardWords = client.automodDB.prepare(`SELECT word FROM blacklist_hard WHERE guild_id = ?`).all(guild_id).map(r => r.word);
     const softWords = client.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guild_id).map(r => r.word);
-    
+
     client.blacklistCache.set(guild_id, {
       hard: hardWords,
       soft: softWords
@@ -256,6 +284,9 @@ client.once('ready', async () => {
       setTimeout(() => require('./commands/startgiveaway').endGiveaway(client, g.message_id), delay);
     }
   }
+
+  // ===== INIT MODSTATS =====
+  console.log('✅ ModStats system ready');
 });
 
 // ===== MESSAGE CREATE (COMMAND HANDLER + AUTOMOD) =====
