@@ -56,14 +56,8 @@ module.exports = {
           if (user) username = user.username;
         } catch {}
         
-        // Add medal emoji for top 3
-        let medal = '';
-        if (rank === 1) medal = '🥇 ';
-        else if (rank === 2) medal = '🥈 ';
-        else if (rank === 3) medal = '🥉 ';
-        
-        leaderboardText += `${medal}**${rank}. ${username}**\n`;
-        leaderboardText += `   Total: **${mod.total_actions}** `;
+        leaderboardText += `${rank}. **${username}**\n`;
+        leaderboardText += `   Total: ${mod.total_actions} | `;
         
         // Show top 3 action types
         const actions = [
@@ -83,7 +77,7 @@ module.exports = {
           .slice(0, 3);
         
         if (topActions.length > 0) {
-          leaderboardText += `| ${topActions.map(a => `${a.name}: ${a.count}`).join(' | ')}\n`;
+          leaderboardText += `${topActions.map(a => `${a.name}: ${a.count}`).join(' | ')}\n`;
         } else {
           leaderboardText += '\n';
         }
@@ -95,8 +89,8 @@ module.exports = {
       
       const embed = new EmbedBuilder()
         .setColor('#3b82f6')
-        .setTitle(`🏆 Moderation Leaderboard`)
-        .setDescription(`**Server:** ${message.guild.name}\n**Page:** ${page}/${totalPages}\n\n${leaderboardText}`)
+        .setTitle(`Moderation Leaderboard`)
+        .setDescription(`Server: ${message.guild.name}\nPage: ${page}/${totalPages}\n\n${leaderboardText}`)
         .setFooter({ 
           text: `Total Moderators: ${totalModerators} • Use ${message.prefix || '$'}modstatslb <page> to view more`,
           iconURL: message.guild.iconURL()
