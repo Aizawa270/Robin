@@ -1,4 +1,5 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { logModAction } = require('../../handlers/modstatsHelper');
 
 // parse duration strings like "10s", "5m", "2h", "1d"
 function parseDuration(str) {
@@ -80,6 +81,9 @@ module.exports = {
 
     try {
       await member.timeout(durationMs, `${reason} (muted by ${message.author.tag})`);
+
+      // 🔹 Log to modstats
+      logModAction(client, message.guild.id, message.author.id, targetUser.id, 'mute', reason, durationArg);
 
       // 🔹 Fake pings for embed
       const fakeUserPing = `<@${targetUser.id}>`;
