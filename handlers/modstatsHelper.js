@@ -22,9 +22,9 @@ function logModAction(client, guildId, moderatorId, targetId, actionType, reason
         const stmt = client.modstatsDB.prepare(
             'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
         );
-        
+
         stmt.run(guildId, moderatorId, targetId, actionType, reason || 'No reason provided', duration, timestamp);
-        
+
         console.log(`[ModStats] Logged ${actionType} by ${moderatorId} on ${targetId}`);
         return true;
     } catch (error) {
@@ -79,13 +79,14 @@ function getModStats(client, guildId, moderatorId) {
 }
 
 /**
- * Get moderation leaderboard for a guild
+ * Get moderation leaderboard for a guild with pagination
  * @param {Object} client - Discord client
  * @param {string} guildId - Guild ID
  * @param {number} limit - Number of top moderators to return
+ * @param {number} offset - Offset for pagination
  * @returns {Array} Array of moderator stats
  */
-function getModLeaderboard(client, guildId, limit = 10) {
+function getModLeaderboard(client, guildId, limit = 10, offset = 0) {
     try {
         const leaderboard = client.modstatsDB.prepare(`
             SELECT 
@@ -102,13 +103,34 @@ function getModLeaderboard(client, guildId, limit = 10) {
             WHERE guild_id = ?
             GROUP BY moderator_id
             ORDER BY total_actions DESC
-            LIMIT ?
-        `).all(guildId, limit);
+            LIMIT ? OFFSET ?
+        `).all(guildId, limit, offset);
 
         return leaderboard;
     } catch (error) {
         console.error('[ModStats] Failed to get leaderboard:', error);
         return [];
+    }
+}
+
+/**
+ * Get total number of moderators with actions
+ * @param {Object} client - Discord client
+ * @param {string} guildId - Guild ID
+ * @returns {number} Total moderators count
+ */
+function getTotalModerators(client, guildId) {
+    try {
+        const result = client.modstatsDB.prepare(`
+            SELECT COUNT(DISTINCT moderator_id) as count 
+            FROM modstats 
+            WHERE guild_id = ?
+        `).get(guildId);
+        
+        return result ? result.count : 0;
+    } catch (error) {
+        console.error('[ModStats] Failed to get total moderators:', error);
+        return 0;
     }
 }
 
@@ -141,5 +163,6 @@ module.exports = {
     logModAction,
     getModStats,
     getModLeaderboard,
+    getTotalModerators,  // ADD THIS EXPORT
     getTargetActions
 };
