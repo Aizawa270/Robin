@@ -1,5 +1,4 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { colors } = require('../../config');
 const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
@@ -16,16 +15,17 @@ module.exports = {
     }
 
     if (!args.length) {
-      const embed = new EmbedBuilder()
-        .setColor(colors.roleinfo || '#fde047')
-        .setTitle('Ban Command Usage')
-        .setDescription(
+      // ✅ USE message.createEmbed() - NOT message.helper.createEmbed()
+      const embed = message.createEmbed({
+        title: 'Ban Command Usage',
+        description: 
           '**Usage:**\n' +
           '`$ban <@user|userID> [reason]`\n\n' +
           '**Examples:**\n' +
           '`$ban @User spamming`\n' +
-          '`$ban 123456789012345678 breaking rules`'
-        );
+          '`$ban 123456789012345678 breaking rules`',
+        footer: `Use ${message.getPrefix()}help for more info`
+      });
       return message.reply({ embeds: [embed] });
     }
 
@@ -68,21 +68,32 @@ module.exports = {
       const fakeUserPing = `<@${targetUser.id}>`;
       const fakeModPing = `<@${message.author.id}>`;
 
-      const embed = new EmbedBuilder()
-        .setColor('#ef4444')
-        .setTitle('User Banned')
-        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
-        .addFields(
+      // ✅ USE message.createEmbed() - NOT message.helper.createEmbed()
+      const embed = message.createEmbed({
+        title: 'User Banned',
+        thumbnail: targetUser.displayAvatarURL({ size: 1024 }),
+        fields: [
           { name: 'User', value: fakeUserPing, inline: false },
           { name: 'Banned by', value: fakeModPing, inline: false },
           { name: 'Reason', value: reason, inline: false }
-        )
-        .setTimestamp();
+        ],
+        footer: `Banned by ${message.author.tag}`
+      });
 
       await message.reply({ embeds: [embed] });
     } catch (err) {
       console.error('Ban command error:', err);
-      await message.reply('Failed to ban the user.');
+      
+      // ✅ USE message.createEmbed() - NOT message.helper.createEmbed()
+      const errorEmbed = message.createEmbed({
+        title: 'Failed to Ban User',
+        description: 'There was an error trying to ban the user.',
+        fields: [
+          { name: 'Error', value: err.message.substring(0, 100), inline: false }
+        ]
+      });
+      
+      await message.reply({ embeds: [errorEmbed] });
     }
   },
 };
