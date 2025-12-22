@@ -148,7 +148,7 @@ async function handleMessage(client, message) {
   const isPrefixed = content.startsWith(prefixUsed);
 
   // ===== PREFIXLESS =====
-  if (!isPrefixed && client.prefixless?.has(message.author.id)) {
+if (!isPrefixed && client.prefixless?.has(message.author.id)) {
     const parts = content.split(/\s+/);
     const cmdName = parts.shift().toLowerCase();
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
@@ -157,42 +157,49 @@ async function handleMessage(client, message) {
     // ✅ FIX: Attach prefix to message for commands to use
     message.prefix = prefixUsed;
     
+    // ✅ INJECT HELPER INTO MESSAGE
+    message.getPrefix = () => universalHelper.getDynamicPrefix(client, message);
+    message.fixText = (text) => universalHelper.fixPrefixes(text, message.prefix);
+    message.createEmbed = (options) => universalHelper.createEmbed(client, message, cmd.name, options);
+
     try { 
-      await cmd.execute(client, message, parts); 
+        await cmd.execute(client, message, parts); 
     } catch (err) {
-      console.error(`❌ Prefixless error (${cmdName}):`, err);
-      // ✅ FIX: Use dynamic prefix in error message
-      const currentPrefix = getCurrentPrefix(client, message.guild?.id);
-      try { 
-        await message.reply(`Something went wrong while executing that command. Use **${currentPrefix}help** for commands.`); 
-      } catch {}
+        console.error(`❌ Prefixless error (${cmdName}):`, err);
+        const currentPrefix = getCurrentPrefix(client, message.guild?.id);
+        try { 
+            await message.reply(`Something went wrong while executing that command. Use **${currentPrefix}help** for commands.`); 
+        } catch {}
     }
     return;
-  }
+}
 
-  // ===== PREFIXED =====
-  if (!isPrefixed) return;
+ // ===== PREFIXED =====
+if (!isPrefixed) return;
 
-  const args = content.slice(prefixUsed.length).trim().split(/\s+/);
-  const cmdName = args.shift()?.toLowerCase();
-  if (!cmdName) return;
+const args = content.slice(prefixUsed.length).trim().split(/\s+/);
+const cmdName = args.shift()?.toLowerCase();
+if (!cmdName) return;
 
-  const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
-  if (!cmd) return;
+const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
+if (!cmd) return;
 
-  // ✅ FIX: Attach prefix to message for commands to use
-  message.prefix = prefixUsed;
+// ✅ FIX: Attach prefix to message for commands to use
+message.prefix = prefixUsed;
 
-  try { 
+// ✅ INJECT HELPER INTO MESSAGE
+message.getPrefix = () => universalHelper.getDynamicPrefix(client, message);
+message.fixText = (text) => universalHelper.fixPrefixes(text, message.prefix);
+message.createEmbed = (options) => universalHelper.createEmbed(client, message, cmd.name, options);
+
+try { 
     await cmd.execute(client, message, args); 
-  } catch (err) {
+} catch (err) {
     console.error(`❌ Command execution error (${cmdName}):`, err);
-    // ✅ FIX: Use dynamic prefix in error message
     const currentPrefix = getCurrentPrefix(client, message.guild?.id);
     try { 
-      await message.reply(`Something went wrong while executing that command. Use **${currentPrefix}help** for commands.`); 
+        await message.reply(`Something went wrong while executing that command. Use **${currentPrefix}help** for commands.`); 
     } catch {}
-  }
 }
 
 module.exports = { loadCommands, handleMessage };
