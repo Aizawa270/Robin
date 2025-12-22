@@ -353,51 +353,60 @@ async function checkMessage(message) {
     const guildId = message.guild.id;
     const content = (message.content || '').toLowerCase();
 
-    // Check soft words (delete only) - using cache
-    if (this.blacklistCache && this.blacklistCache.has(guildId)) {
-      const softWords = this.blacklistCache.get(guildId).soft;
-      for (const word of softWords) {
-        if (word && content.includes(word)) {
-          await message.delete().catch(() => {});
-          console.log(`[Automod] Soft word "${word}" triggered by ${message.author.tag}`);
-          return;
-        }
+    
+// Check soft words (delete only) - using cache with word boundaries
+if (this.blacklistCache && this.blacklistCache.has(guildId)) {
+  const softWords = this.blacklistCache.get(guildId).soft;
+  for (const word of softWords) {
+    if (word) {
+      // Use regex with word boundary to match whole words only
+      const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (regex.test(content)) {
+        await message.delete().catch(() => {});
+        console.log(`[Automod] Soft word "${word}" triggered by ${message.author.tag}`);
+        return;
       }
     }
+  }
+}
 
-    // Check hard words (delete + 15min timeout + alert) - using cache
-    if (this.blacklistCache && this.blacklistCache.has(guildId)) {
-      const hardWords = this.blacklistCache.get(guildId).hard;
-      for (const word of hardWords) {
-        if (word && content.includes(word)) {
-          console.log(`[Automod] Hard word "${word}" triggered by ${message.author.tag}`);
+// Check hard words (delete + 15min timeout + alert) - using cache with word boundaries
+if (this.blacklistCache && this.blacklistCache.has(guildId)) {
+  const hardWords = this.blacklistCache.get(guildId).hard;
+  for (const word of hardWords) {
+    if (word) {
+      // Use regex with word boundary to match whole words only
+      const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (regex.test(content)) {
+        console.log(`[Automod] Hard word "${word}" triggered by ${message.author.tag}`);
 
-          // Delete message
-          await message.delete().catch(() => {});
+        // Delete message
+        await message.delete().catch(() => {});
 
-          // 15 MINUTE TIMEOUT (900,000 ms)
-          if (message.member && message.member.moderatable) {
-            try {
-              await message.member.timeout(15 * 60 * 1000, `Automod: Triggered "${word}"`);
-              console.log(`[Automod] ${message.author.tag} timed out for 15 minutes`);
-              
-              // 🔹 Log mute to modstats (automod timeout)
-              logModAction(this, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'mute', `Automod: Triggered "${word}"`, '15m');
-            } catch (err) {
-              console.error(`[Automod] Failed to timeout ${message.author.tag}:`, err.message);
-            }
+        // 15 MINUTE TIMEOUT (900,000 ms)
+        if (message.member && message.member.moderatable) {
+          try {
+            await message.member.timeout(15 * 60 * 1000, `Automod: Triggered "${word}"`);
+            console.log(`[Automod] ${message.author.tag} timed out for 15 minutes`);
+
+            // 🔹 Log mute to modstats (automod timeout)
+            logModAction(this, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'mute', `Automod: Triggered "${word}"`, '15m');
+          } catch (err) {
+            console.error(`[Automod] Failed to timeout ${message.author.tag}:`, err.message);
           }
-
-          // Send alert to channel
-          const alertSent = await sendAutomodAlert(this, message.guild, message.author, word, message.channel.id);
-          if (!alertSent) {
-            console.log(`[Automod] Alert failed to send for ${message.author.tag}`);
-          }
-
-          return;
         }
+
+        // Send alert to channel
+        const alertSent = await sendAutomodAlert(this, message.guild, message.author, word, message.channel.id);
+        if (!alertSent) {
+          console.log(`[Automod] Alert failed to send for ${message.author.tag}`);
+        }
+
+        return;
       }
     }
+  }
+}
 
     // Check for Discord invites
     const inviteRegex = /(discord\.gg|discordapp\.com\/invite|discord\.com\/invite)\/[A-Za-z0-9]+/i;
