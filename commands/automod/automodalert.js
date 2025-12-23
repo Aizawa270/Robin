@@ -1,4 +1,3 @@
-// commands/automod/automodalert.js
 const { EmbedBuilder } = require('discord.js');
 
 module.exports = {
@@ -20,25 +19,26 @@ module.exports = {
     if (sub === 'list') {
       const rows = client.automod.listAlertTargets(message.guild.id);
       if (!rows.length) {
-        const embed = new EmbedBuilder()
-          .setTitle('📋 Automod Alert List')
-          .setColor('#60a5fa')
-          .setDescription('No alert targets configured.')
-          .setFooter({ text: 'Use $automodalert add to add targets' });
+        // ✅ USE message.createEmbed()
+        const embed = message.createEmbed({
+          title: '📋 Automod Alert List',
+          description: 'No alert targets configured.',
+          footer: { text: 'Use $automodalert add to add targets' }
+        });
         return message.reply({ embeds: [embed] });
       }
-      
+
       const users = [];
       const roles = [];
       for (const r of rows) {
         if (r.target_type === 'user') users.push(`<@${r.target_id}>`);
         else roles.push(`<@&${r.target_id}>`);
       }
-      
-      const embed = new EmbedBuilder()
-        .setTitle('📋 Automod Alert List')
-        .setColor('#60a5fa')
-        .addFields(
+
+      // ✅ USE message.createEmbed()
+      const embed = message.createEmbed({
+        title: '📋 Automod Alert List',
+        fields: [
           { 
             name: `👑 Roles (${roles.length})`, 
             value: roles.length ? roles.join(' ') : 'None', 
@@ -49,9 +49,10 @@ module.exports = {
             value: users.length ? users.join(' ') : 'None', 
             inline: false 
           }
-        )
-        .setFooter({ text: `Total: ${rows.length} targets` });
-      
+        ],
+        footer: { text: `Total: ${rows.length} targets` }
+      });
+
       return message.reply({ embeds: [embed] });
     }
 
@@ -69,46 +70,46 @@ module.exports = {
 
     if (sub === 'add') {
       client.automod.addAlertTarget(message.guild.id, type, id);
-      
-      const embed = new EmbedBuilder()
-        .setTitle('✅ Alert Target Added')
-        .setColor('#22c55e')
-        .addFields(
+
+      // ✅ USE message.createEmbed()
+      const embed = message.createEmbed({
+        title: '✅ Alert Target Added',
+        fields: [
           { name: 'Type', value: isRole ? 'Role' : 'User', inline: true },
           { name: 'Target', value: isRole ? `\`@${name}\`` : `\`${name}\``, inline: true },
           { name: 'ID', value: `\`${id}\``, inline: true }
-        )
-        .setDescription(`**${isRole ? 'Role' : 'User'}** will now be mentioned in automod alerts.`)
-        .setFooter({ text: `Added by ${message.author.tag}` })
-        .setTimestamp();
-      
+        ],
+        description: `**${isRole ? 'Role' : 'User'}** will now be mentioned in automod alerts.`,
+        footer: { text: `Added by ${message.author.tag}` }
+      });
+
       // Add thumbnail for user
       if (!isRole) {
         embed.setThumbnail(target.displayAvatarURL({ size: 1024 }));
       }
-      
+
       return message.reply({ embeds: [embed] });
-      
+
     } else { // remove
       client.automod.removeAlertTarget(message.guild.id, type, id);
-      
-      const embed = new EmbedBuilder()
-        .setTitle('❌ Alert Target Removed')
-        .setColor('#ef4444')
-        .addFields(
+
+      // ✅ USE message.createEmbed()
+      const embed = message.createEmbed({
+        title: '❌ Alert Target Removed',
+        fields: [
           { name: 'Type', value: isRole ? 'Role' : 'User', inline: true },
           { name: 'Target', value: isRole ? `\`@${name}\`` : `\`${name}\``, inline: true },
           { name: 'ID', value: `\`${id}\``, inline: true }
-        )
-        .setDescription(`**${isRole ? 'Role' : 'User'}** will no longer be mentioned in automod alerts.`)
-        .setFooter({ text: `Removed by ${message.author.tag}` })
-        .setTimestamp();
-      
+        ],
+        description: `**${isRole ? 'Role' : 'User'}** will no longer be mentioned in automod alerts.`,
+        footer: { text: `Removed by ${message.author.tag}` }
+      });
+
       // Add thumbnail for user
       if (!isRole) {
         embed.setThumbnail(target.displayAvatarURL({ size: 1024 }));
       }
-      
+
       return message.reply({ embeds: [embed] });
     }
   },
