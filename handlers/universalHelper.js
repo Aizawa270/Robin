@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 
-const DEFAULT_COLOR = '#FFB6C1'; // Light pink
-const ROLES_INFO_COLOR = '#FFB6C1'; // Also light pink since you want all embeds light pink
+const DEFAULT_COLOR = '#FF69B4'; // Hot Pink (darker than FF6C1)
+const ROLES_INFO_COLOR = '#FF69B4'; // Also same color
 
 // Create embed with dynamic prefix
 function createEmbed(client, message, options = {}) {
@@ -9,7 +9,7 @@ function createEmbed(client, message, options = {}) {
     const prefix = client.getPrefix(message.guild?.id) || '!';
     
     const embed = new EmbedBuilder()
-        .setColor(DEFAULT_COLOR); // Always light pink
+        .setColor(DEFAULT_COLOR); // Hot pink
 
     // Helper to replace $ prefixes with current prefix
     const fixPrefixInText = (text) => {
@@ -56,30 +56,39 @@ function createEmbed(client, message, options = {}) {
     return embed;
 }
 
-// Patch reply method for auto-fixing
+// Patch reply method for auto-fixing embeds AND text
 function patchMessageReply(message) {
     if (!message || message._replyPatched) return;
     
     const originalReply = message.reply.bind(message);
+    const prefix = message.prefix || '!';
+    
+    // Helper to fix prefixes in any text
+    const fixText = (text) => {
+        if (typeof text !== 'string') return text;
+        return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
+    };
     
     message.reply = async function(content, options) {
+        // If content is a string (plain text), fix prefixes
+        if (typeof content === 'string') {
+            content = fixText(content);
+        }
+        // If content is an object with string content
+        else if (content && typeof content === 'object' && content.content) {
+            content.content = fixText(content.content);
+        }
+        
         // Fix embeds in content
         if (content && content.embeds) {
-            const prefix = message.prefix || '!';
-            
             content.embeds = content.embeds.map(embed => {
                 if (embed.data) {
                     const fixedEmbed = new EmbedBuilder(embed.data);
                     
-                    // Set light pink color
+                    // Set hot pink color
                     fixedEmbed.setColor(DEFAULT_COLOR);
                     
                     // Fix prefixes in text fields
-                    const fixText = (text) => {
-                        if (typeof text !== 'string') return text;
-                        return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
-                    };
-                    
                     if (embed.data.title) fixedEmbed.setTitle(fixText(embed.data.title));
                     if (embed.data.description) fixedEmbed.setDescription(fixText(embed.data.description));
                     if (embed.data.fields) {
