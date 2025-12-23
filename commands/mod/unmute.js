@@ -1,5 +1,4 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'unmute',
@@ -54,16 +53,16 @@ module.exports = {
     try {
       await member.timeout(null, `${reason} (unmuted by ${message.author.tag})`);
 
-      // 🔹 Log to modstats
-      logModAction(client, message.guild.id, message.author.id, targetUser.id, 'unmute', reason);
+      // 🔹 IMPORTANT: NO LOGGING FOR UNMUTES
+      console.log(`[Unmute] ${message.author.tag} unmuted ${targetUser.tag} - NOT logging to modstats`);
 
       // 🔹 Fake pings
       const fakeUserPing = `<@${targetUser.id}>`;
       const fakeModPing = `<@${message.author.id}>`;
 
       const embed = new EmbedBuilder()
-        .setColor('#22c55e') // green for unmute
-        .setTitle('User Unmuted')
+        .setColor('#22c55e')
+        .setTitle('✅ User Unmuted')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
           { name: 'User', value: fakeUserPing, inline: false },
