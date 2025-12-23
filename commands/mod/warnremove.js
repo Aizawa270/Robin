@@ -28,9 +28,6 @@ module.exports = {
         .setDescription(
           '**Usage:**\n' +
           '`$warnremove <@user|userID> <warnNumber> [reason]`\n\n' +
-          '**Examples:**\n' +
-          '`$warnremove @User 1 false positive`\n' +
-          '`$warnremove 123456789012345678 2 apology accepted`\n\n' +
           '**Note:** Use `$warns <user>` to see warn numbers.'
         );
       return message.reply({ embeds: [embed] });
@@ -67,80 +64,96 @@ module.exports = {
       const userJsonWarns = jsonWarns[userId] || [];
 
       const totalWarns = sqliteWarns.length + userJsonWarns.length;
-      
+
       if (totalWarns === 0) {
         return message.reply('This user has no warnings.');
       }
 
       // Check if index is valid
       if (warnIndex >= totalWarns) {
-        return message.reply(`Warn #${warnNumArg} not found. User has only ${totalWarns} warning(s).\nUse \`$warns ${targetUser.id}\` to see the list.`);
+        return message.reply(`Warn #${warnNumArg} not found. User has only ${totalWarns} warning(s).`);
       }
 
       let removedReason = 'Unknown reason';
-      let removedFrom = '';
-      
+      let removedModerator = 'Unknown';
+
       // Remove from SQLite if index is in SQLite range
       if (warnIndex < sqliteWarns.length) {
         const warnToRemove = sqliteWarns[warnIndex];
         removedReason = warnToRemove.reason || 'No reason';
-        removedFrom = 'SQLite database';
         
+        // Get moderator name if possible
+        try {
+          const mod = await client.users.fetch(warnToRemove.moderator_id).catch(() => null);
+          removedModerator = mod ? mod.tag : `ID: ${warnToRemove.moderator_id}`;
+        } catch {
+          removedModerator = `ID: ${warnToRemove.moderator_id}`;
+        }
+
         // Delete from SQLite
         client.automodDB.prepare(`DELETE FROM automod_warns WHERE id = ?`).run(warnToRemove.id);
-        
+
         // Update SQLite count
         const newSqliteCount = sqliteWarns.length - 1;
         client.automodDB.prepare(`
           INSERT OR REPLACE INTO automod_warn_counts (guild_id, user_id, count)
           VALUES (?, ?, ?)
         `).run(guildId, userId, newSqliteCount);
-        
+
       } else {
         // Remove from JSON (adjust index for JSON array)
         const jsonIndex = warnIndex - sqliteWarns.length;
         if (jsonIndex < userJsonWarns.length) {
           const warnToRemove = userJsonWarns[jsonIndex];
           removedReason = warnToRemove.reason || 'No reason';
-          removedFrom = 'JSON file';
-          
+          removedModerator = warnToRemove.moderator || 'Unknown';
+
           // Remove from JSON array
           userJsonWarns.splice(jsonIndex, 1);
           jsonWarns[userId] = userJsonWarns;
-          
+
           // If array is empty, delete the user entry
           if (userJsonWarns.length === 0) {
             delete jsonWarns[userId];
           }
-          
+
           // Save JSON file
           fs.writeFileSync(WARN_FILE, JSON.stringify(jsonWarns, null, 2));
         }
       }
 
+      // Get updated warn count for display
+      const updatedSqliteWarns = client.automodDB.prepare(`
+        SELECT COUNT(*) as count FROM automod_warns 
+        WHERE guild_id = ? AND user_id = ?
+      `).get(guildId, userId);
+      
+      const updatedJsonWarns = jsonWarns[userId] || [];
+      const updatedTotalWarns = (updatedSqliteWarns?.count || 0) + updatedJsonWarns.length;
+
       // 🔹 Log to modstats
       const modstatsReason = `Removed warn #${warnNumArg}: ${removedReason} | Reason: ${reason}`;
       logModAction(client, guildId, message.author.id, userId, 'warnremove', modstatsReason);
 
+      // Clean embed like warn.js
       const embed = new EmbedBuilder()
-        .setColor('#22c55e')
-        .setTitle('Warn Removed Successfully')
-        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
+        .setColor('#22c55e')  // Green color for removal
+        .setTitle('⚠️ Warn Removed')
         .addFields(
-          { name: 'User', value: `<@${userId}>`, inline: true },
-          { name: 'Removed from', value: removedFrom, inline: true },
-          { name: 'Removed by', value: `<@${message.author.id}>`, inline: true },
-          { name: 'Removed Warn Reason', value: removedReason.length > 200 ? removedReason.substring(0, 197) + '...' : removedReason, inline: false },
-          { name: 'Removal Reason', value: reason.length > 200 ? reason.substring(0, 197) + '...' : reason, inline: false }
+          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
+          { name: 'Removed by', value: `<@${message.author.id}>`, inline: false },
+          { name: 'Removed Warn Reason', value: removedReason, inline: false },
+          { name: 'Original Warned by', value: removedModerator, inline: false },
+          { name: 'Removal Reason', value: reason, inline: false },
+          { name: 'Remaining Warns', value: `${updatedTotalWarns}/5`, inline: false }
         )
-        .setFooter({ text: `Warn #${warnNumArg} removed` })
         .setTimestamp();
 
       await message.reply({ embeds: [embed] });
 
     } catch (error) {
       console.error('Warnremove command error:', error);
-      await message.reply(`Error: ${error.message}`);
+      await message.reply('Failed to remove warning.');
     }
   },
 };
