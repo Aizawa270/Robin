@@ -63,18 +63,18 @@ module.exports = {
             .setDisabled(page >= totalPages)
         );
 
-      const embed = new EmbedBuilder()
-        .setColor('#3b82f6')
-        .setTitle(`🏆 Moderation Leaderboard`)
-        .setDescription(`**Server:** ${message.guild.name}\n**Page:** ${page}/${totalPages}\n\n${leaderboardText}`)
-        .setFooter({ 
+      // ✅ USE message.createEmbed()
+      const embed = message.createEmbed({
+        title: `🏆 Moderation Leaderboard`,
+        description: `**Server:** ${message.guild.name}\n**Page:** ${page}/${totalPages}\n\n${leaderboardText}`,
+        footer: { 
           text: `Total Moderators: ${totalModerators}`,
           iconURL: message.guild.iconURL()
-        })
-        .setTimestamp();
+        }
+      });
 
       // Add author's rank if not on current page
-      if (message.author) {
+      if (message.author && client.modstatsDB) {
         const authorRank = client.modstatsDB.prepare(`
           WITH ranked AS (
             SELECT moderator_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) as rank
@@ -119,7 +119,7 @@ module.exports = {
           }
 
           await i.deferUpdate();
-          
+
           if (i.customId === 'modlb_prev' && page > 1) {
             page--;
           } else if (i.customId === 'modlb_next' && page < totalPages) {
@@ -163,7 +163,7 @@ module.exports = {
                 .setDisabled(page >= totalPages)
             );
 
-          const newEmbed = EmbedBuilder.from(embed)
+          const newEmbed = EmbedBuilder.from(embed.data)
             .setDescription(`**Server:** ${message.guild.name}\n**Page:** ${page}/${totalPages}\n\n${newText}`);
 
           await msg.edit({ 
