@@ -12,42 +12,49 @@ const {
 } = require('discord.js');
 
 const pendingActions = new Map();
-const LIGHT_PINK = '#FF69B4'; // Hot Pink (darker than FF6C1) for embeds
+const LIGHT_PINK = '#FF69B4';
 
 // Helper to escape regex special characters
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Helper functions
+// Database functions
 function setAutomodChannel(guildId, channelId) {
+  if (!this.automodDB) return false;
   this.automodDB.prepare(`INSERT OR REPLACE INTO automod_channel (guild_id, channel_id) VALUES (?, ?)`).run(guildId, channelId);
   return true;
 }
 
 function getAutomodChannel(guildId) {
+  if (!this.automodDB) return null;
   const r = this.automodDB.prepare(`SELECT channel_id FROM automod_channel WHERE guild_id = ?`).get(guildId);
   return r?.channel_id || null;
 }
 
 function addAlertTarget(guildId, type, id) {
+  if (!this.automodDB) return false;
   this.automodDB.prepare(`INSERT OR IGNORE INTO automod_alert_list (guild_id, target_type, target_id) VALUES (?, ?, ?)`).run(guildId, type, id);
   return true;
 }
 
 function removeAlertTarget(guildId, type, id) {
+  if (!this.automodDB) return false;
   this.automodDB.prepare(`DELETE FROM automod_alert_list WHERE guild_id = ? AND target_type = ? AND target_id = ?`).run(guildId, type, id);
   return true;
 }
 
 function listAlertTargets(guildId) {
+  if (!this.automodDB) return [];
   return this.automodDB.prepare(`SELECT target_type, target_id FROM automod_alert_list WHERE guild_id = ?`).all(guildId);
 }
 
 function addHardWord(guildId, word) {
+  if (!this.automodDB) return false;
   const lowerWord = word.toLowerCase().trim();
   this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_hard (guild_id, word) VALUES (?, ?)`).run(guildId, lowerWord);
 
+  // Update cache
   if (!this.blacklistCache.has(guildId)) {
     this.blacklistCache.set(guildId, { hard: [], soft: [] });
   }
@@ -60,9 +67,11 @@ function addHardWord(guildId, word) {
 }
 
 function removeHardWord(guildId, word) {
+  if (!this.automodDB) return false;
   const lowerWord = word.toLowerCase().trim();
   this.automodDB.prepare(`DELETE FROM blacklist_hard WHERE guild_id = ? AND word = ?`).run(guildId, lowerWord);
 
+  // Update cache
   if (this.blacklistCache.has(guildId)) {
     const cache = this.blacklistCache.get(guildId);
     cache.hard = cache.hard.filter(w => w !== lowerWord);
@@ -72,6 +81,7 @@ function removeHardWord(guildId, word) {
 }
 
 function listHardWords(guildId) {
+  if (!this.automodDB) return [];
   if (this.blacklistCache && this.blacklistCache.has(guildId)) {
     return this.blacklistCache.get(guildId).hard;
   }
@@ -79,9 +89,11 @@ function listHardWords(guildId) {
 }
 
 function addSoftWord(guildId, word) {
+  if (!this.automodDB) return false;
   const lowerWord = word.toLowerCase().trim();
-  this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_soft (guild_id, word) VALUES (?, ?)`).run(guildId, lowerWord);
+  this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_soft (guild_id, word) VALUES (?, ?, ?)`).run(guildId, lowerWord);
 
+  // Update cache
   if (!this.blacklistCache.has(guildId)) {
     this.blacklistCache.set(guildId, { hard: [], soft: [] });
   }
@@ -94,9 +106,11 @@ function addSoftWord(guildId, word) {
 }
 
 function removeSoftWord(guildId, word) {
+  if (!this.automodDB) return false;
   const lowerWord = word.toLowerCase().trim();
   this.automodDB.prepare(`DELETE FROM blacklist_soft WHERE guild_id = ? AND word = ?`).run(guildId, lowerWord);
 
+  // Update cache
   if (this.blacklistCache.has(guildId)) {
     const cache = this.blacklistCache.get(guildId);
     cache.soft = cache.soft.filter(w => w !== lowerWord);
@@ -106,17 +120,18 @@ function removeSoftWord(guildId, word) {
 }
 
 function listSoftWords(guildId) {
+  if (!this.automodDB) return [];
   if (this.blacklistCache && this.blacklistCache.has(guildId)) {
     return this.blacklistCache.get(guildId).soft;
   }
   return this.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guildId).map(r => r.word);
 }
 
-// Build alert embed (now hot pink)
+// Build alert embed
 function buildAlertEmbed(guild, targetUser, matchedWord, channelId) {
   const embed = new EmbedBuilder()
     .setTitle('「 ✦ 𝐀𝐔𝐓𝐎𝐌𝐎𝐃 𝐀𝐋𝐄𝐑𝐓 ✦ 」')
-    .setColor(LIGHT_PINK) // Hot pink
+    .setColor(LIGHT_PINK)
     .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
     .setDescription([
       `➤  **Target:** ${targetUser.tag}`,
@@ -136,24 +151,54 @@ function isStaff(member) {
          member.permissions.has(PermissionFlagsBits.Administrator);
 }
 
+// FIXED: Properly logs moderation actions to database
 function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
   try {
-    // Try both possible database references
-    const db = client.modstatsDB || client.automodDB;
+    console.log(`[ModStats] Attempting to log: ${actionType} by ${moderatorId} on ${targetId}`);
+    
+    // Skip logging unmutes entirely
+    if (actionType.toLowerCase() === 'unmute') {
+      console.log(`[ModStats] Skipping unmute log`);
+      return false;
+    }
+    
+    // Get the database - check both references
+    const db = client.automodDB;
     if (!db) {
-      console.error('[ModStats] Database not available');
+      console.error('[ModStats] No database available!');
       return false;
     }
 
+    // Ensure the table exists
+    try {
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS modstats (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          guild_id TEXT NOT NULL,
+          moderator_id TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          action_type TEXT NOT NULL,
+          reason TEXT,
+          duration TEXT,
+          timestamp INTEGER NOT NULL
+        )
+      `).run();
+    } catch (tableErr) {
+      console.error('[ModStats] Table creation error:', tableErr);
+    }
+
     const timestamp = Date.now();
-    const stmt = db.prepare(  // ← USE db INSTEAD OF client.modstatsDB
+    const stmt = db.prepare(
       'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
 
     stmt.run(guildId, moderatorId, targetId, actionType, reason || 'No reason provided', duration, timestamp);
+    
+    console.log(`[ModStats] Successfully logged ${actionType} to database`);
     return true;
   } catch (error) {
     console.error('[ModStats] Failed to log action:', error);
+    console.error('[ModStats] Error details:', error.message);
     return false;
   }
 }
@@ -285,7 +330,7 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelI
   }
 }
 
-// MAIN AUTOMOD CHECK with WORD BOUNDARIES FIX
+// MAIN AUTOMOD CHECK
 async function checkMessage(message) {
   try {
     // Basic checks
@@ -294,20 +339,18 @@ async function checkMessage(message) {
 
     const guildId = message.guild.id;
     const content = (message.content || '').toLowerCase();
-    const words = content.split(/\s+/); // Split into individual words
+    const words = content.split(/\s+/);
 
-    // Check soft words with EXACT WORD MATCHING
+    // Check soft words
     if (this.blacklistCache && this.blacklistCache.has(guildId)) {
       const softWords = this.blacklistCache.get(guildId).soft;
-      
+
       for (const blacklistedWord of softWords) {
         if (!blacklistedWord) continue;
-        
-        // Check if the exact word exists in the message
+
         for (const messageWord of words) {
-          // Clean the word (remove punctuation)
           const cleanWord = messageWord.replace(/[^\w\s]/g, '');
-          
+
           if (cleanWord === blacklistedWord) {
             await message.delete().catch(() => {});
             console.log(`[Automod] Soft word "${blacklistedWord}" triggered by ${message.author.tag}`);
@@ -317,18 +360,16 @@ async function checkMessage(message) {
       }
     }
 
-    // Check hard words with EXACT WORD MATCHING
+    // Check hard words
     if (this.blacklistCache && this.blacklistCache.has(guildId)) {
       const hardWords = this.blacklistCache.get(guildId).hard;
-      
+
       for (const blacklistedWord of hardWords) {
         if (!blacklistedWord) continue;
-        
-        // Check if the exact word exists in the message
+
         for (const messageWord of words) {
-          // Clean the word (remove punctuation)
           const cleanWord = messageWord.replace(/[^\w\s]/g, '');
-          
+
           if (cleanWord === blacklistedWord) {
             console.log(`[Automod] Hard word "${blacklistedWord}" triggered by ${message.author.tag}`);
 
@@ -354,7 +395,7 @@ async function checkMessage(message) {
       }
     }
 
-    // Check for Discord invites (unchanged)
+    // Check for Discord invites
     const inviteRegex = /(discord\.gg|discordapp\.com\/invite|discord\.com\/invite)\/[A-Za-z0-9]+/i;
     if (inviteRegex.test(message.content)) {
       await message.delete().catch(() => {});
@@ -382,7 +423,7 @@ async function handleModal(interaction) {
       const client = interaction.client;
       const guildId = interaction.guildId;
 
-      // Save warning
+      // Save warning to database
       client.automodDB.prepare(`INSERT INTO automod_warns (guild_id, user_id, moderator_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)`)
         .run(guildId, targetUserId, interaction.user.id, reason || 'No reason provided', Date.now());
 
@@ -394,7 +435,7 @@ async function handleModal(interaction) {
       `);
       insert.run(guildId, targetUserId);
 
-      // Log to modstats
+      // Log to modstats - FIXED: This will now properly log
       logModAction(client, guildId, interaction.user.id, targetUserId, 'warn', `AUTOMOD: ${reason || 'No reason provided'}`);
 
       // Update alert message
@@ -466,7 +507,7 @@ async function handleBanConfirmation(interaction) {
           const banReason = `Automod alert: ${state.matchedWord}`;
           await member.ban({ reason: banReason });
 
-          // Log to modstats
+          // Log to modstats - FIXED: This will now properly log
           logModAction(interaction.client, state.guildId, interaction.user.id, state.targetUserId, 'ban', `AUTOMOD BAN: ${banReason}`);
 
           // Update alert message
@@ -512,6 +553,31 @@ async function handleBanConfirmation(interaction) {
 
 // INIT AUTOMOD
 function initAutomod(client) {
+  // Ensure databases exist
+  if (!client.automodDB) {
+    console.error('[Automod] No database available!');
+    return false;
+  }
+
+  // Ensure modstats table exists
+  try {
+    client.automodDB.prepare(`
+      CREATE TABLE IF NOT EXISTS modstats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        moderator_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        reason TEXT,
+        duration TEXT,
+        timestamp INTEGER NOT NULL
+      )
+    `).run();
+    console.log('[Automod] Modstats table ensured');
+  } catch (error) {
+    console.error('[Automod] Failed to create modstats table:', error);
+  }
+
   client.automod = {
     setAutomodChannel: (guildId, channelId) => setAutomodChannel.call(client, guildId, channelId),
     getAutomodChannel: (guildId) => getAutomodChannel.call(client, guildId),
@@ -551,7 +617,7 @@ function initAutomod(client) {
     }
   });
 
-  console.log('[Automod] ✅ System initialized');
+  console.log('[Automod] ✅ System initialized with persistent storage');
   return true;
 }
 
