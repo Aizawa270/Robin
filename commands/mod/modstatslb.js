@@ -28,7 +28,7 @@ module.exports = {
       // Use updated function with offset
       const leaderboard = getModLeaderboard(client, guildId, limit, offset);
 
-      // Build leaderboard text with vertical layout
+      // Build leaderboard text with vertical layout - REMOVE UNMUTES
       let leaderboardText = '';
       let rank = offset + 1;
 
@@ -43,6 +43,7 @@ module.exports = {
         leaderboardText += `Total Actions: ${mod.total_actions}\n`;
         leaderboardText += `Warns: ${mod.warns} | Bans: ${mod.bans} | Kicks: ${mod.kicks}\n`;
         leaderboardText += `Mutes: ${mod.mutes} | Unbans: ${mod.unbans} | Warn Removals: ${mod.warnremoves}\n`;
+        // REMOVED: leaderboardText += `Unmutes: ${mod.unmutes} | `;
         leaderboardText += `\n`;
 
         rank++;
@@ -65,7 +66,7 @@ module.exports = {
 
       // ✅ USE message.createEmbed()
       const embed = message.createEmbed({
-        title: `🏆 Moderation Leaderboard`,
+        title: `Moderation Leaderboard`,
         description: `**Server:** ${message.guild.name}\n**Page:** ${page}/${totalPages}\n\n${leaderboardText}`,
         footer: { 
           text: `Total Moderators: ${totalModerators}`,
@@ -74,8 +75,9 @@ module.exports = {
       });
 
       // Add author's rank if not on current page
-      if (message.author && client.modstatsDB) {
-        const authorRank = client.modstatsDB.prepare(`
+      const db = client.modstatsDB || client.automodDB;
+      if (message.author && db) {
+        const authorRank = db.prepare(`
           WITH ranked AS (
             SELECT moderator_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) as rank
             FROM modstats 
