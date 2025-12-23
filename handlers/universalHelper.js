@@ -1,77 +1,40 @@
 const { EmbedBuilder } = require('discord.js');
 
-const DEFAULT_COLOR = '#f472b6';
-const ROLES_INFO_COLOR = '#fde047';
+const DEFAULT_COLOR = '#FFB6C1'; // Light pink
+const ROLES_INFO_COLOR = '#FFB6C1'; // Also light pink since you want all embeds light pink
 
-// Store original EmbedBuilder
-const OriginalEmbedBuilder = EmbedBuilder;
+// Create embed with dynamic prefix
+function createEmbed(client, message, options = {}) {
+    // Get current prefix for this guild
+    const prefix = client.getPrefix(message.guild?.id) || '!';
+    
+    const embed = new EmbedBuilder()
+        .setColor(DEFAULT_COLOR); // Always light pink
 
-// Monkey patch EmbedBuilder globally
-function patchEmbedBuilder() {
-    // Create patched version
-    class PatchedEmbedBuilder extends OriginalEmbedBuilder {
-        constructor(data) {
-            super(data);
-            this._isRoleinfo = false;
-        }
-        
-        setColor(color) {
-            // If color is being set manually, track if it's roleinfo
-            if (color === ROLES_INFO_COLOR || (typeof color === 'string' && color.includes('fde047'))) {
-                this._isRoleinfo = true;
-            }
-            return super.setColor(color);
-        }
-    }
-    
-    // Replace global EmbedBuilder
-    require('discord.js').EmbedBuilder = PatchedEmbedBuilder;
-    return PatchedEmbedBuilder;
-}
-
-// Create prefix fixing wrapper
-function createUniversalEmbed(client, message, options = {}) {
-    const prefix = message.prefix || client.getPrefix(message.guild?.id) || '!';
-    
-    const embed = new EmbedBuilder();
-    
-    // Auto-detect if this is roleinfo command
-    const commandName = message.commandName || '';
-    const isRoleinfo = commandName === 'roleinfo' || 
-                      (options.title && options.title.toLowerCase().includes('roleinfo')) ||
-                      (options.description && options.description.toLowerCase().includes('roleinfo'));
-    
-    // Set color: light pink for all except roleinfo
-    if (isRoleinfo) {
-        embed.setColor(ROLES_INFO_COLOR);
-    } else {
-        embed.setColor(DEFAULT_COLOR);
-    }
-    
-    // Fix prefixes in text
-    function fixText(text) {
+    // Helper to replace $ prefixes with current prefix
+    const fixPrefixInText = (text) => {
         if (typeof text !== 'string') return text;
         return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
-    }
-    
+    };
+
     // Apply options
-    if (options.title) embed.setTitle(fixText(options.title));
-    if (options.description) embed.setDescription(fixText(options.description));
+    if (options.title) embed.setTitle(fixPrefixInText(options.title));
+    if (options.description) embed.setDescription(fixPrefixInText(options.description));
     if (options.fields) {
         options.fields.forEach(field => {
             embed.addFields({
-                name: fixText(field.name),
-                value: fixText(field.value),
+                name: fixPrefixInText(field.name),
+                value: fixPrefixInText(field.value),
                 inline: field.inline || false
             });
         });
     }
     if (options.footer) {
         if (typeof options.footer === 'string') {
-            embed.setFooter({ text: fixText(options.footer) });
+            embed.setFooter({ text: fixPrefixInText(options.footer) });
         } else {
             embed.setFooter({ 
-                text: fixText(options.footer.text || ''),
+                text: fixPrefixInText(options.footer.text || ''),
                 iconURL: options.footer.iconURL 
             });
         }
@@ -80,88 +43,81 @@ function createUniversalEmbed(client, message, options = {}) {
     if (options.image) embed.setImage(options.image);
     if (options.author) {
         if (typeof options.author === 'string') {
-            embed.setAuthor({ name: fixText(options.author) });
+            embed.setAuthor({ name: fixPrefixInText(options.author) });
         } else {
             embed.setAuthor({ 
-                name: fixText(options.author.name || ''),
+                name: fixPrefixInText(options.author.name || ''),
                 iconURL: options.author.iconURL,
                 url: options.author.url 
             });
         }
     }
-    
+
     return embed;
 }
 
-// Patch reply method to auto-fix embeds
+// Patch reply method for auto-fixing
 function patchMessageReply(message) {
-    const originalReply = message.reply;
+    if (!message || message._replyPatched) return;
     
-    message.reply = function(content, options) {
-        // If content is an embed or has embeds, fix them
-        if (content && (content.embeds || (Array.isArray(content) && content[0]?.constructor?.name === 'EmbedBuilder'))) {
-            const embeds = content.embeds || content;
-            const fixedEmbeds = [];
+    const originalReply = message.reply.bind(message);
+    
+    message.reply = async function(content, options) {
+        // Fix embeds in content
+        if (content && content.embeds) {
+            const prefix = message.prefix || '!';
             
-            for (const embed of Array.isArray(embeds) ? embeds : [embeds]) {
-                if (embed instanceof EmbedBuilder) {
-                    const data = embed.data;
-                    const isRoleinfo = data.color === parseInt(ROLES_INFO_COLOR.replace('#', ''), 16) || 
-                                     (data.title && data.title.toLowerCase().includes('roleinfo'));
+            content.embeds = content.embeds.map(embed => {
+                if (embed.data) {
+                    const fixedEmbed = new EmbedBuilder(embed.data);
                     
-                    // Create new embed with fixes
-                    const newEmbed = new EmbedBuilder(data);
+                    // Set light pink color
+                    fixedEmbed.setColor(DEFAULT_COLOR);
                     
-                    // Fix color if not roleinfo
-                    if (!isRoleinfo) {
-                        newEmbed.setColor(DEFAULT_COLOR);
+                    // Fix prefixes in text fields
+                    const fixText = (text) => {
+                        if (typeof text !== 'string') return text;
+                        return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
+                    };
+                    
+                    if (embed.data.title) fixedEmbed.setTitle(fixText(embed.data.title));
+                    if (embed.data.description) fixedEmbed.setDescription(fixText(embed.data.description));
+                    if (embed.data.fields) {
+                        fixedEmbed.setFields(
+                            embed.data.fields.map(field => ({
+                                name: fixText(field.name),
+                                value: fixText(field.value),
+                                inline: field.inline
+                            }))
+                        );
                     }
-                    
-                    // Fix prefixes in all text fields
-                    if (data.title) newEmbed.setTitle(fixPrefixes(data.title, message.prefix || '!'));
-                    if (data.description) newEmbed.setDescription(fixPrefixes(data.description, message.prefix || '!'));
-                    if (data.fields) {
-                        newEmbed.data.fields = data.fields.map(field => ({
-                            ...field,
-                            name: fixPrefixes(field.name, message.prefix || '!'),
-                            value: fixPrefixes(field.value, message.prefix || '!')
-                        }));
-                    }
-                    if (data.footer) {
-                        newEmbed.setFooter({
-                            text: fixPrefixes(data.footer.text, message.prefix || '!'),
-                            iconURL: data.footer.iconURL
+                    if (embed.data.footer) {
+                        fixedEmbed.setFooter({
+                            text: fixText(embed.data.footer.text),
+                            iconURL: embed.data.footer.iconURL
                         });
                     }
                     
-                    fixedEmbeds.push(newEmbed);
-                } else {
-                    fixedEmbeds.push(embed);
+                    return fixedEmbed;
                 }
-            }
-            
-            // Replace embeds with fixed ones
-            if (content.embeds) {
-                content.embeds = fixedEmbeds;
-            } else {
-                content = fixedEmbeds;
-            }
+                return embed;
+            });
         }
         
-        return originalReply.call(this, content, options);
+        return originalReply(content, options);
     };
     
-    return message;
+    message._replyPatched = true;
 }
 
+// Simple prefix fix function
 function fixPrefixes(text, prefix) {
     if (typeof text !== 'string') return text;
     return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
 }
 
 module.exports = {
-    patchEmbedBuilder,
-    createUniversalEmbed,
+    createEmbed,
     patchMessageReply,
     fixPrefixes,
     DEFAULT_COLOR,
