@@ -1,5 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
-const { getModStats, getTotalModerators } = require('../../handlers/modstatsHelper');
+const { getModStats, getTargetActions } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'modstats',
@@ -39,7 +39,11 @@ module.exports = {
         return message.reply('Failed to fetch moderation statistics.');
       }
 
-      // Get rank
+      // Get rank using the database (must check if available)
+      if (!client.modstatsDB) {
+        return message.reply('Modstats database not available.');
+      }
+
       const allModerators = client.modstatsDB.prepare(`
         SELECT moderator_id, COUNT(*) as total 
         FROM modstats 
@@ -52,13 +56,12 @@ module.exports = {
       const rank = rankIndex !== -1 ? rankIndex + 1 : 'N/A';
       const totalModerators = allModerators.length;
 
-      // Build fields vertically (not inline)
-      const embed = new EmbedBuilder()
-        .setColor('#8b5cf6')
-        .setTitle(`Moderation Statistics`)
-        .setDescription(`**${targetUser.tag}**\nUser ID: ${moderatorId}`)
-        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
-        .addFields(
+      // ✅ USE message.createEmbed()
+      const embed = message.createEmbed({
+        title: `Moderation Statistics`,
+        description: `**${targetUser.tag}**\nUser ID: ${moderatorId}`,
+        thumbnail: targetUser.displayAvatarURL({ size: 1024 }),
+        fields: [
           { name: 'Total Actions', value: `${stats.total}`, inline: false },
           { name: 'Rank', value: `#${rank} of ${totalModerators}`, inline: false },
           { name: 'Warns', value: `${stats.warns}`, inline: true },
@@ -68,17 +71,11 @@ module.exports = {
           { name: 'Kicks', value: `${stats.kicks}`, inline: true },
           { name: 'Mutes', value: `${stats.mutes}`, inline: true },
           { name: 'Unmutes', value: `${stats.unmutes}`, inline: true }
-        )
-        .setTimestamp();
+        ]
+      });
 
       // Add recent actions if available
-      const recentActions = client.modstatsDB.prepare(`
-        SELECT action_type, target_id, reason, timestamp 
-        FROM modstats 
-        WHERE guild_id = ? AND moderator_id = ?
-        ORDER BY timestamp DESC 
-        LIMIT 5
-      `).all(guildId, moderatorId);
+      const recentActions = getTargetActions(client, guildId, moderatorId, 5);
 
       if (recentActions.length > 0) {
         let recentText = '';
