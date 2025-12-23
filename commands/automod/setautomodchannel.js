@@ -1,4 +1,3 @@
-// commands/automod/setautomodchannel.js
 const { PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 
 module.exports = {
@@ -17,10 +16,11 @@ module.exports = {
 
     client.automod.setAutomodChannel(message.guild.id, channel.id);
 
-    const embed = new EmbedBuilder()
-      .setTitle('Automod Alert Channel Set')
-      .setColor('#60a5fa')
-      .setDescription(`Automod alerts will be posted to ${channel}`);
+    // ✅ USE message.createEmbed()
+    const embed = message.createEmbed({
+      title: 'Automod Alert Channel Set',
+      description: `Automod alerts will be posted to ${channel}`
+    });
 
     await message.reply({ embeds: [embed] });
   },
