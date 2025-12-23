@@ -33,6 +33,12 @@ module.exports = {
     const moderatorId = targetUser.id;
 
     try {
+      // Debug: Check if database is available
+      if (!client.modstatsDB && !client.automodDB) {
+        console.log('[ModStats Debug] No database found');
+        return message.reply('Modstats database not available.');
+      }
+
       const stats = getModStats(client, guildId, moderatorId);
 
       if (!stats) {
@@ -40,11 +46,12 @@ module.exports = {
       }
 
       // Get rank using the database (must check if available)
-      if (!client.modstatsDB) {
+      const db = client.modstatsDB || client.automodDB;
+      if (!db) {
         return message.reply('Modstats database not available.');
       }
 
-      const allModerators = client.modstatsDB.prepare(`
+      const allModerators = db.prepare(`
         SELECT moderator_id, COUNT(*) as total 
         FROM modstats 
         WHERE guild_id = ? 
@@ -56,7 +63,7 @@ module.exports = {
       const rank = rankIndex !== -1 ? rankIndex + 1 : 'N/A';
       const totalModerators = allModerators.length;
 
-      // ✅ USE message.createEmbed()
+      // ✅ USE message.createEmbed() - REMOVED UNMUTES FIELD
       const embed = message.createEmbed({
         title: `Moderation Statistics`,
         description: `**${targetUser.tag}**\nUser ID: ${moderatorId}`,
@@ -69,8 +76,8 @@ module.exports = {
           { name: 'Bans', value: `${stats.bans}`, inline: true },
           { name: 'Unbans', value: `${stats.unbans}`, inline: true },
           { name: 'Kicks', value: `${stats.kicks}`, inline: true },
-          { name: 'Mutes', value: `${stats.mutes}`, inline: true },
-          { name: 'Unmutes', value: `${stats.unmutes}`, inline: true }
+          { name: 'Mutes', value: `${stats.mutes}`, inline: true }
+          // REMOVED: { name: 'Unmutes', value: `${stats.unmutes}`, inline: true }
         ]
       });
 
