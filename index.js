@@ -1,13 +1,9 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Partials, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const Database = require('better-sqlite3');
-
-// ===== DATA FOLDER =====
-const DATA_DIR = path.join(__dirname, 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // ===== CLIENT =====
 const client = new Client({
@@ -20,6 +16,10 @@ const client = new Client({
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
+
+// ===== DATA FOLDER =====
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // ===== DATABASES =====
 
@@ -52,7 +52,7 @@ const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
-// ===== AUTOMOD DATABASE (FIXED) =====
+// ===== AUTOMOD DATABASE =====
 const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
 client.automodDB = automodDB;
 
@@ -109,7 +109,7 @@ automodDB.prepare(`
   )
 `).run();
 
-// ===== MODSTATS DATABASE (NEW) =====
+// ===== MODSTATS DATABASE =====
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS modstats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,20 +123,6 @@ automodDB.prepare(`
   )
 `).run();
 
-// Create indexes for faster queries
-automodDB.prepare(`
-  CREATE INDEX IF NOT EXISTS idx_modstats_moderator 
-  ON modstats (guild_id, moderator_id)
-`).run();
-
-automodDB.prepare(`
-  CREATE INDEX IF NOT EXISTS idx_modstats_target 
-  ON modstats (guild_id, target_id)
-`).run();
-
-// Store reference for easy access
-client.modstatsDB = automodDB;
-
 // ===== MEMORY MAPS =====
 client.afk = new Map();
 client.snipes = new Map();
@@ -144,96 +130,9 @@ client.snipesImage = new Map();
 client.edits = new Map();
 client.reactionSnipes = new Map();
 client.giveaways = new Map();
-
-// ===== BLACKLIST CACHE =====
 client.blacklistCache = new Map();
 
-// ===== IMPORT AUTOMOD EARLY =====
-let automodModule;
-try {
-  automodModule = require('./handlers/automodHandler');
-  console.log('✅ Automod module loaded');
-} catch (e) {
-  console.warn('⚠️ Could not load automod module:', e.message);
-}
-
-// ===== MESSAGE DELETE =====
-client.on('messageDelete', async (message) => {
-  if (!message.guild) return;
-  if (message.partial) {
-    try { message = await message.fetch(); } catch { return; }
-  }
-  if (!message.content && message.attachments.size === 0) return;
-  if (message.author?.bot) return;
-
-  const channelId = message.channel.id;
-
-  if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
-  const arr = client.snipes.get(channelId);
-  arr.unshift({
-    content: message.content || '',
-    author: message.author,
-    attachments: [...message.attachments.values()].map(a => a.url),
-    createdAt: message.createdAt,
-  });
-  if (arr.length > 15) arr.pop();
-
-  if (message.attachments.size > 0) {
-    if (!client.snipesImage.has(channelId)) client.snipesImage.set(channelId, []);
-    const imgArr = client.snipesImage.get(channelId);
-    imgArr.unshift({
-      content: message.content || '',
-      author: message.author,
-      attachments: [...message.attachments.values()].map(a => a.url),
-      createdAt: message.createdAt,
-    });
-    if (imgArr.length > 15) imgArr.pop();
-  }
-});
-
-// ===== MESSAGE UPDATE =====
-client.on('messageUpdate', async (oldMsg, newMsg) => {
-  if (!oldMsg.guild) return;
-  if (oldMsg.partial) {
-    try { oldMsg = await oldMsg.fetch(); } catch { return; }
-  }
-  if (oldMsg.author?.bot) return;
-  if (oldMsg.content === newMsg.content) return;
-
-  const channelId = oldMsg.channel.id;
-  if (!client.edits.has(channelId)) client.edits.set(channelId, []);
-  const arr = client.edits.get(channelId);
-  arr.unshift({
-    author: oldMsg.author,
-    oldContent: oldMsg.content || '',
-    newContent: newMsg.content || '',
-    createdAt: newMsg.editedAt || new Date(),
-  });
-  if (arr.length > 15) arr.pop();
-});
-
-// ===== REACTIONS =====
-client.on('messageReactionAdd', async (reaction, user) => {
-  if (user.bot) return;
-  if (reaction.partial) {
-    try { await reaction.fetch(); } catch {}
-  }
-
-  const channelId = reaction.message.channel.id;
-  if (!client.reactionSnipes.has(channelId)) client.reactionSnipes.set(channelId, []);
-  const arr = client.reactionSnipes.get(channelId);
-  arr.unshift({ emoji: reaction.emoji.toString(), user, createdAt: new Date() });
-  if (arr.length > 15) arr.pop();
-});
-
-client.on('messageReactionRemove', async (reaction, user) => {
-  if (user.bot) return;
-  if (reaction.partial) {
-    try { await reaction.fetch(); } catch {}
-  }
-});
-
-// ===== DYNAMIC PREFIX =====
+// ===== PREFIX FUNCTION =====
 client.getPrefix = (guildId) => {
   if (!guildId) return '$';
   try {
@@ -245,11 +144,11 @@ client.getPrefix = (guildId) => {
   }
 };
 
-// ===== READY =====
+// ===== READY EVENT =====
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // ===== LOAD BLACKLIST CACHE =====
+  // Load blacklist cache
   console.log('[Blacklist] Loading cache from database...');
   const guilds = client.automodDB.prepare(`SELECT DISTINCT guild_id FROM blacklist_hard UNION SELECT DISTINCT guild_id FROM blacklist_soft`).all();
 
@@ -264,7 +163,8 @@ client.once('ready', async () => {
   }
   console.log(`[Blacklist] Cache loaded for ${guilds.length} guilds`);
 
-  // ===== INIT AUTOMOD =====
+  // Initialize automod
+  const automodModule = require('./handlers/automodHandler');
   if (automodModule && typeof automodModule.initAutomod === 'function') {
     try {
       automodModule.initAutomod(client);
@@ -274,7 +174,7 @@ client.once('ready', async () => {
     }
   }
 
-  // ===== LOAD GIVEAWAYS =====
+  // Load giveaways
   const all = client.giveawayDB.prepare('SELECT * FROM giveaways').all();
   for (const g of all) {
     const delay = g.end_timestamp - Date.now();
@@ -285,28 +185,72 @@ client.once('ready', async () => {
     }
   }
 
-  // ===== INIT MODSTATS =====
-  console.log('✅ ModStats system ready');
+  console.log('✅ Bot is ready!');
 });
 
-// ===== MESSAGE CREATE (COMMAND HANDLER + AUTOMOD) =====
-if (!client.messageCreateHandlerAttached) {
-  client.on('messageCreate', async (message) => {
-    // Handle commands first
-    await handleMessage(client, message);
+// ===== MESSAGE EVENT =====
+client.on('messageCreate', async (message) => {
+  // Skip bots
+  if (message.author.bot) return;
 
-    // Then run automod check on EVERY message
-    try {
-      // Now run the automod check
-      if (client.automod && client.automod.checkMessage) {
-        await client.automod.checkMessage(message);
-      }
-    } catch (e) {
-      console.error('Automod check error:', e.message);
+  // Handle commands
+  await handleMessage(client, message);
+
+  // Run automod check
+  try {
+    if (client.automod && client.automod.checkMessage) {
+      await client.automod.checkMessage(message);
     }
+  } catch (e) {
+    console.error('Automod check error:', e.message);
+  }
+});
+
+// ===== MESSAGE DELETE (for snipes) =====
+client.on('messageDelete', async (message) => {
+  if (!message.guild || message.author?.bot) return;
+  
+  const channelId = message.channel.id;
+  if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
+  
+  const arr = client.snipes.get(channelId);
+  arr.unshift({
+    content: message.content || '',
+    author: message.author,
+    attachments: [...message.attachments.values()].map(a => a.url),
+    createdAt: message.createdAt,
   });
-  client.messageCreateHandlerAttached = true;
-}
+  if (arr.length > 15) arr.pop();
+});
+
+// ===== MESSAGE UPDATE (for edits) =====
+client.on('messageUpdate', async (oldMsg, newMsg) => {
+  if (!oldMsg.guild || oldMsg.author?.bot || oldMsg.content === newMsg.content) return;
+  
+  const channelId = oldMsg.channel.id;
+  if (!client.edits.has(channelId)) client.edits.set(channelId, []);
+  
+  const arr = client.edits.get(channelId);
+  arr.unshift({
+    author: oldMsg.author,
+    oldContent: oldMsg.content || '',
+    newContent: newMsg.content || '',
+    createdAt: newMsg.editedAt || new Date(),
+  });
+  if (arr.length > 15) arr.pop();
+});
+
+// ===== REACTION EVENTS =====
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user.bot) return;
+  
+  const channelId = reaction.message.channel.id;
+  if (!client.reactionSnipes.has(channelId)) client.reactionSnipes.set(channelId, []);
+  
+  const arr = client.reactionSnipes.get(channelId);
+  arr.unshift({ emoji: reaction.emoji.toString(), user, createdAt: new Date() });
+  if (arr.length > 15) arr.pop();
+});
 
 // ===== LOAD COMMANDS =====
 loadCommands(client);
