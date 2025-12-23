@@ -54,7 +54,6 @@ client.prefixDB = prefixDB;
 
 // ===== AUTOMOD DATABASE =====
 const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
-client.automodDB = automodDB;
 
 // Create automod tables
 automodDB.prepare(`
@@ -122,6 +121,10 @@ automodDB.prepare(`
     timestamp INTEGER NOT NULL
   )
 `).run();
+
+// ===== CRITICAL: ATTACH DATABASES TO CLIENT =====
+client.automodDB = automodDB;
+client.modstatsDB = automodDB; // THIS WAS MISSING!
 
 // ===== MEMORY MAPS =====
 client.afk = new Map();
@@ -209,10 +212,10 @@ client.on('messageCreate', async (message) => {
 // ===== MESSAGE DELETE (for snipes) =====
 client.on('messageDelete', async (message) => {
   if (!message.guild || message.author?.bot) return;
-  
+
   const channelId = message.channel.id;
   if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
-  
+
   const arr = client.snipes.get(channelId);
   arr.unshift({
     content: message.content || '',
@@ -226,10 +229,10 @@ client.on('messageDelete', async (message) => {
 // ===== MESSAGE UPDATE (for edits) =====
 client.on('messageUpdate', async (oldMsg, newMsg) => {
   if (!oldMsg.guild || oldMsg.author?.bot || oldMsg.content === newMsg.content) return;
-  
+
   const channelId = oldMsg.channel.id;
   if (!client.edits.has(channelId)) client.edits.set(channelId, []);
-  
+
   const arr = client.edits.get(channelId);
   arr.unshift({
     author: oldMsg.author,
@@ -243,10 +246,10 @@ client.on('messageUpdate', async (oldMsg, newMsg) => {
 // ===== REACTION EVENTS =====
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
-  
+
   const channelId = reaction.message.channel.id;
   if (!client.reactionSnipes.has(channelId)) client.reactionSnipes.set(channelId, []);
-  
+
   const arr = client.reactionSnipes.get(channelId);
   arr.unshift({ emoji: reaction.emoji.toString(), user, createdAt: new Date() });
   if (arr.length > 15) arr.pop();
