@@ -33,10 +33,20 @@ module.exports = {
     const moderatorId = targetUser.id;
 
     try {
-      // Debug: Check if database is available
-      if (!client.modstatsDB && !client.automodDB) {
-        console.log('[ModStats Debug] No database found');
-        return message.reply('Modstats database not available.');
+      console.log(`[ModStats] Fetching stats for ${moderatorId} in ${guildId}`);
+      
+      // Check if database exists
+      if (!client.automodDB) {
+        return message.reply('❌ Modstats database not available. Please restart the bot.');
+      }
+
+      // Test database connection
+      try {
+        const test = client.automodDB.prepare('SELECT COUNT(*) as count FROM modstats').get();
+        console.log(`[ModStats] Database has ${test.count} total entries`);
+      } catch (dbError) {
+        console.error('[ModStats] Database error:', dbError);
+        return message.reply('❌ Modstats database error. Please check bot setup.');
       }
 
       const stats = getModStats(client, guildId, moderatorId);
@@ -45,16 +55,13 @@ module.exports = {
         return message.reply('Failed to fetch moderation statistics.');
       }
 
-      // Get rank using the database (must check if available)
-      const db = client.modstatsDB || client.automodDB;
-      if (!db) {
-        return message.reply('Modstats database not available.');
-      }
+      console.log(`[ModStats] Stats retrieved for ${targetUser.tag}:`, stats);
 
-      const allModerators = db.prepare(`
+      // Get rank
+      const allModerators = client.automodDB.prepare(`
         SELECT moderator_id, COUNT(*) as total 
         FROM modstats 
-        WHERE guild_id = ? 
+        WHERE guild_id = ? AND action_type != 'unmute'
         GROUP BY moderator_id 
         ORDER BY total DESC
       `).all(guildId);
@@ -63,12 +70,14 @@ module.exports = {
       const rank = rankIndex !== -1 ? rankIndex + 1 : 'N/A';
       const totalModerators = allModerators.length;
 
-      // ✅ USE message.createEmbed() - REMOVED UNMUTES FIELD
-      const embed = message.createEmbed({
-        title: `Moderation Statistics`,
-        description: `**${targetUser.tag}**\nUser ID: ${moderatorId}`,
-        thumbnail: targetUser.displayAvatarURL({ size: 1024 }),
-        fields: [
+      // Create embed WITHOUT unmutes
+      const embed = new EmbedBuilder()
+        .setTitle(`Moderation Statistics`)
+        .setDescription(`**${targetUser.tag}**\nUser ID: ${moderatorId}`)
+        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
+        .setColor('#22c55e')
+        .setTimestamp()
+        .addFields(
           { name: 'Total Actions', value: `${stats.total}`, inline: false },
           { name: 'Rank', value: `#${rank} of ${totalModerators}`, inline: false },
           { name: 'Warns', value: `${stats.warns}`, inline: true },
@@ -77,9 +86,7 @@ module.exports = {
           { name: 'Unbans', value: `${stats.unbans}`, inline: true },
           { name: 'Kicks', value: `${stats.kicks}`, inline: true },
           { name: 'Mutes', value: `${stats.mutes}`, inline: true }
-          // REMOVED: { name: 'Unmutes', value: `${stats.unmutes}`, inline: true }
-        ]
-      });
+        );
 
       // Add recent actions if available
       const recentActions = getTargetActions(client, guildId, moderatorId, 5);
@@ -89,7 +96,8 @@ module.exports = {
         for (const action of recentActions) {
           const date = new Date(action.timestamp);
           const timeAgo = `<t:${Math.floor(date.getTime() / 1000)}:R>`;
-          recentText += `**${action.action_type.toUpperCase()}** ${timeAgo}\n`;
+          const shortReason = action.reason ? (action.reason.length > 50 ? action.reason.substring(0, 47) + '...' : action.reason) : 'No reason';
+          recentText += `**${action.action_type.toUpperCase()}** ${timeAgo}\n*${shortReason}*\n`;
         }
         embed.addFields({
           name: 'Recent Actions',
@@ -102,6 +110,7 @@ module.exports = {
 
     } catch (error) {
       console.error('Modstats command error:', error);
+      console.error(error.stack);
       await message.reply('Failed to fetch moderation statistics.');
     }
   },
