@@ -104,12 +104,7 @@ function registerCommand(client, command, filePath = 'unknown') {
 
 // ===== PREFIX HELPER =====
 function getCurrentPrefix(client, guildId) {
-  try {
-    const prefix = client.getPrefix(guildId);
-    return prefix || '!'; // Default to ! if no prefix set
-  } catch {
-    return '!';
-  }
+  return client.getPrefix(guildId) || '!';
 }
 
 async function handleMessage(client, message) {
@@ -144,8 +139,8 @@ async function handleMessage(client, message) {
   }
 
   // ===== DYNAMIC PREFIX =====
-  const prefixUsed = client.getPrefix(message.guild?.id);
-  const isPrefixed = content.startsWith(prefixUsed);
+  const prefix = getCurrentPrefix(client, message.guild?.id);
+  const isPrefixed = content.startsWith(prefix);
 
   // ===== PREFIXLESS =====
   if (!isPrefixed && client.prefixless?.has(message.author.id)) {
@@ -154,21 +149,21 @@ async function handleMessage(client, message) {
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!cmd) return;
 
-    // ✅ FIX: Attach prefix to message for commands to use
-    message.prefix = prefixUsed;
-
-    // ✅ INJECT HELPER INTO MESSAGE
-    message.getPrefix = () => universalHelper.getDynamicPrefix(client, message);
-    message.fixText = (text) => universalHelper.fixPrefixes(text, message.prefix);
-    message.createEmbed = (options) => universalHelper.createEmbed(client, message, cmd.name, options);
+    // ✅ Attach prefix and helpers to message
+    message.prefix = prefix;
+    message.commandName = cmd.name;
+    message.fixText = (text) => universalHelper.fixPrefixes(text, prefix);
+    message.createEmbed = (options) => universalHelper.createEmbed(client, message, options);
+    
+    // Patch reply for this message
+    universalHelper.patchMessageReply(message);
 
     try { 
       await cmd.execute(client, message, parts); 
     } catch (err) {
       console.error(`❌ Prefixless error (${cmdName}):`, err);
-      const currentPrefix = getCurrentPrefix(client, message.guild?.id);
       try { 
-        await message.reply(`Something went wrong while executing that command. Use **${currentPrefix}help** for commands.`); 
+        await message.reply(`Something went wrong while executing that command. Use **${prefix}help** for commands.`); 
       } catch {}
     }
     return;
@@ -177,30 +172,30 @@ async function handleMessage(client, message) {
   // ===== PREFIXED =====
   if (!isPrefixed) return;
 
-  const args = content.slice(prefixUsed.length).trim().split(/\s+/);
+  const args = content.slice(prefix.length).trim().split(/\s+/);
   const cmdName = args.shift()?.toLowerCase();
   if (!cmdName) return;
 
   const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
   if (!cmd) return;
 
-  // ✅ FIX: Attach prefix to message for commands to use
-  message.prefix = prefixUsed;
-
-  // ✅ INJECT HELPER INTO MESSAGE
-  message.getPrefix = () => universalHelper.getDynamicPrefix(client, message);
-  message.fixText = (text) => universalHelper.fixPrefixes(text, message.prefix);
-  message.createEmbed = (options) => universalHelper.createEmbed(client, message, cmd.name, options);
+  // ✅ Attach prefix and helpers to message
+  message.prefix = prefix;
+    message.commandName = cmd.name;
+    message.fixText = (text) => universalHelper.fixPrefixes(text, prefix);
+    message.createEmbed = (options) => universalHelper.createEmbed(client, message, options);
+  
+  // Patch reply for this message
+  universalHelper.patchMessageReply(message);
 
   try { 
     await cmd.execute(client, message, args); 
   } catch (err) {
     console.error(`❌ Command execution error (${cmdName}):`, err);
-    const currentPrefix = getCurrentPrefix(client, message.guild?.id);
     try { 
-      await message.reply(`Something went wrong while executing that command. Use **${currentPrefix}help** for commands.`); 
+      await message.reply(`Something went wrong while executing that command. Use **${prefix}help** for commands.`); 
     } catch {}
   }
-} // ⬅️ THIS WAS MISSING - ADD THIS CLOSING BRACE
+}
 
 module.exports = { loadCommands, handleMessage };
