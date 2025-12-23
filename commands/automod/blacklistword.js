@@ -1,4 +1,3 @@
-// commands/automod/blacklistword.js
 const { EmbedBuilder } = require('discord.js');
 
 module.exports = {
@@ -19,10 +18,11 @@ module.exports = {
 
     if (sub === 'list') {
       const words = client.automod.listHardWords(message.guild.id);
-      const embed = new EmbedBuilder()
-        .setTitle('Hard blacklist (triggers automod)')
-        .setColor('#fb7185')
-        .setDescription(words.length ? words.join(', ') : 'No words set.');
+      // ✅ USE message.createEmbed()
+      const embed = message.createEmbed({
+        title: 'Hard blacklist (triggers automod)',
+        description: words.length ? words.join(', ') : 'No words set.'
+      });
       return message.reply({ embeds: [embed] });
     }
 
@@ -30,10 +30,31 @@ module.exports = {
     if (!word) return message.reply('Provide a word.');
 
     if (sub === 'add') {
+      // FIX: Ensure database is updated
       client.automod.addHardWord(message.guild.id, word);
+      
+      // Double-check by updating cache directly
+      if (!client.blacklistCache.has(message.guild.id)) {
+        client.blacklistCache.set(message.guild.id, { hard: [], soft: [] });
+      }
+      const cache = client.blacklistCache.get(message.guild.id);
+      const lowerWord = word.toLowerCase().trim();
+      if (!cache.hard.includes(lowerWord)) {
+        cache.hard.push(lowerWord);
+      }
+      
       return message.reply(`Added \`${word}\` to hard blacklist.`);
     } else {
+      // FIX: Ensure database is updated
       client.automod.removeHardWord(message.guild.id, word);
+      
+      // Double-check by updating cache directly
+      if (client.blacklistCache.has(message.guild.id)) {
+        const cache = client.blacklistCache.get(message.guild.id);
+        const lowerWord = word.toLowerCase().trim();
+        cache.hard = cache.hard.filter(w => w !== lowerWord);
+      }
+      
       return message.reply(`Removed \`${word}\` from hard blacklist.`);
     }
   },
