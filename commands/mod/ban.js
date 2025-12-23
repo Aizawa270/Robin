@@ -20,11 +20,11 @@ module.exports = {
         title: 'Ban Command Usage',
         description: 
           '**Usage:**\n' +
-          '`$ban <@user|userID> [reason]`\n\n' +
+          `\`${message.prefix}ban <@user|userID> [reason]\`\n\n` +
           '**Examples:**\n' +
-          '`$ban @User spamming`\n' +
-          '`$ban 123456789012345678 breaking rules`',
-        footer: `Use ${message.getPrefix()}help for more info`
+          `\`${message.prefix}ban @User spamming\`\n` +
+          `\`${message.prefix}ban 123456789012345678 breaking rules\``,
+        footer: `Use ${message.prefix}help for more info`
       });
       return message.reply({ embeds: [embed] });
     }
@@ -83,7 +83,7 @@ module.exports = {
       await message.reply({ embeds: [embed] });
     } catch (err) {
       console.error('Ban command error:', err);
-      
+
       // ✅ USE message.createEmbed() - NOT message.helper.createEmbed()
       const errorEmbed = message.createEmbed({
         title: 'Failed to Ban User',
@@ -92,7 +92,7 @@ module.exports = {
           { name: 'Error', value: err.message.substring(0, 100), inline: false }
         ]
       });
-      
+
       await message.reply({ embeds: [errorEmbed] });
     }
   },
