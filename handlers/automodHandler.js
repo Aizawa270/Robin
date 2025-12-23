@@ -12,7 +12,7 @@ const {
 } = require('discord.js');
 
 const pendingActions = new Map();
-const LIGHT_PINK = '#FFB6C1'; // Light pink color for embeds
+const LIGHT_PINK = '#FF69B4'; // Hot Pink (darker than FF6C1) for embeds
 
 // Helper to escape regex special characters
 function escapeRegex(str) {
@@ -112,11 +112,11 @@ function listSoftWords(guildId) {
   return this.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guildId).map(r => r.word);
 }
 
-// Build alert embed (now light pink)
+// Build alert embed (now hot pink)
 function buildAlertEmbed(guild, targetUser, matchedWord, channelId) {
   const embed = new EmbedBuilder()
     .setTitle('「 ✦ 𝐀𝐔𝐓𝐎𝐌𝐎𝐃 𝐀𝐋𝐄𝐑𝐓 ✦ 」')
-    .setColor(LIGHT_PINK) // Light pink
+    .setColor(LIGHT_PINK) // Hot pink
     .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
     .setDescription([
       `➤  **Target:** ${targetUser.tag}`,
