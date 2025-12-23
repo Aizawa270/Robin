@@ -13,13 +13,15 @@ const { EmbedBuilder } = require('discord.js');
  */
 function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
     try {
-        if (!client.modstatsDB) {
+        // Check both possible database references
+        const db = client.modstatsDB || client.automodDB;
+        if (!db) {
             console.error('[ModStats] Database not available');
             return false;
         }
 
         const timestamp = Date.now();
-        const stmt = client.modstatsDB.prepare(
+        const stmt = db.prepare(
             'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
         );
 
@@ -42,7 +44,14 @@ function logModAction(client, guildId, moderatorId, targetId, actionType, reason
  */
 function getModStats(client, guildId, moderatorId) {
     try {
-        const stats = client.modstatsDB.prepare(`
+        // Check both possible database references
+        const db = client.modstatsDB || client.automodDB;
+        if (!db) {
+            console.error('[ModStats] No database available in getModStats');
+            return null;
+        }
+
+        const stats = db.prepare(`
             SELECT 
                 action_type,
                 COUNT(*) as count
@@ -51,24 +60,26 @@ function getModStats(client, guildId, moderatorId) {
             GROUP BY action_type
         `).all(guildId, moderatorId);
 
-        // Convert to object
+        // Convert to object - ONLY TRACK WHAT WE WANT
         const result = {
             warns: 0,
             warnremoves: 0,
             bans: 0,
             unbans: 0,
             mutes: 0,
-            unmutes: 0,
+            // REMOVED: unmutes: 0,
             kicks: 0,
             total: 0
         };
 
         for (const row of stats) {
             const type = row.action_type.toLowerCase();
+            // Only count types we want to track
             if (result.hasOwnProperty(type)) {
                 result[type] = row.count;
                 result.total += row.count;
             }
+            // Ignore "unmute" and other unwanted types
         }
 
         return result;
@@ -88,7 +99,14 @@ function getModStats(client, guildId, moderatorId) {
  */
 function getModLeaderboard(client, guildId, limit = 10, offset = 0) {
     try {
-        const leaderboard = client.modstatsDB.prepare(`
+        // Check both possible database references
+        const db = client.modstatsDB || client.automodDB;
+        if (!db) {
+            console.error('[ModStats] No database available in getModLeaderboard');
+            return [];
+        }
+
+        const leaderboard = db.prepare(`
             SELECT 
                 moderator_id,
                 COUNT(*) as total_actions,
@@ -97,7 +115,7 @@ function getModLeaderboard(client, guildId, limit = 10, offset = 0) {
                 SUM(CASE WHEN action_type = 'ban' THEN 1 ELSE 0 END) as bans,
                 SUM(CASE WHEN action_type = 'unban' THEN 1 ELSE 0 END) as unbans,
                 SUM(CASE WHEN action_type = 'mute' THEN 1 ELSE 0 END) as mutes,
-                SUM(CASE WHEN action_type = 'unmute' THEN 1 ELSE 0 END) as unmutes,
+                -- REMOVED: SUM(CASE WHEN action_type = 'unmute' THEN 1 ELSE 0 END) as unmutes,
                 SUM(CASE WHEN action_type = 'kick' THEN 1 ELSE 0 END) as kicks
             FROM modstats 
             WHERE guild_id = ?
@@ -121,12 +139,19 @@ function getModLeaderboard(client, guildId, limit = 10, offset = 0) {
  */
 function getTotalModerators(client, guildId) {
     try {
-        const result = client.modstatsDB.prepare(`
+        // Check both possible database references
+        const db = client.modstatsDB || client.automodDB;
+        if (!db) {
+            console.error('[ModStats] No database available in getTotalModerators');
+            return 0;
+        }
+
+        const result = db.prepare(`
             SELECT COUNT(DISTINCT moderator_id) as count 
             FROM modstats 
             WHERE guild_id = ?
         `).get(guildId);
-        
+
         return result ? result.count : 0;
     } catch (error) {
         console.error('[ModStats] Failed to get total moderators:', error);
@@ -144,7 +169,14 @@ function getTotalModerators(client, guildId) {
  */
 function getTargetActions(client, guildId, targetId, limit = 20) {
     try {
-        const actions = client.modstatsDB.prepare(`
+        // Check both possible database references
+        const db = client.modstatsDB || client.automodDB;
+        if (!db) {
+            console.error('[ModStats] No database available in getTargetActions');
+            return [];
+        }
+
+        const actions = db.prepare(`
             SELECT action_type, moderator_id, reason, duration, timestamp
             FROM modstats
             WHERE guild_id = ? AND target_id = ?
@@ -163,6 +195,6 @@ module.exports = {
     logModAction,
     getModStats,
     getModLeaderboard,
-    getTotalModerators,  // ADD THIS EXPORT
+    getTotalModerators,
     getTargetActions
 };
