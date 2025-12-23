@@ -25,10 +25,9 @@ module.exports = {
       if (page < 1) page = 1;
       if (page > totalPages) page = totalPages;
 
-      // Use updated function with offset
       const leaderboard = getModLeaderboard(client, guildId, limit, offset);
 
-      // Build leaderboard text with vertical layout - REMOVE UNMUTES
+      // Build leaderboard text WITHOUT EMOJIS
       let leaderboardText = '';
       let rank = offset + 1;
 
@@ -42,9 +41,7 @@ module.exports = {
         leaderboardText += `**${rank}. ${username}**\n`;
         leaderboardText += `Total Actions: ${mod.total_actions}\n`;
         leaderboardText += `Warns: ${mod.warns} | Bans: ${mod.bans} | Kicks: ${mod.kicks}\n`;
-        leaderboardText += `Mutes: ${mod.mutes} | Unbans: ${mod.unbans} | Warn Removals: ${mod.warnremoves}\n`;
-        // REMOVED: leaderboardText += `Unmutes: ${mod.unmutes} | `;
-        leaderboardText += `\n`;
+        leaderboardText += `Mutes: ${mod.mutes} | Unbans: ${mod.unbans} | Warn Removals: ${mod.warnremoves}\n\n`;
 
         rank++;
       }
@@ -54,34 +51,33 @@ module.exports = {
         .addComponents(
           new ButtonBuilder()
             .setCustomId('modlb_prev')
-            .setLabel('◀ Previous')
+            .setLabel('Previous')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(page <= 1),
           new ButtonBuilder()
             .setCustomId('modlb_next')
-            .setLabel('Next ▶')
+            .setLabel('Next')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(page >= totalPages)
         );
 
-      // ✅ USE message.createEmbed()
-      const embed = message.createEmbed({
-        title: `Moderation Leaderboard`,
-        description: `**Server:** ${message.guild.name}\n**Page:** ${page}/${totalPages}\n\n${leaderboardText}`,
-        footer: { 
+      const embed = new EmbedBuilder()
+        .setTitle(`Moderation Leaderboard`)
+        .setDescription(`**Server:** ${message.guild.name}\n**Page:** ${page}/${totalPages}\n\n${leaderboardText}`)
+        .setColor('#3b82f6')
+        .setFooter({ 
           text: `Total Moderators: ${totalModerators}`,
           iconURL: message.guild.iconURL()
-        }
-      });
+        })
+        .setTimestamp();
 
       // Add author's rank if not on current page
-      const db = client.modstatsDB || client.automodDB;
-      if (message.author && db) {
-        const authorRank = db.prepare(`
+      if (message.author && client.automodDB) {
+        const authorRank = client.automodDB.prepare(`
           WITH ranked AS (
             SELECT moderator_id, ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) as rank
             FROM modstats 
-            WHERE guild_id = ?
+            WHERE guild_id = ? AND action_type != 'unmute'
             GROUP BY moderator_id
           )
           SELECT rank FROM ranked WHERE moderator_id = ?
@@ -155,12 +151,12 @@ module.exports = {
             .addComponents(
               new ButtonBuilder()
                 .setCustomId('modlb_prev')
-                .setLabel('◀ Previous')
+                .setLabel('Previous')
                 .setStyle(ButtonStyle.Secondary)
                 .setDisabled(page <= 1),
               new ButtonBuilder()
                 .setCustomId('modlb_next')
-                .setLabel('Next ▶')
+                .setLabel('Next')
                 .setStyle(ButtonStyle.Secondary)
                 .setDisabled(page >= totalPages)
             );
