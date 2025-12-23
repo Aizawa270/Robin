@@ -138,10 +138,15 @@ function isStaff(member) {
 
 function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
   try {
-    if (!client.modstatsDB) return false;
+    // Try both possible database references
+    const db = client.modstatsDB || client.automodDB;
+    if (!db) {
+      console.error('[ModStats] Database not available');
+      return false;
+    }
 
     const timestamp = Date.now();
-    const stmt = client.modstatsDB.prepare(
+    const stmt = db.prepare(  // ← USE db INSTEAD OF client.modstatsDB
       'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
 
