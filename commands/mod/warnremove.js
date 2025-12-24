@@ -22,12 +22,15 @@ module.exports = {
     }
 
     if (args.length < 2) {
+      // Get dynamic prefix
+      const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
+      
       const embed = new EmbedBuilder()
         .setColor('#fde047')
         .setTitle('Warnremove Command Usage')
         .setDescription(
           '**Usage:**\n' +
-          '`$warnremove <@user|userID> <warnNumber> [reason]`\n\n' +
+          `\`${prefix}warnremove <@user|userID> <warnNumber> [reason]\`\n\n` +
           '**Note:** Use `$warns <user>` to see warn numbers.'
         );
       return message.reply({ embeds: [embed] });
@@ -81,7 +84,7 @@ module.exports = {
       if (warnIndex < sqliteWarns.length) {
         const warnToRemove = sqliteWarns[warnIndex];
         removedReason = warnToRemove.reason || 'No reason';
-        
+
         // Get moderator name if possible
         try {
           const mod = await client.users.fetch(warnToRemove.moderator_id).catch(() => null);
@@ -127,17 +130,26 @@ module.exports = {
         SELECT COUNT(*) as count FROM automod_warns 
         WHERE guild_id = ? AND user_id = ?
       `).get(guildId, userId);
-      
+
       const updatedJsonWarns = jsonWarns[userId] || [];
       const updatedTotalWarns = (updatedSqliteWarns?.count || 0) + updatedJsonWarns.length;
 
-      // 🔹 Log to modstats
-      const modstatsReason = `Removed warn #${warnNumArg}: ${removedReason} | Reason: ${reason}`;
-      logModAction(client, guildId, message.author.id, userId, 'warnremove', modstatsReason);
+      // 🔹 Log to modstats - WITH PROPER CLIENT PARAMETER
+      const logSuccess = logModAction(
+        client,
+        guildId,
+        message.author.id,
+        userId,
+        'warnremove',
+        `Removed warn #${warnNumArg}: "${removedReason}" | Reason: ${reason}`
+      );
 
-      // Clean embed like warn.js
+      if (!logSuccess) {
+        console.error('[Warnremove] Failed to log to modstats');
+      }
+
       const embed = new EmbedBuilder()
-        .setColor('#22c55e')  // Green color for removal
+        .setColor('#22c55e')
         .setTitle('⚠️ Warn Removed')
         .addFields(
           { name: 'User', value: `<@${targetUser.id}>`, inline: false },
@@ -145,15 +157,4 @@ module.exports = {
           { name: 'Removed Warn Reason', value: removedReason, inline: false },
           { name: 'Original Warned by', value: removedModerator, inline: false },
           { name: 'Removal Reason', value: reason, inline: false },
-          { name: 'Remaining Warns', value: `${updatedTotalWarns}/5`, inline: false }
-        )
-        .setTimestamp();
-
-      await message.reply({ embeds: [embed] });
-
-    } catch (error) {
-      console.error('Warnremove command error:', error);
-      await message.reply('Failed to remove warning.');
-    }
-  },
-};
+          { name: 'Remaining Warns', value: `${updated
