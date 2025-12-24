@@ -110,14 +110,16 @@ function getWarnCount(client, guildId, userId) {
 }
 
 // build alert embed
-function buildAlertEmbed(guild, targetUser, matchedWord, channelId) {
+// NOTE: changed to include fullMessage parameter (the deleted message content)
+function buildAlertEmbed(guild, targetUser, matchedWord, channelId, fullMessage) {
   return new EmbedBuilder()
     .setTitle('「 ✦ 𝐀𝐔𝐓𝐎𝐌𝐎𝐃 𝐀𝐋𝐄𝐑𝐓 ✦ 」')
     .setColor(LIGHT_PINK)
     .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
     .setDescription([
       `➤  **Target:** ${targetUser.tag}`,
-      `➤  **Trigger:** \`${matchedWord}\``,
+      `➤  **Trigger (matched):** \`${matchedWord}\``,
+      `➤  **Deleted Message:** ${fullMessage ? `\`${String(fullMessage).substring(0, 1024)}\`` : 'Unknown'}`,
       `➤  **Channel:** ${channelId ? `<#${channelId}>` : 'Unknown'}`,
       `➤  **Time:** <t:${Math.floor(Date.now() / 1000)}:R>`,
       '',
@@ -133,7 +135,8 @@ function isStaff(member) {
 }
 
 // send automod alert (ghost ping + embed)
-async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelId = null) {
+// NOTE: accepts matchedWord and fullMessage (fullMessage is the deleted message content)
+async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelId = null, fullMessage = null) {
   try {
     const alertChannelId = getAutomodChannel(client, guild.id);
     if (!alertChannelId) return null;
@@ -155,7 +158,7 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelI
       }
     }
 
-    const embed = buildAlertEmbed(guild, targetUser, matchedWord, channelId);
+    const embed = buildAlertEmbed(guild, targetUser, matchedWord, channelId, fullMessage);
     const sent = await channel.send({ embeds: [embed] });
 
     pendingActions.set(sent.id, { guildId: guild.id, targetUserId: targetUser.id, matchedWord, handled: false });
@@ -223,49 +226,45 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelI
 }
 
 // ------------------ MAIN CHECK ------------------
+// NOTE: This is the fixed portion — switched to substring checks so multi-word phrases match.
+// The function signature remains checkMessage(client, message) so it's drop-in compatible.
 async function checkMessage(client, message) {
   try {
     if (!message.guild || !message.member || message.author.bot) return;
+    // admin immunity
     if (message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
     const guildId = message.guild.id;
     const content = (message.content || '').toLowerCase();
-    const words = content.split(/\s+/);
 
-    // SOFT WORDS: token match -> delete only
+    // SOFT WORDS: substring match -> delete only
     const softWords = listSoftWords(client, guildId);
     for (const bw of softWords) {
       if (!bw) continue;
-      for (const w of words) {
-        const clean = w.replace(/[^\w\s]/g, '');
-        if (clean === bw) {
-          await message.delete().catch(() => {});
-          console.log(`[Automod] Soft "${bw}" deleted from ${message.author.tag}`);
-          return;
-        }
+      if (content.includes(bw)) {
+        await message.delete().catch(() => {});
+        console.log(`[Automod] Soft "${bw}" deleted from ${message.author.tag}`);
+        return;
       }
     }
 
-    // HARD WORDS: token match -> delete + 15m timeout + alert + log
+    // HARD WORDS: substring match -> delete + 15m timeout + alert + log
     const hardWords = listHardWords(client, guildId);
     for (const bw of hardWords) {
       if (!bw) continue;
-      for (const w of words) {
-        const clean = w.replace(/[^\w\s]/g, '');
-        if (clean === bw) {
-          await message.delete().catch(() => {});
-          try {
-            if (message.member?.moderatable) {
-              await message.member.timeout(15 * 60 * 1000, `Automod triggered: ${bw}`);
-              try { logModAction(client, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'mute', `Automod: triggered "${bw}"`, '15m'); } catch {}
-            }
-          } catch (tErr) {
-            console.error('[Automod] Timeout failed:', tErr);
+      if (content.includes(bw)) {
+        await message.delete().catch(() => {});
+        try {
+          if (message.member?.moderatable) {
+            await message.member.timeout(15 * 60 * 1000, `Automod triggered: ${bw}`);
+            try { logModAction(client, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'mute', `Automod: triggered "${bw}"`, '15m'); } catch {}
           }
-          // send alert to staff channel (ghost ping)
-          await sendAutomodAlert(client, message.guild, message.author, bw, message.channel.id);
-          return;
+        } catch (tErr) {
+          console.error('[Automod] Timeout failed:', tErr);
         }
+        // send alert to staff channel (ghost ping) - include full deleted message content
+        await sendAutomodAlert(client, message.guild, message.author, bw, message.channel.id, message.content);
+        return;
       }
     }
 
@@ -274,7 +273,7 @@ async function checkMessage(client, message) {
     if (inviteRegex.test(message.content)) {
       await message.delete().catch(() => {});
       try { logModAction(client, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'delete', 'discord invite link'); } catch {}
-      await sendAutomodAlert(client, message.guild, message.author, 'Discord Invite Link', message.channel.id);
+      await sendAutomodAlert(client, message.guild, message.author, 'Discord Invite Link', message.channel.id, message.content);
       return;
     }
 
