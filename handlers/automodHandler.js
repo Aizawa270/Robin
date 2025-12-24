@@ -14,45 +14,65 @@ const {
 const pendingActions = new Map();
 const LIGHT_PINK = '#FF69B4';
 
-// Helper to escape regex special characters
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 // Database functions
 function setAutomodChannel(guildId, channelId) {
-  if (!this.automodDB) return false;
+  if (!this.automodDB) {
+    console.error('[Automod] No database for setAutomodChannel');
+    return false;
+  }
   this.automodDB.prepare(`INSERT OR REPLACE INTO automod_channel (guild_id, channel_id) VALUES (?, ?)`).run(guildId, channelId);
   return true;
 }
 
 function getAutomodChannel(guildId) {
-  if (!this.automodDB) return null;
+  if (!this.automodDB) {
+    console.error('[Automod] No database for getAutomodChannel');
+    return null;
+  }
   const r = this.automodDB.prepare(`SELECT channel_id FROM automod_channel WHERE guild_id = ?`).get(guildId);
   return r?.channel_id || null;
 }
 
 function addAlertTarget(guildId, type, id) {
-  if (!this.automodDB) return false;
+  if (!this.automodDB) {
+    console.error('[Automod] No database for addAlertTarget');
+    return false;
+  }
   this.automodDB.prepare(`INSERT OR IGNORE INTO automod_alert_list (guild_id, target_type, target_id) VALUES (?, ?, ?)`).run(guildId, type, id);
   return true;
 }
 
 function removeAlertTarget(guildId, type, id) {
-  if (!this.automodDB) return false;
+  if (!this.automodDB) {
+    console.error('[Automod] No database for removeAlertTarget');
+    return false;
+  }
   this.automodDB.prepare(`DELETE FROM automod_alert_list WHERE guild_id = ? AND target_type = ? AND target_id = ?`).run(guildId, type, id);
   return true;
 }
 
 function listAlertTargets(guildId) {
-  if (!this.automodDB) return [];
+  if (!this.automodDB) {
+    console.error('[Automod] No database for listAlertTargets');
+    return [];
+  }
   return this.automodDB.prepare(`SELECT target_type, target_id FROM automod_alert_list WHERE guild_id = ?`).all(guildId);
 }
 
 function addHardWord(guildId, word) {
-  if (!this.automodDB) return false;
+  if (!this.automodDB) {
+    console.error('[Automod] No database for addHardWord');
+    return false;
+  }
   const lowerWord = word.toLowerCase().trim();
-  this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_hard (guild_id, word) VALUES (?, ?)`).run(guildId, lowerWord);
+  
+  try {
+    this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_hard (guild_id, word) VALUES (?, ?)`).run(guildId, lowerWord);
+    console.log(`[Automod] Added hard word "${lowerWord}" to database for guild ${guildId}`);
+  } catch (error) {
+    console.error('[Automod] Error adding hard word:', error);
+    return false;
+  }
 
   // Update cache
   if (!this.blacklistCache.has(guildId)) {
@@ -67,9 +87,19 @@ function addHardWord(guildId, word) {
 }
 
 function removeHardWord(guildId, word) {
-  if (!this.automodDB) return false;
+  if (!this.automodDB) {
+    console.error('[Automod] No database for removeHardWord');
+    return false;
+  }
   const lowerWord = word.toLowerCase().trim();
-  this.automodDB.prepare(`DELETE FROM blacklist_hard WHERE guild_id = ? AND word = ?`).run(guildId, lowerWord);
+  
+  try {
+    this.automodDB.prepare(`DELETE FROM blacklist_hard WHERE guild_id = ? AND word = ?`).run(guildId, lowerWord);
+    console.log(`[Automod] Removed hard word "${lowerWord}" from database for guild ${guildId}`);
+  } catch (error) {
+    console.error('[Automod] Error removing hard word:', error);
+    return false;
+  }
 
   // Update cache
   if (this.blacklistCache.has(guildId)) {
@@ -81,17 +111,42 @@ function removeHardWord(guildId, word) {
 }
 
 function listHardWords(guildId) {
-  if (!this.automodDB) return [];
+  if (!this.automodDB) {
+    console.error('[Automod] No database for listHardWords');
+    return [];
+  }
+  
+  // Always check cache first for performance
   if (this.blacklistCache && this.blacklistCache.has(guildId)) {
     return this.blacklistCache.get(guildId).hard;
   }
-  return this.automodDB.prepare(`SELECT word FROM blacklist_hard WHERE guild_id = ?`).all(guildId).map(r => r.word);
+  
+  // Fallback to database
+  try {
+    const words = this.automodDB.prepare(`SELECT word FROM blacklist_hard WHERE guild_id = ?`).all(guildId).map(r => r.word);
+    return words;
+  } catch (error) {
+    console.error('[Automod] Error listing hard words:', error);
+    return [];
+  }
 }
 
+// 🔥 CRITICAL FIX: addSoftWord had a bug - 3 placeholders but only 2 values
 function addSoftWord(guildId, word) {
-  if (!this.automodDB) return false;
+  if (!this.automodDB) {
+    console.error('[Automod] No database for addSoftWord');
+    return false;
+  }
   const lowerWord = word.toLowerCase().trim();
-  this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_soft (guild_id, word) VALUES (?, ?, ?)`).run(guildId, lowerWord);
+  
+  try {
+    // FIXED: Changed from VALUES (?, ?, ?) to VALUES (?, ?)
+    this.automodDB.prepare(`INSERT OR IGNORE INTO blacklist_soft (guild_id, word) VALUES (?, ?)`).run(guildId, lowerWord);
+    console.log(`[Automod] Added soft word "${lowerWord}" to database for guild ${guildId}`);
+  } catch (error) {
+    console.error('[Automod] Error adding soft word:', error);
+    return false;
+  }
 
   // Update cache
   if (!this.blacklistCache.has(guildId)) {
@@ -106,9 +161,19 @@ function addSoftWord(guildId, word) {
 }
 
 function removeSoftWord(guildId, word) {
-  if (!this.automodDB) return false;
+  if (!this.automodDB) {
+    console.error('[Automod] No database for removeSoftWord');
+    return false;
+  }
   const lowerWord = word.toLowerCase().trim();
-  this.automodDB.prepare(`DELETE FROM blacklist_soft WHERE guild_id = ? AND word = ?`).run(guildId, lowerWord);
+  
+  try {
+    this.automodDB.prepare(`DELETE FROM blacklist_soft WHERE guild_id = ? AND word = ?`).run(guildId, lowerWord);
+    console.log(`[Automod] Removed soft word "${lowerWord}" from database for guild ${guildId}`);
+  } catch (error) {
+    console.error('[Automod] Error removing soft word:', error);
+    return false;
+  }
 
   // Update cache
   if (this.blacklistCache.has(guildId)) {
@@ -120,11 +185,24 @@ function removeSoftWord(guildId, word) {
 }
 
 function listSoftWords(guildId) {
-  if (!this.automodDB) return [];
+  if (!this.automodDB) {
+    console.error('[Automod] No database for listSoftWords');
+    return [];
+  }
+  
+  // Check cache first
   if (this.blacklistCache && this.blacklistCache.has(guildId)) {
     return this.blacklistCache.get(guildId).soft;
   }
-  return this.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guildId).map(r => r.word);
+  
+  // Fallback to database
+  try {
+    const words = this.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guildId).map(r => r.word);
+    return words;
+  } catch (error) {
+    console.error('[Automod] Error listing soft words:', error);
+    return [];
+  }
 }
 
 // Build alert embed
@@ -151,57 +229,8 @@ function isStaff(member) {
          member.permissions.has(PermissionFlagsBits.Administrator);
 }
 
-// FIXED: Properly logs moderation actions to database
-function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
-  try {
-    console.log(`[ModStats] Attempting to log: ${actionType} by ${moderatorId} on ${targetId}`);
-    
-    // Skip logging unmutes entirely
-    if (actionType.toLowerCase() === 'unmute') {
-      console.log(`[ModStats] Skipping unmute log`);
-      return false;
-    }
-    
-    // Get the database - check both references
-    const db = client.automodDB;
-    if (!db) {
-      console.error('[ModStats] No database available!');
-      return false;
-    }
-
-    // Ensure the table exists
-    try {
-      db.prepare(`
-        CREATE TABLE IF NOT EXISTS modstats (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          guild_id TEXT NOT NULL,
-          moderator_id TEXT NOT NULL,
-          target_id TEXT NOT NULL,
-          action_type TEXT NOT NULL,
-          reason TEXT,
-          duration TEXT,
-          timestamp INTEGER NOT NULL
-        )
-      `).run();
-    } catch (tableErr) {
-      console.error('[ModStats] Table creation error:', tableErr);
-    }
-
-    const timestamp = Date.now();
-    const stmt = db.prepare(
-      'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    );
-
-    stmt.run(guildId, moderatorId, targetId, actionType, reason || 'No reason provided', duration, timestamp);
-    
-    console.log(`[ModStats] Successfully logged ${actionType} to database`);
-    return true;
-  } catch (error) {
-    console.error('[ModStats] Failed to log action:', error);
-    console.error('[ModStats] Error details:', error.message);
-    return false;
-  }
-}
+// Use the modstatsHelper for logging
+const { logModAction } = require('./modstatsHelper');
 
 async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelId = null) {
   try {
@@ -305,8 +334,8 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelI
       // BAN button
       if (interaction.customId === `am_ban:${sent.id}`) {
         const confirmRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`am_ban_confirm:${sent.id}`).setLabel('✅ Confirm Ban').setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId(`am_ban_cancel:${sent.id}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId(`am_ban_confirm:${sent.id}`).setLabel('Confirm Ban').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(`am_ban_cancel:${sent.id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
         );
 
         await interaction.reply({ 
@@ -424,18 +453,22 @@ async function handleModal(interaction) {
       const guildId = interaction.guildId;
 
       // Save warning to database
-      client.automodDB.prepare(`INSERT INTO automod_warns (guild_id, user_id, moderator_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)`)
-        .run(guildId, targetUserId, interaction.user.id, reason || 'No reason provided', Date.now());
+      try {
+        client.automodDB.prepare(`INSERT INTO automod_warns (guild_id, user_id, moderator_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)`)
+          .run(guildId, targetUserId, interaction.user.id, reason || 'No reason provided', Date.now());
 
-      // Update warn count
-      const insert = client.automodDB.prepare(`
-        INSERT INTO automod_warn_counts (guild_id, user_id, count)
-        VALUES (?, ?, 1)
-        ON CONFLICT(guild_id, user_id) DO UPDATE SET count = automod_warn_counts.count + 1
-      `);
-      insert.run(guildId, targetUserId);
+        // Update warn count
+        const insert = client.automodDB.prepare(`
+          INSERT INTO automod_warn_counts (guild_id, user_id, count)
+          VALUES (?, ?, 1)
+          ON CONFLICT(guild_id, user_id) DO UPDATE SET count = automod_warn_counts.count + 1
+        `);
+        insert.run(guildId, targetUserId);
+      } catch (dbError) {
+        console.error('[Automod] Error saving warn to database:', dbError);
+      }
 
-      // Log to modstats - FIXED: This will now properly log
+      // Log to modstats
       logModAction(client, guildId, interaction.user.id, targetUserId, 'warn', `AUTOMOD: ${reason || 'No reason provided'}`);
 
       // Update alert message
@@ -507,7 +540,7 @@ async function handleBanConfirmation(interaction) {
           const banReason = `Automod alert: ${state.matchedWord}`;
           await member.ban({ reason: banReason });
 
-          // Log to modstats - FIXED: This will now properly log
+          // Log to modstats
           logModAction(interaction.client, state.guildId, interaction.user.id, state.targetUserId, 'ban', `AUTOMOD BAN: ${banReason}`);
 
           // Update alert message
@@ -559,24 +592,7 @@ function initAutomod(client) {
     return false;
   }
 
-  // Ensure modstats table exists
-  try {
-    client.automodDB.prepare(`
-      CREATE TABLE IF NOT EXISTS modstats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id TEXT NOT NULL,
-        moderator_id TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        action_type TEXT NOT NULL,
-        reason TEXT,
-        duration TEXT,
-        timestamp INTEGER NOT NULL
-      )
-    `).run();
-    console.log('[Automod] Modstats table ensured');
-  } catch (error) {
-    console.error('[Automod] Failed to create modstats table:', error);
-  }
+  console.log('[Automod] Initializing with database:', client.automodDB ? 'Connected' : 'Missing');
 
   client.automod = {
     setAutomodChannel: (guildId, channelId) => setAutomodChannel.call(client, guildId, channelId),
