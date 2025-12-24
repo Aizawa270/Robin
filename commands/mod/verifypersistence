@@ -1,0 +1,73 @@
+// commands/utility/verifypersistence.js
+const { EmbedBuilder } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+
+module.exports = {
+  name: 'verifypersistence',
+  description: 'Verify if modstats and automod data persists after restart',
+  category: 'mod',
+  async execute(client, message, args) {
+    try {
+      const dbPath = path.join(__dirname, '../../data/automod.sqlite');
+      const dbExists = fs.existsSync(dbPath);
+      
+      const embed = new EmbedBuilder()
+        .setTitle('🔍 Persistence Verification')
+        .setColor(dbExists ? '#22c55e' : '#ef4444')
+        .addFields(
+          { name: 'Database File', value: dbExists ? `✅ ${dbPath}` : `❌ Missing: ${dbPath}`, inline: false }
+        );
+
+      if (dbExists) {
+        const stats = fs.statSync(dbPath);
+        embed.addFields(
+          { name: 'File Size', value: `${stats.size} bytes`, inline: true },
+          { name: 'Last Modified', value: `<t:${Math.floor(stats.mtimeMs / 1000)}:R>`, inline: true }
+        );
+
+        // Check database tables
+        if (client.automodDB) {
+          try {
+            const tables = client.automodDB.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+            embed.addFields({ name: 'Tables Found', value: `${tables.length} tables`, inline: false });
+            
+            const tableNames = tables.map(t => t.name).join(', ');
+            embed.addFields({ name: 'Table List', value: tableNames.length > 100 ? tableNames.substring(0, 97) + '...' : tableNames, inline: false });
+
+            // Check modstats
+            const modstatsCount = client.automodDB.prepare('SELECT COUNT(*) as count FROM modstats').get();
+            embed.addFields({ name: 'ModStats Entries', value: `${modstatsCount.count}`, inline: true });
+
+            // Check blacklist
+            const hardWords = client.automodDB.prepare('SELECT COUNT(*) as count FROM blacklist_hard').get();
+            const softWords = client.automodDB.prepare('SELECT COUNT(*) as count FROM blacklist_soft').get();
+            embed.addFields(
+              { name: 'Hard Words', value: `${hardWords.count}`, inline: true },
+              { name: 'Soft Words', value: `${softWords.count}`, inline: true }
+            );
+
+            // Check if cache is loaded
+            if (client.blacklistCache && client.blacklistCache.has(message.guild.id)) {
+              const cache = client.blacklistCache.get(message.guild.id);
+              embed.addFields({ 
+                name: 'Cache Status', 
+                value: `✅ Loaded (${cache.hard.length} hard, ${cache.soft.length} soft)`, 
+                inline: true 
+              });
+            }
+          } catch (dbError) {
+            embed.addFields({ name: 'Database Error', value: dbError.message, inline: false });
+          }
+        }
+      }
+
+      embed.setFooter({ text: 'Restart bot and run this command again to verify persistence' });
+      await message.reply({ embeds: [embed] });
+
+    } catch (error) {
+      console.error('Verify error:', error);
+      await message.reply('Error running verification.');
+    }
+  },
+};
