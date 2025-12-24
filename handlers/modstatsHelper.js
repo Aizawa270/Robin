@@ -1,21 +1,20 @@
 // handlers/modstatsHelper.js
-const { EmbedBuilder } = require('discord.js');
+const SYSTEM_EXCLUDE_IDS = ['AUTOMOD-SYSTEM', 'AUTO-BAN-SYSTEM'];
 
 function getDb(client) {
-  // prefer modstatsDB, fallback to automodDB
   return client.modstatsDB || client.automodDB || null;
 }
 
 function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
   try {
     if (!client) throw new Error('Client missing');
-    console.log(`[ModStats] Attempting to log ${actionType} by ${moderatorId} on ${targetId}`);
-
+    if (!guildId || !moderatorId || !targetId || !actionType) {
+      console.warn('[ModStats] missing parameters for logModAction');
+    }
     if (String(actionType).toLowerCase() === 'unmute') {
-      console.log('[ModStats] Skipping unmute log as requested');
+      // If you purposely skip unmute logs, keep it skipped
       return false;
     }
-
     const db = getDb(client);
     if (!db) {
       console.error('[ModStats] No DB available for logging');
@@ -26,9 +25,9 @@ function logModAction(client, guildId, moderatorId, targetId, actionType, reason
     const stmt = db.prepare(
       'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
-
     stmt.run(guildId, moderatorId, targetId, actionType, reason || 'No reason provided', duration, timestamp);
-    console.log(`[ModStats] Logged ${actionType} by ${moderatorId} on ${targetId}`);
+    // console.log for debugging
+    // console.log(`[ModStats] Logged ${actionType} by ${moderatorId} on ${targetId}`);
     return true;
   } catch (error) {
     console.error('[ModStats] Failed to log action:', error);
@@ -41,16 +40,18 @@ function getModStats(client, guildId, moderatorId) {
     const db = getDb(client);
     if (!db) return null;
 
+    // exclude system IDs
+    const placeholders = SYSTEM_EXCLUDE_IDS.map(() => '?').join(',');
+    const params = [guildId, moderatorId, ...SYSTEM_EXCLUDE_IDS];
+
     const stats = db.prepare(`
       SELECT action_type, COUNT(*) as count
       FROM modstats
-      WHERE guild_id = ? AND moderator_id = ? AND action_type != 'unmute'
+      WHERE guild_id = ? AND moderator_id = ? AND action_type != 'unmute' AND (moderator_id NOT IN (${placeholders}) OR moderator_id IS NULL)
       GROUP BY action_type
-    `).all(guildId, moderatorId);
+    `).all(...params);
 
-    const result = {
-      warns: 0, warnremoves: 0, bans: 0, unbans: 0, mutes: 0, kicks: 0, total: 0
-    };
+    const result = { warns: 0, warnremoves: 0, bans: 0, unbans: 0, mutes: 0, kicks: 0, total: 0 };
 
     for (const row of stats) {
       const type = String(row.action_type).toLowerCase();
@@ -62,7 +63,6 @@ function getModStats(client, guildId, moderatorId) {
       else if (type === 'kick') { result.kicks = row.count; result.total += row.count; }
     }
 
-    console.log(`[ModStats] Retrieved stats for ${moderatorId}:`, result);
     return result;
   } catch (error) {
     console.error('[ModStats] getModStats failed:', error);
@@ -75,6 +75,10 @@ function getModLeaderboard(client, guildId, limit = 10, offset = 0) {
     const db = getDb(client);
     if (!db) return [];
 
+    // Exclude system moderators
+    const placeholders = SYSTEM_EXCLUDE_IDS.map(() => '?').join(',');
+    const params = [guildId, ...SYSTEM_EXCLUDE_IDS, limit, offset];
+
     const leaderboard = db.prepare(`
       SELECT moderator_id,
              COUNT(*) as total_actions,
@@ -85,11 +89,11 @@ function getModLeaderboard(client, guildId, limit = 10, offset = 0) {
              SUM(CASE WHEN action_type = 'mute' THEN 1 ELSE 0 END) as mutes,
              SUM(CASE WHEN action_type = 'kick' THEN 1 ELSE 0 END) as kicks
       FROM modstats
-      WHERE guild_id = ? AND action_type != 'unmute'
+      WHERE guild_id = ? AND (moderator_id NOT IN (${placeholders}) OR moderator_id IS NULL) AND action_type != 'unmute'
       GROUP BY moderator_id
       ORDER BY total_actions DESC
       LIMIT ? OFFSET ?
-    `).all(guildId, limit, offset);
+    `).all(...params);
 
     return leaderboard;
   } catch (error) {
@@ -103,11 +107,14 @@ function getTotalModerators(client, guildId) {
     const db = getDb(client);
     if (!db) return 0;
 
+    const placeholders = SYSTEM_EXCLUDE_IDS.map(() => '?').join(',');
+    const params = [guildId, ...SYSTEM_EXCLUDE_IDS];
+
     const result = db.prepare(`
       SELECT COUNT(DISTINCT moderator_id) as count 
       FROM modstats 
-      WHERE guild_id = ? AND action_type != 'unmute'
-    `).get(guildId);
+      WHERE guild_id = ? AND action_type != 'unmute' AND (moderator_id NOT IN (${placeholders}) OR moderator_id IS NULL)
+    `).get(...params);
 
     return result ? result.count : 0;
   } catch (error) {
