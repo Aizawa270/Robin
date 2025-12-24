@@ -14,18 +14,22 @@ module.exports = {
       return message.reply('You need **Ban Members** permission.');
     }
 
+    // Get dynamic prefix
+    const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
+
     if (!args.length) {
-      // ✅ USE message.createEmbed() - NOT message.helper.createEmbed()
-      const embed = message.createEmbed({
-        title: 'Ban Command Usage',
-        description: 
+      const embed = new EmbedBuilder()
+        .setColor('#ef4444')
+        .setTitle('Ban Command Usage')
+        .setDescription(
           '**Usage:**\n' +
-          `\`${message.prefix}ban <@user|userID> [reason]\`\n\n` +
+          `\`${prefix}ban <@user|userID> [reason]\`\n\n` +
           '**Examples:**\n' +
-          `\`${message.prefix}ban @User spamming\`\n` +
-          `\`${message.prefix}ban 123456789012345678 breaking rules\``,
-        footer: `Use ${message.prefix}help for more info`
-      });
+          `\`${prefix}ban @User spamming\`\n` +
+          `\`${prefix}ban 123456789012345678 breaking rules\``
+        )
+        .setFooter({ text: `Use ${prefix}help for more info` });
+
       return message.reply({ embeds: [embed] });
     }
 
@@ -62,36 +66,43 @@ module.exports = {
         reason: `${reason} (banned by ${message.author.tag})`,
       });
 
-      // 🔹 Log to modstats
-      logModAction(client, message.guild.id, message.author.id, targetUser.id, 'ban', reason);
+      // 🔹 Log to modstats - WITH PROPER CLIENT PARAMETER
+      const logSuccess = logModAction(
+        client,
+        message.guild.id,
+        message.author.id,
+        targetUser.id,
+        'ban',
+        reason
+      );
 
-      const fakeUserPing = `<@${targetUser.id}>`;
-      const fakeModPing = `<@${message.author.id}>`;
+      if (!logSuccess) {
+        console.error('[Ban] Failed to log to modstats');
+      }
 
-      // ✅ USE message.createEmbed() - NOT message.helper.createEmbed()
-      const embed = message.createEmbed({
-        title: 'User Banned',
-        thumbnail: targetUser.displayAvatarURL({ size: 1024 }),
-        fields: [
-          { name: 'User', value: fakeUserPing, inline: false },
-          { name: 'Banned by', value: fakeModPing, inline: false },
+      const embed = new EmbedBuilder()
+        .setColor('#ef4444')
+        .setTitle('User Banned')
+        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
+        .addFields(
+          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
+          { name: 'Banned by', value: `<@${message.author.id}>`, inline: false },
           { name: 'Reason', value: reason, inline: false }
-        ],
-        footer: `Banned by ${message.author.tag}`
-      });
+        )
+        .setTimestamp()
+        .setFooter({ text: `Banned by ${message.author.tag}` });
 
       await message.reply({ embeds: [embed] });
     } catch (err) {
       console.error('Ban command error:', err);
 
-      // ✅ USE message.createEmbed() - NOT message.helper.createEmbed()
-      const errorEmbed = message.createEmbed({
-        title: 'Failed to Ban User',
-        description: 'There was an error trying to ban the user.',
-        fields: [
+      const errorEmbed = new EmbedBuilder()
+        .setColor('#ef4444')
+        .setTitle('Failed to Ban User')
+        .setDescription('There was an error trying to ban the user.')
+        .addFields(
           { name: 'Error', value: err.message.substring(0, 100), inline: false }
-        ]
-      });
+        );
 
       await message.reply({ embeds: [errorEmbed] });
     }
