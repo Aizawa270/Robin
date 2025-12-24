@@ -1,37 +1,38 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const { logModAction } = require('../../handlers/modstatsHelper');
 
-// Path to your existing warns.json
-const WARN_FILE = path.join(__dirname, '../../warns.json');
+// ⚠️ IMPORTANT: Remove this if it exists in your project - we don't need JSON file anymore
+// const WARN_FILE = path.join(__dirname, '../../warns.json');
 
-// Load existing warns from JSON
-function loadWarns() {
+// Load existing warns from SQLite
+function getWarnCountFromDB(client, guildId, userId) {
   try {
-    if (fs.existsSync(WARN_FILE)) {
-      return JSON.parse(fs.readFileSync(WARN_FILE, 'utf8'));
+    if (!client.automodDB) {
+      console.error('[Warn] No database available');
+      return 0;
     }
-    return {};
-  } catch {
-    return {};
-  }
-}
+    
+    const row = client.automodDB.prepare(`
+      SELECT count FROM automod_warn_counts 
+      WHERE guild_id = ? AND user_id = ?
+    `).get(guildId, userId);
 
-// Save warns to JSON
-function saveWarns(data) {
-  try {
-    fs.writeFileSync(WARN_FILE, JSON.stringify(data, null, 2));
-    return true;
+    return row ? row.count : 0;
   } catch (error) {
-    console.error('Error saving warns to JSON:', error);
-    return false;
+    console.error('[Warn] Error getting warn count:', error);
+    return 0;
   }
 }
 
 // Add warn to SQLite database
 function addWarnToDB(client, guildId, userId, moderatorId, reason) {
   try {
+    if (!client.automodDB) {
+      console.error('[Warn] No database available for adding warn');
+      return false;
+    }
+
     // Insert warn
     client.automodDB.prepare(`
       INSERT INTO automod_warns (guild_id, user_id, moderator_id, reason, timestamp)
@@ -44,31 +45,19 @@ function addWarnToDB(client, guildId, userId, moderatorId, reason) {
       VALUES (?, ?, COALESCE((SELECT count FROM automod_warn_counts WHERE guild_id = ? AND user_id = ?), 0) + 1)
     `).run(guildId, userId, guildId, userId);
 
+    console.log(`[Warn] Added warn to database: ${moderatorId} -> ${userId} in ${guildId}`);
     return true;
   } catch (error) {
-    console.error('Error adding warn to DB:', error);
+    console.error('[Warn] Error adding warn to DB:', error);
     return false;
-  }
-}
-
-// Get warn count from SQLite
-function getWarnCountFromDB(client, guildId, userId) {
-  try {
-    const row = client.automodDB.prepare(`
-      SELECT count FROM automod_warn_counts 
-      WHERE guild_id = ? AND user_id = ?
-    `).get(guildId, userId);
-    
-    return row ? row.count : 0;
-  } catch (error) {
-    console.error('Error getting warn count:', error);
-    return 0;
   }
 }
 
 // Clear warns from SQLite (for auto-ban)
 function clearWarnsFromDB(client, guildId, userId) {
   try {
+    if (!client.automodDB) return false;
+    
     // Delete warns
     client.automodDB.prepare(`
       DELETE FROM automod_warns 
@@ -83,7 +72,7 @@ function clearWarnsFromDB(client, guildId, userId) {
 
     return true;
   } catch (error) {
-    console.error('Error clearing warns from DB:', error);
+    console.error('[Warn] Error clearing warns from DB:', error);
     return false;
   }
 }
@@ -100,7 +89,7 @@ module.exports = {
       !message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
       !message.member.permissions.has(PermissionFlagsBits.Administrator)
     ) {
-      return message.reply('You lack permissions.');
+      return message.reply('You need Moderate Members permission.');
     }
 
     const targetArg = args.shift();
@@ -108,9 +97,8 @@ module.exports = {
 
     if (!targetArg) return message.reply('Provide a user.');
 
-    const targetUser =
-      message.mentions.users.first() ||
-      (await client.users.fetch(targetArg).catch(() => null));
+    const targetUser = message.mentions.users.first() ||
+                     (await client.users.fetch(targetArg).catch(() => null));
 
     if (!targetUser) return message.reply('User not found.');
 
@@ -122,49 +110,54 @@ module.exports = {
 
     const guildId = message.guild.id;
 
-    // 1. ADD TO SQLITE DATABASE (for automod system)
+    // 1. ADD TO SQLITE DATABASE
+    console.log(`[Warn] Attempting to warn ${targetUser.id} by ${message.author.id}`);
     const dbSuccess = addWarnToDB(client, guildId, targetUser.id, message.author.id, reason);
-    
+
     if (!dbSuccess) {
       return message.reply('Failed to add warning to database.');
     }
 
-    // 2. ADD TO JSON FILE (for your existing warns.js)
-    const warns = loadWarns();
-    if (!warns[targetUser.id]) warns[targetUser.id] = [];
-
-    warns[targetUser.id].unshift({
-      reason: reason,
-      moderator: `${message.author.tag} (${message.author.id})`,
-      timestamp: new Date().toISOString(),
-    });
-
-    const jsonSuccess = saveWarns(warns);
-    
-    if (!jsonSuccess) {
-      console.warn('Failed to save warn to JSON file, but SQLite entry was successful.');
-    }
-
-    // Get total warn count (from SQLite for consistency)
+    // Get total warn count
     const warnCount = getWarnCountFromDB(client, guildId, targetUser.id);
+    console.log(`[Warn] User ${targetUser.id} now has ${warnCount} warnings`);
 
-    // 🔹 Log to modstats
-    logModAction(client, guildId, message.author.id, targetUser.id, 'warn', reason);
+    // 2. LOG TO MODSTATS - CRITICAL FIX
+    try {
+      // Import dynamically to avoid circular dependencies
+      const { logModAction } = require('../../handlers/modstatsHelper');
+      const logSuccess = logModAction(
+        client,
+        guildId,
+        message.author.id,
+        targetUser.id,
+        'warn',
+        reason
+      );
+      
+      if (!logSuccess) {
+        console.error('[Warn] Failed to log to modstats');
+      } else {
+        console.log(`[Warn] Successfully logged to modstats: ${message.author.id} warned ${targetUser.id}`);
+      }
+    } catch (logError) {
+      console.error('[Warn] Error calling logModAction:', logError);
+    }
 
     // AUTO BAN at 5 warns
     if (warnCount >= 5) {
       try {
+        console.log(`[Warn] Auto-banning ${targetUser.id} for 5 warnings`);
         await member.ban({ reason: `Reached 5 warns | ${reason}` });
-        
-        // Clear warns from both systems after ban
+
+        // Clear warns
         clearWarnsFromDB(client, guildId, targetUser.id);
-        
-        // Remove from JSON file
-        delete warns[targetUser.id];
-        saveWarns(warns);
-        
-        // 🔹 Log ban to modstats
-        logModAction(client, guildId, 'AUTO-BAN-SYSTEM', targetUser.id, 'ban', `Auto-ban for reaching 5 warnings: ${reason}`);
+
+        // Log ban to modstats
+        try {
+          const { logModAction } = require('../../handlers/modstatsHelper');
+          logModAction(client, guildId, 'AUTO-BAN-SYSTEM', targetUser.id, 'ban', `Auto-ban for reaching 5 warnings: ${reason}`);
+        } catch {}
 
         const banEmbed = new EmbedBuilder()
           .setColor('#ef4444')
@@ -178,11 +171,12 @@ module.exports = {
 
         return message.reply({ embeds: [banEmbed] });
       } catch (banError) {
-        console.error('Auto-ban error:', banError);
+        console.error('[Warn] Auto-ban error:', banError);
         return message.reply('User reached 5 warnings but failed to auto-ban.');
       }
     }
 
+    // Send warning confirmation
     const embed = new EmbedBuilder()
       .setColor('#facc15')
       .setTitle('User Warned')
