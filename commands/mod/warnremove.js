@@ -21,7 +21,6 @@ module.exports = {
       return message.reply('You need Moderate Members permission.');
     }
 
-    // Get dynamic prefix
     const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
 
     if (args.length < 2) {
@@ -42,13 +41,10 @@ module.exports = {
 
     const targetUser = message.mentions.users.first() || 
                       (await client.users.fetch(targetArg).catch(() => null));
-
     if (!targetUser) return message.reply('User not found.');
 
     const warnIndex = parseInt(warnNumArg) - 1;
-    if (isNaN(warnIndex) || warnIndex < 0) {
-      return message.reply('Invalid warn number. Must be 1 or higher.');
-    }
+    if (isNaN(warnIndex) || warnIndex < 0) return message.reply('Invalid warn number. Must be 1 or higher.');
 
     const guildId = message.guild.id;
     const userId = targetUser.id;
@@ -56,10 +52,7 @@ module.exports = {
     try {
       console.log(`[Warnremove] Removing warn #${warnNumArg} from ${userId} in guild ${guildId}`);
 
-      // Get SQLite warns (from automod database)
-      if (!client.automodDB) {
-        return message.reply('Database not available. Please restart the bot.');
-      }
+      if (!client.automodDB) return message.reply('Database not available. Please restart the bot.');
 
       const sqliteWarns = client.automodDB.prepare(`
         SELECT id, reason, moderator_id, timestamp 
@@ -68,142 +61,83 @@ module.exports = {
         ORDER BY timestamp DESC
       `).all(guildId, userId);
 
-      // Get JSON warns (legacy system)
       const jsonWarns = fs.existsSync(WARN_FILE) ? JSON.parse(fs.readFileSync(WARN_FILE, 'utf8')) : {};
       const userJsonWarns = jsonWarns[userId] || [];
 
       const totalWarns = sqliteWarns.length + userJsonWarns.length;
-
-      if (totalWarns === 0) {
-        return message.reply('This user has no warnings.');
-      }
-
-      // Check if index is valid
-      if (warnIndex >= totalWarns) {
-        return message.reply(`Warn #${warnNumArg} not found. User has only ${totalWarns} warning(s).`);
-      }
+      if (totalWarns === 0) return message.reply('This user has no warnings.');
+      if (warnIndex >= totalWarns) return message.reply(`Warn #${warnNumArg} not found. User has only ${totalWarns} warning(s).`);
 
       let removedReason = 'Unknown reason';
       let removedModerator = 'Unknown';
-      let removedFrom = 'Unknown source';
 
-      // Remove from SQLite if index is in SQLite range
+      // Remove from SQLite
       if (warnIndex < sqliteWarns.length) {
         const warnToRemove = sqliteWarns[warnIndex];
         removedReason = warnToRemove.reason || 'No reason';
-        removedFrom = 'Database (SQLite)';
-
-        // Get moderator name if possible
         try {
           const mod = await client.users.fetch(warnToRemove.moderator_id).catch(() => null);
           removedModerator = mod ? mod.tag : `ID: ${warnToRemove.moderator_id}`;
-        } catch {
-          removedModerator = `ID: ${warnToRemove.moderator_id}`;
-        }
+        } catch { removedModerator = `ID: ${warnToRemove.moderator_id}`; }
 
-        // Delete from SQLite
         client.automodDB.prepare(`DELETE FROM automod_warns WHERE id = ?`).run(warnToRemove.id);
-        console.log(`[Warnremove] Deleted SQLite warn ID ${warnToRemove.id}`);
-
-        // Update SQLite count
         const newSqliteCount = sqliteWarns.length - 1;
         client.automodDB.prepare(`
           INSERT OR REPLACE INTO automod_warn_counts (guild_id, user_id, count)
           VALUES (?, ?, ?)
         `).run(guildId, userId, newSqliteCount);
-        console.log(`[Warnremove] Updated SQLite count to ${newSqliteCount}`);
-
       } else {
-        // Remove from JSON (legacy system)
+        // Remove from JSON
         const jsonIndex = warnIndex - sqliteWarns.length;
         if (jsonIndex < userJsonWarns.length) {
           const warnToRemove = userJsonWarns[jsonIndex];
           removedReason = warnToRemove.reason || 'No reason';
           removedModerator = warnToRemove.moderator || 'Unknown';
-          removedFrom = 'Legacy JSON file';
-
-          // Remove from JSON array
           userJsonWarns.splice(jsonIndex, 1);
-          jsonWarns[userId] = userJsonWarns;
-
-          // If array is empty, delete the user entry
-          if (userJsonWarns.length === 0) {
-            delete jsonWarns[userId];
-          }
-
-          // Save JSON file
+          if (userJsonWarns.length === 0) delete jsonWarns[userId];
+          else jsonWarns[userId] = userJsonWarns;
           fs.writeFileSync(WARN_FILE, JSON.stringify(jsonWarns, null, 2));
-          console.log(`[Warnremove] Removed JSON warn, saved to file`);
         }
       }
 
-      // Get updated warn count for display
       const updatedSqliteWarns = client.automodDB.prepare(`
         SELECT COUNT(*) as count FROM automod_warns 
         WHERE guild_id = ? AND user_id = ?
       `).get(guildId, userId);
-
       const updatedJsonWarns = jsonWarns[userId] || [];
       const updatedTotalWarns = (updatedSqliteWarns?.count || 0) + updatedJsonWarns.length;
 
-      // 🔹 Log to modstats - WITH PROPER CLIENT PARAMETER
-      console.log(`[Warnremove] Attempting to log to modstats...`);
-      const logSuccess = logModAction(
+      // Log to modstats
+      logModAction(
         client,
         guildId,
         message.author.id,
         userId,
         'warnremove',
-        `Removed warn #${warnNumArg} (${removedFrom}): "${removedReason.substring(0, 100)}" | Reason: ${reason}`
+        `Removed warn #${warnNumArg}: "${removedReason.substring(0, 100)}" | Reason: ${reason}`
       );
 
-      if (!logSuccess) {
-        console.error('[Warnremove] Failed to log to modstats');
-      } else {
-        console.log('[Warnremove] Successfully logged to modstats');
-      }
-
-      // Create response embed
+      // 🔹 Fixed embed to match warn embed style
       const embed = new EmbedBuilder()
         .setColor('#22c55e')
         .setTitle('✅ Warn Removed')
+        .setDescription(`A warning has been successfully removed from <@${targetUser.id}>.`)
         .addFields(
-          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
-          { name: 'Removed by', value: `<@${message.author.id}>`, inline: false },
-          { name: 'Removed Warn #', value: warnNumArg, inline: true },
-          { name: 'From Source', value: removedFrom, inline: true },
+          { name: 'User', value: `<@${targetUser.id}>`, inline: true },
+          { name: 'Warn #', value: warnNumArg, inline: true },
+          { name: 'Removed by', value: `<@${message.author.id}>`, inline: true },
           { name: 'Original Reason', value: removedReason.length > 100 ? removedReason.substring(0, 97) + '...' : removedReason, inline: false },
-          { name: 'Original Moderator', value: removedModerator, inline: false },
+          { name: 'Original Moderator', value: removedModerator, inline: true },
           { name: 'Removal Reason', value: reason, inline: false },
-          { name: 'Remaining Warns', value: `${updatedTotalWarns}/5`, inline: false }
+          { name: 'Remaining Warns', value: `${updatedTotalWarns}/5`, inline: true }
         )
         .setTimestamp()
         .setFooter({ text: `Use ${prefix}warns <user> to see remaining warnings` });
 
       await message.reply({ embeds: [embed] });
 
-      // Verify the log was actually added
-      setTimeout(async () => {
-        try {
-          const verifyLog = client.automodDB.prepare(`
-            SELECT * FROM modstats 
-            WHERE moderator_id = ? AND action_type = ? 
-            ORDER BY timestamp DESC LIMIT 1
-          `).get(message.author.id, 'warnremove');
-          
-          if (verifyLog) {
-            console.log(`[Warnremove] Verification: Log found with ID ${verifyLog.id}`);
-          } else {
-            console.log(`[Warnremove] Verification: No warnremove log found!`);
-          }
-        } catch (verifyError) {
-          console.error('[Warnremove] Verification error:', verifyError);
-        }
-      }, 1000);
-
     } catch (error) {
       console.error('Warnremove command error:', error);
-      console.error(error.stack);
       await message.reply('Failed to remove warning. Check console for details.');
     }
   },
