@@ -1,5 +1,4 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { colors } = require('../../config');
 const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
@@ -15,16 +14,19 @@ module.exports = {
       return message.reply('You need **Kick Members** permission.');
     }
 
+    // Get dynamic prefix
+    const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
+
     if (!args.length) {
       const embed = new EmbedBuilder()
-        .setColor(colors.roleinfo || '#fb923c')
+        .setColor('#fb923c')
         .setTitle('Kick Command Usage')
         .setDescription(
           '**Usage:**\n' +
-          '`$kick <@user|userID> [reason]`\n\n' +
+          `\`${prefix}kick <@user|userID> [reason]\`\n\n` +
           '**Examples:**\n' +
-          '`$kick @User being rude`\n' +
-          '`$kick 123456789012345678 spam`'
+          `\`${prefix}kick @User being rude\`\n` +
+          `\`${prefix}kick 123456789012345678 spam\``
         );
       return message.reply({ embeds: [embed] });
     }
@@ -55,19 +57,27 @@ module.exports = {
     try {
       await targetMember.kick(`${reason} (kicked by ${message.author.tag})`);
 
-      // 🔹 Log to modstats
-      logModAction(client, message.guild.id, message.author.id, targetUser.id, 'kick', reason);
+      // 🔹 Log to modstats - WITH PROPER CLIENT PARAMETER
+      const logSuccess = logModAction(
+        client,
+        message.guild.id,
+        message.author.id,
+        targetUser.id,
+        'kick',
+        reason
+      );
 
-      const fakeUserPing = `<@${targetUser.id}>`;
-      const fakeModPing = `<@${message.author.id}>`;
+      if (!logSuccess) {
+        console.error('[Kick] Failed to log to modstats');
+      }
 
       const embed = new EmbedBuilder()
-        .setColor(colors.roleinfo || '#fb923c')
+        .setColor('#fb923c')
         .setTitle('User Kicked')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
-          { name: 'User', value: fakeUserPing, inline: false },
-          { name: 'Kicked by', value: fakeModPing, inline: false },
+          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
+          { name: 'Kicked by', value: `<@${message.author.id}>`, inline: false },
           { name: 'Reason', value: reason, inline: false }
         )
         .setTimestamp();
