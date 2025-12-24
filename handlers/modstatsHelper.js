@@ -1,22 +1,24 @@
+// handlers/modstatsHelper.js
 const { EmbedBuilder } = require('discord.js');
 
-/**
- * Log a moderation action to modstats database - FIXED VERSION
- */
+function getDb(client) {
+  // prefer modstatsDB, fallback to automodDB
+  return client.modstatsDB || client.automodDB || null;
+}
+
 function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
   try {
+    if (!client) throw new Error('Client missing');
     console.log(`[ModStats] Attempting to log ${actionType} by ${moderatorId} on ${targetId}`);
-    
-    // SKIP UNMUTES ENTIRELY
-    if (actionType.toLowerCase() === 'unmute') {
-      console.log(`[ModStats] Skipping unmute log as requested`);
+
+    if (String(actionType).toLowerCase() === 'unmute') {
+      console.log('[ModStats] Skipping unmute log as requested');
       return false;
     }
-    
-    // Get database
-    const db = client.automodDB;
+
+    const db = getDb(client);
     if (!db) {
-      console.error('[ModStats] No database available!');
+      console.error('[ModStats] No DB available for logging');
       return false;
     }
 
@@ -26,100 +28,63 @@ function logModAction(client, guildId, moderatorId, targetId, actionType, reason
     );
 
     stmt.run(guildId, moderatorId, targetId, actionType, reason || 'No reason provided', duration, timestamp);
-
-    console.log(`[ModStats] Successfully logged ${actionType}`);
+    console.log(`[ModStats] Logged ${actionType} by ${moderatorId} on ${targetId}`);
     return true;
   } catch (error) {
     console.error('[ModStats] Failed to log action:', error);
-    console.error('[ModStats] Error stack:', error.stack);
     return false;
   }
 }
 
-/**
- * Get moderator statistics - FIXED: Excludes unmutes
- */
 function getModStats(client, guildId, moderatorId) {
   try {
-    const db = client.automodDB;
-    if (!db) {
-      console.error('[ModStats] No database available in getModStats');
-      return null;
-    }
+    const db = getDb(client);
+    if (!db) return null;
 
     const stats = db.prepare(`
-      SELECT 
-        action_type,
-        COUNT(*) as count
-      FROM modstats 
+      SELECT action_type, COUNT(*) as count
+      FROM modstats
       WHERE guild_id = ? AND moderator_id = ? AND action_type != 'unmute'
       GROUP BY action_type
     `).all(guildId, moderatorId);
 
-    // Convert to object - NO UNMUTES FIELD
     const result = {
-      warns: 0,
-      warnremoves: 0,
-      bans: 0,
-      unbans: 0,
-      mutes: 0,
-      kicks: 0,
-      total: 0
+      warns: 0, warnremoves: 0, bans: 0, unbans: 0, mutes: 0, kicks: 0, total: 0
     };
 
     for (const row of stats) {
-      const type = row.action_type.toLowerCase();
-      if (type === 'warn') {
-        result.warns = row.count;
-        result.total += row.count;
-      } else if (type === 'warnremove') {
-        result.warnremoves = row.count;
-        result.total += row.count;
-      } else if (type === 'ban') {
-        result.bans = row.count;
-        result.total += row.count;
-      } else if (type === 'unban') {
-        result.unbans = row.count;
-        result.total += row.count;
-      } else if (type === 'mute') {
-        result.mutes = row.count;
-        result.total += row.count;
-      } else if (type === 'kick') {
-        result.kicks = row.count;
-        result.total += row.count;
-      }
+      const type = String(row.action_type).toLowerCase();
+      if (type === 'warn') { result.warns = row.count; result.total += row.count; }
+      else if (type === 'warnremove') { result.warnremoves = row.count; result.total += row.count; }
+      else if (type === 'ban') { result.bans = row.count; result.total += row.count; }
+      else if (type === 'unban') { result.unbans = row.count; result.total += row.count; }
+      else if (type === 'mute') { result.mutes = row.count; result.total += row.count; }
+      else if (type === 'kick') { result.kicks = row.count; result.total += row.count; }
     }
 
     console.log(`[ModStats] Retrieved stats for ${moderatorId}:`, result);
     return result;
   } catch (error) {
-    console.error('[ModStats] Failed to get stats:', error);
+    console.error('[ModStats] getModStats failed:', error);
     return null;
   }
 }
 
-/**
- * Get moderation leaderboard - FIXED: Excludes unmutes
- */
 function getModLeaderboard(client, guildId, limit = 10, offset = 0) {
   try {
-    const db = client.automodDB;
-    if (!db) {
-      console.error('[ModStats] No database available in getModLeaderboard');
-      return [];
-    }
+    const db = getDb(client);
+    if (!db) return [];
 
     const leaderboard = db.prepare(`
-      SELECT 
-        moderator_id,
-        COUNT(*) as total_actions,
-        SUM(CASE WHEN action_type = 'warn' THEN 1 ELSE 0 END) as warns,
-        SUM(CASE WHEN action_type = 'warnremove' THEN 1 ELSE 0 END) as warnremoves,
-        SUM(CASE WHEN action_type = 'ban' THEN 1 ELSE 0 END) as bans,
-        SUM(CASE WHEN action_type = 'unban' THEN 1 ELSE 0 END) as unbans,
-        SUM(CASE WHEN action_type = 'mute' THEN 1 ELSE 0 END) as mutes,
-        SUM(CASE WHEN action_type = 'kick' THEN 1 ELSE 0 END) as kicks
-      FROM modstats 
+      SELECT moderator_id,
+             COUNT(*) as total_actions,
+             SUM(CASE WHEN action_type = 'warn' THEN 1 ELSE 0 END) as warns,
+             SUM(CASE WHEN action_type = 'warnremove' THEN 1 ELSE 0 END) as warnremoves,
+             SUM(CASE WHEN action_type = 'ban' THEN 1 ELSE 0 END) as bans,
+             SUM(CASE WHEN action_type = 'unban' THEN 1 ELSE 0 END) as unbans,
+             SUM(CASE WHEN action_type = 'mute' THEN 1 ELSE 0 END) as mutes,
+             SUM(CASE WHEN action_type = 'kick' THEN 1 ELSE 0 END) as kicks
+      FROM modstats
       WHERE guild_id = ? AND action_type != 'unmute'
       GROUP BY moderator_id
       ORDER BY total_actions DESC
@@ -128,21 +93,15 @@ function getModLeaderboard(client, guildId, limit = 10, offset = 0) {
 
     return leaderboard;
   } catch (error) {
-    console.error('[ModStats] Failed to get leaderboard:', error);
+    console.error('[ModStats] getModLeaderboard failed:', error);
     return [];
   }
 }
 
-/**
- * Get total number of moderators - FIXED: Excludes unmutes
- */
 function getTotalModerators(client, guildId) {
   try {
-    const db = client.automodDB;
-    if (!db) {
-      console.error('[ModStats] No database available in getTotalModerators');
-      return 0;
-    }
+    const db = getDb(client);
+    if (!db) return 0;
 
     const result = db.prepare(`
       SELECT COUNT(DISTINCT moderator_id) as count 
@@ -152,21 +111,15 @@ function getTotalModerators(client, guildId) {
 
     return result ? result.count : 0;
   } catch (error) {
-    console.error('[ModStats] Failed to get total moderators:', error);
+    console.error('[ModStats] getTotalModerators failed:', error);
     return 0;
   }
 }
 
-/**
- * Get all actions for a specific target user
- */
 function getTargetActions(client, guildId, targetId, limit = 20) {
   try {
-    const db = client.automodDB;
-    if (!db) {
-      console.error('[ModStats] No database available in getTargetActions');
-      return [];
-    }
+    const db = getDb(client);
+    if (!db) return [];
 
     const actions = db.prepare(`
       SELECT action_type, moderator_id, reason, duration, timestamp
@@ -178,7 +131,7 @@ function getTargetActions(client, guildId, targetId, limit = 20) {
 
     return actions;
   } catch (error) {
-    console.error('[ModStats] Failed to get target actions:', error);
+    console.error('[ModStats] getTargetActions failed:', error);
     return [];
   }
 }
