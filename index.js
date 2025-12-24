@@ -47,22 +47,21 @@ giveawayDB.prepare(`
 `).run();
 client.giveawayDB = giveawayDB;
 
-// Prefixes DB (per-server)
+// Prefixes DB
 const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
-// ===== AUTOMOD DATABASE =====
+// ===== AUTOMOD + MODSTATS DATABASE =====
 const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
 
-// Create automod tables
+// Automod tables
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS automod_channel (
     guild_id TEXT PRIMARY KEY,
     channel_id TEXT
   )
 `).run();
-
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS automod_alert_list (
     guild_id TEXT,
@@ -71,7 +70,6 @@ automodDB.prepare(`
     PRIMARY KEY (guild_id, target_type, target_id)
   )
 `).run();
-
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS blacklist_hard (
     guild_id TEXT,
@@ -79,7 +77,6 @@ automodDB.prepare(`
     PRIMARY KEY (guild_id, word)
   )
 `).run();
-
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS blacklist_soft (
     guild_id TEXT,
@@ -87,7 +84,6 @@ automodDB.prepare(`
     PRIMARY KEY (guild_id, word)
   )
 `).run();
-
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS automod_warns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +94,6 @@ automodDB.prepare(`
     timestamp INTEGER
   )
 `).run();
-
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS automod_warn_counts (
     guild_id TEXT,
@@ -108,7 +103,7 @@ automodDB.prepare(`
   )
 `).run();
 
-// ===== MODSTATS DATABASE =====
+// Modstats table
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS modstats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,9 +117,9 @@ automodDB.prepare(`
   )
 `).run();
 
-// ===== CRITICAL: ATTACH DATABASES TO CLIENT =====
+// ===== ATTACH TO CLIENT =====
 client.automodDB = automodDB;
-client.modstatsDB = automodDB; // THIS WAS MISSING!
+client.modstatsDB = automodDB; // ✅ modstats now works
 
 // ===== MEMORY MAPS =====
 client.afk = new Map();
@@ -152,29 +147,17 @@ client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
   // Load blacklist cache
-  console.log('[Blacklist] Loading cache from database...');
   const guilds = client.automodDB.prepare(`SELECT DISTINCT guild_id FROM blacklist_hard UNION SELECT DISTINCT guild_id FROM blacklist_soft`).all();
-
   for (const { guild_id } of guilds) {
     const hardWords = client.automodDB.prepare(`SELECT word FROM blacklist_hard WHERE guild_id = ?`).all(guild_id).map(r => r.word);
     const softWords = client.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guild_id).map(r => r.word);
-
-    client.blacklistCache.set(guild_id, {
-      hard: hardWords,
-      soft: softWords
-    });
+    client.blacklistCache.set(guild_id, { hard: hardWords, soft: softWords });
   }
-  console.log(`[Blacklist] Cache loaded for ${guilds.length} guilds`);
 
   // Initialize automod
   const automodModule = require('./handlers/automodHandler');
   if (automodModule && typeof automodModule.initAutomod === 'function') {
-    try {
-      automodModule.initAutomod(client);
-      console.log('✅ Automod system initialized');
-    } catch (e) {
-      console.error('❌ Failed to init automod:', e.message);
-    }
+    automodModule.initAutomod(client);
   }
 
   // Load giveaways
@@ -193,10 +176,7 @@ client.once('ready', async () => {
 
 // ===== MESSAGE EVENT =====
 client.on('messageCreate', async (message) => {
-  // Skip bots
   if (message.author.bot) return;
-
-  // Handle commands
   await handleMessage(client, message);
 
   // Run automod check
@@ -209,13 +189,11 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// ===== MESSAGE DELETE (for snipes) =====
+// ===== MESSAGE DELETE (snipes) =====
 client.on('messageDelete', async (message) => {
   if (!message.guild || message.author?.bot) return;
-
   const channelId = message.channel.id;
   if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
-
   const arr = client.snipes.get(channelId);
   arr.unshift({
     content: message.content || '',
@@ -226,13 +204,11 @@ client.on('messageDelete', async (message) => {
   if (arr.length > 15) arr.pop();
 });
 
-// ===== MESSAGE UPDATE (for edits) =====
+// ===== MESSAGE UPDATE (edits) =====
 client.on('messageUpdate', async (oldMsg, newMsg) => {
   if (!oldMsg.guild || oldMsg.author?.bot || oldMsg.content === newMsg.content) return;
-
   const channelId = oldMsg.channel.id;
   if (!client.edits.has(channelId)) client.edits.set(channelId, []);
-
   const arr = client.edits.get(channelId);
   arr.unshift({
     author: oldMsg.author,
@@ -246,10 +222,8 @@ client.on('messageUpdate', async (oldMsg, newMsg) => {
 // ===== REACTION EVENTS =====
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
-
   const channelId = reaction.message.channel.id;
   if (!client.reactionSnipes.has(channelId)) client.reactionSnipes.set(channelId, []);
-
   const arr = client.reactionSnipes.get(channelId);
   arr.unshift({ emoji: reaction.emoji.toString(), user, createdAt: new Date() });
   if (arr.length > 15) arr.pop();
