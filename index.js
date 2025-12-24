@@ -1,3 +1,4 @@
+// index.js
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -25,17 +26,20 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // Prefixless DB
 const prefixlessDB = new Database(path.join(DATA_DIR, 'prefixless.sqlite'));
+prefixlessDB.pragma('journal_mode = WAL');
 prefixlessDB.prepare('CREATE TABLE IF NOT EXISTS prefixless (user_id TEXT PRIMARY KEY)').run();
 client.prefixlessDB = prefixlessDB;
 client.prefixless = new Set(prefixlessDB.prepare('SELECT user_id FROM prefixless').all().map(r => r.user_id));
 
 // Quarantine DB
 const quarantineDB = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
+quarantineDB.pragma('journal_mode = WAL');
 quarantineDB.prepare('CREATE TABLE IF NOT EXISTS quarantine (user_id TEXT PRIMARY KEY, roles TEXT)').run();
 client.quarantineDB = quarantineDB;
 
 // Giveaways DB
 const giveawayDB = new Database(path.join(DATA_DIR, 'giveaways.sqlite'));
+giveawayDB.pragma('journal_mode = WAL');
 giveawayDB.prepare(`
   CREATE TABLE IF NOT EXISTS giveaways (
     message_id TEXT PRIMARY KEY,
@@ -47,13 +51,21 @@ giveawayDB.prepare(`
 `).run();
 client.giveawayDB = giveawayDB;
 
-// Prefixes DB
+// Prefixes DB (per-server)
 const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
+prefixDB.pragma('journal_mode = WAL');
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
 // ===== AUTOMOD + MODSTATS DATABASE =====
 const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
+// Durability: WAL mode + reasonable synchronous
+try {
+  automodDB.pragma('journal_mode = WAL');
+  automodDB.pragma('synchronous = NORMAL');
+} catch (e) {
+  console.warn('Could not set PRAGMA on automodDB:', e?.message || e);
+}
 
 // Automod tables
 automodDB.prepare(`
@@ -102,8 +114,6 @@ automodDB.prepare(`
     PRIMARY KEY (guild_id, user_id)
   )
 `).run();
-
-// Modstats table
 automodDB.prepare(`
   CREATE TABLE IF NOT EXISTS modstats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +129,7 @@ automodDB.prepare(`
 
 // ===== ATTACH TO CLIENT =====
 client.automodDB = automodDB;
-client.modstatsDB = automodDB; // ✅ modstats now works
+client.modstatsDB = automodDB;
 
 // ===== MEMORY MAPS =====
 client.afk = new Map();
@@ -146,29 +156,43 @@ client.getPrefix = (guildId) => {
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // Load blacklist cache
-  const guilds = client.automodDB.prepare(`SELECT DISTINCT guild_id FROM blacklist_hard UNION SELECT DISTINCT guild_id FROM blacklist_soft`).all();
-  for (const { guild_id } of guilds) {
-    const hardWords = client.automodDB.prepare(`SELECT word FROM blacklist_hard WHERE guild_id = ?`).all(guild_id).map(r => r.word);
-    const softWords = client.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guild_id).map(r => r.word);
-    client.blacklistCache.set(guild_id, { hard: hardWords, soft: softWords });
+  // Load blacklist cache (hydrate)
+  try {
+    const guilds = client.automodDB.prepare(`SELECT DISTINCT guild_id FROM blacklist_hard UNION SELECT DISTINCT guild_id FROM blacklist_soft`).all();
+    for (const { guild_id } of guilds) {
+      const hardWords = client.automodDB.prepare(`SELECT word FROM blacklist_hard WHERE guild_id = ?`).all(guild_id).map(r => r.word);
+      const softWords = client.automodDB.prepare(`SELECT word FROM blacklist_soft WHERE guild_id = ?`).all(guild_id).map(r => r.word);
+      client.blacklistCache.set(guild_id, { hard: hardWords, soft: softWords });
+    }
+    console.log(`[Blacklist] Cache loaded for ${client.blacklistCache.size} guilds`);
+  } catch (e) {
+    console.error('[Blacklist] cache load failed:', e);
   }
 
   // Initialize automod
-  const automodModule = require('./handlers/automodHandler');
-  if (automodModule && typeof automodModule.initAutomod === 'function') {
-    automodModule.initAutomod(client);
+  try {
+    const automodModule = require('./handlers/automodHandler');
+    if (automodModule && typeof automodModule.initAutomod === 'function') {
+      const ok = automodModule.initAutomod(client);
+      if (!ok) console.warn('[Automod] init returned false');
+    }
+  } catch (e) {
+    console.error('Failed to init automod:', e);
   }
 
   // Load giveaways
-  const all = client.giveawayDB.prepare('SELECT * FROM giveaways').all();
-  for (const g of all) {
-    const delay = g.end_timestamp - Date.now();
-    if (delay <= 0) {
-      require('./commands/startgiveaway').endGiveaway(client, g.message_id);
-    } else {
-      setTimeout(() => require('./commands/startgiveaway').endGiveaway(client, g.message_id), delay);
+  try {
+    const all = client.giveawayDB.prepare('SELECT * FROM giveaways').all();
+    for (const g of all) {
+      const delay = g.end_timestamp - Date.now();
+      if (delay <= 0) {
+        require('./commands/startgiveaway').endGiveaway(client, g.message_id);
+      } else {
+        setTimeout(() => require('./commands/startgiveaway').endGiveaway(client, g.message_id), delay);
+      }
     }
+  } catch (e) {
+    console.error('Failed to hydrate giveaways:', e);
   }
 
   console.log('✅ Bot is ready!');
@@ -177,6 +201,8 @@ client.once('ready', async () => {
 // ===== MESSAGE EVENT =====
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
+
+  // Handle commands / prefixless flow
   await handleMessage(client, message);
 
   // Run automod check
@@ -185,7 +211,7 @@ client.on('messageCreate', async (message) => {
       await client.automod.checkMessage(message);
     }
   } catch (e) {
-    console.error('Automod check error:', e.message);
+    console.error('Automod check error:', e.message || e);
   }
 });
 
@@ -219,7 +245,7 @@ client.on('messageUpdate', async (oldMsg, newMsg) => {
   if (arr.length > 15) arr.pop();
 });
 
-// ===== REACTION EVENTS =====
+// ===== REACTIONS =====
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
   const channelId = reaction.message.channel.id;
