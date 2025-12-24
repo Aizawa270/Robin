@@ -1,5 +1,4 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { colors } = require('../../config');
 const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
@@ -16,16 +15,19 @@ module.exports = {
 
     const userId = args[0];
     if (!userId) {
+      // Get dynamic prefix
+      const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
+      
       return message.reply({
         embeds: [
           new EmbedBuilder()
-            .setColor(colors.roleinfo || '#fde047')
+            .setColor('#fde047')
             .setTitle('Unban Command Usage')
             .setDescription(
               '**Usage:**\n' +
-              '`$unban <userID>`\n\n' +
+              `\`${prefix}unban <userID>\`\n\n` +
               '**Example:**\n' +
-              '`$unban 123456789012345678`'
+              `\`${prefix}unban 123456789012345678\``
             )
         ]
       });
@@ -37,19 +39,27 @@ module.exports = {
 
       await message.guild.bans.remove(userId, `Unbanned by ${message.author.tag}`);
 
-      // 🔹 Log to modstats
-      logModAction(client, message.guild.id, message.author.id, userId, 'unban', 'No reason provided');
+      // 🔹 Log to modstats - WITH PROPER CLIENT PARAMETER
+      const logSuccess = logModAction(
+        client,
+        message.guild.id,
+        message.author.id,
+        userId,
+        'unban',
+        'Unbanned by moderator'
+      );
 
-      // 🔹 Fake pings
-      const fakeUserPing = `<@${banInfo.user.id}>`;
-      const fakeModPing = `<@${message.author.id}>`;
+      if (!logSuccess) {
+        console.error('[Unban] Failed to log to modstats');
+      }
 
       const embed = new EmbedBuilder()
-        .setColor('#22c55e') // green for unban
+        .setColor('#22c55e')
         .setTitle('User Unbanned')
         .addFields(
-          { name: 'User', value: fakeUserPing, inline: false },
-          { name: 'Unbanned by', value: fakeModPing, inline: false },
+          { name: 'User', value: `<@${banInfo.user.id}>`, inline: false },
+          { name: 'Unbanned by', value: `<@${message.author.id}>`, inline: false },
+          { name: 'Original Ban Reason', value: banInfo.reason || 'No reason provided', inline: false }
         )
         .setTimestamp();
 
