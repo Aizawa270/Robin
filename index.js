@@ -127,9 +127,27 @@ automodDB.prepare(`
   )
 `).run();
 
+// ===== BATTLES DB (1v1) =====
+const battleDB = new Database(path.join(DATA_DIR, 'battles.sqlite'));
+try {
+  battleDB.pragma('journal_mode = WAL');
+  battleDB.pragma('synchronous = NORMAL');
+} catch (e) {
+  console.warn('Could not set PRAGMA on battleDB:', e?.message || e);
+}
+battleDB.prepare(`
+  CREATE TABLE IF NOT EXISTS ongoing_battles (
+    channel_id TEXT PRIMARY KEY,
+    user1_id TEXT NOT NULL,
+    user2_id TEXT NOT NULL,
+    start_timestamp INTEGER NOT NULL
+  )
+`).run();
+
 // ===== ATTACH TO CLIENT =====
 client.automodDB = automodDB;
 client.modstatsDB = automodDB;
+client.battleDB = battleDB;
 
 // ===== MEMORY MAPS =====
 client.afk = new Map();
