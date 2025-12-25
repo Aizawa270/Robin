@@ -27,7 +27,7 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
 
-    // Check if already quarantined (by role or DB)
+    // Check if already quarantined
     const dbRow = client.quarantineDB
       .prepare('SELECT roles FROM quarantine WHERE user_id = ?')
       .get(member.id);
@@ -36,34 +36,35 @@ module.exports = {
       return message.reply('This user is already in quarantine.');
     }
 
-    // ===== SAVE ROLES (EXCLUDE @everyone, managed roles, and quarantine role) =====
+    // Save roles (excluding @everyone, managed roles, quarantine role)
     const rolesToSave = [];
     member.roles.cache.forEach(role => {
-      // Skip: @everyone role, managed roles (bots, integrations), and quarantine role
       if (role.id !== message.guild.id && !role.managed && role.id !== QUARANTINE_ROLE_ID) {
         rolesToSave.push(role.id);
       }
     });
 
-    // Save to database
+    // Save to DB
     client.quarantineDB.prepare(
       'INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)'
     ).run(member.id, JSON.stringify(rolesToSave));
 
     try {
-      // Keep managed roles (booster, bot, integrations) and add quarantine role
-      const managedRoles = Array.from(member.roles.cache
-        .filter(r => r.managed)
-        .keys());
+      // Keep managed roles + quarantine role
+      const managedRoles = Array.from(
+        member.roles.cache.filter(r => r.managed).keys()
+      );
 
       await member.roles.set([QUARANTINE_ROLE_ID, ...managedRoles]);
-      
-      console.log(`[Quarantine] ${targetUser.tag} (${targetUser.id}) quarantined by ${message.author.tag}`);
+
+      console.log(
+        `[Quarantine] ${targetUser.tag} (${targetUser.id}) quarantined by ${message.author.tag}`
+      );
 
     } catch (err) {
       console.error('Quarantine role set error:', err);
 
-      // Roll back DB if role set fails
+      // Rollback DB if role assignment fails
       client.quarantineDB
         .prepare('DELETE FROM quarantine WHERE user_id = ?')
         .run(member.id);
@@ -71,18 +72,11 @@ module.exports = {
       return message.reply('Failed to set quarantine role. Check bot permissions and role hierarchy.');
     }
 
+    // 🔥 SIMPLIFIED EMBED (ONLY WHAT YOU ASKED)
     const embed = new EmbedBuilder()
       .setColor('#f87171')
-      .setTitle('🔒 Quarantine Activated')
-      .setDescription(`**${targetUser.tag}** has been successfully sent to the zoo.`)
-      .addFields(
-        { name: 'User ID', value: targetUser.id, inline: true },
-        { name: 'Roles Saved', value: `${rolesToSave.length} roles`, inline: true },
-        { name: 'Moderator', value: message.author.tag, inline: true }
-      )
-      .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
-      .setTimestamp()
-      .setFooter({ text: 'Use $releasequarantine to release' });
+      .setDescription(`Successfully sent **${targetUser.tag}** to the zoo 🦍`)
+      .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }));
 
     await message.reply({ embeds: [embed] });
   },
