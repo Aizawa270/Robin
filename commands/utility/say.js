@@ -1,12 +1,18 @@
+const { PermissionsBitField } = require('discord.js');
+
 module.exports = {
-  name: 'say',
-  description: 'Makes the bot repeat your message.',
+  name: 'vsay',
+  description: 'Makes the bot repeat your message. Admins only.',
   category: 'utility',
-  usage: '$say <message>',
+  usage: '$vsay <message>',
   async execute(client, message, args) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply('Only administrators can use this command.');
+    }
+
     const text = args.join(' ');
     if (!text) {
-      return message.reply('Please provide a message to say. Example: `$say hello world`');
+      return message.reply('Please provide a message to say. Example: `$vsay hello world`');
     }
 
     // Optionally delete the user's command to keep chat clean
