@@ -109,6 +109,28 @@ function getWarnCount(client, guildId, userId) {
   return client.automodDB.prepare(`SELECT count FROM automod_warn_counts WHERE guild_id = ? AND user_id = ?`).get(guildId, userId)?.count || 0;
 }
 
+// ---------- NEW: helper to build regex patterns that match only whole words/phrases ----------
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Build a regex that matches the blacklisted phrase as a standalone word/phrase.
+ * - Splits the phrase on whitespace and joins with \s+ so "child po" matches with any whitespace
+ * - Uses lookarounds (?<!\w) and (?!\w) so it won't match inside other words (prevents "nger" matching "dangerous")
+ * - Flags: i (case-insensitive)
+ */
+function buildWholeWordRegex(phrase) {
+  const tokens = String(phrase).trim().toLowerCase().split(/\s+/).map(escapeRegex).join('\\s+');
+  // (?<!\w) and (?!\w) ensure not part of a larger word
+  try {
+    return new RegExp(`(?<!\\\\w)${tokens}(?!\\\\w)`, 'i'); // note: double-escape because we'll use string RegExp
+  } catch (e) {
+    // fallback to a safer pattern using boundaries if RegExp constructor fails
+    return new RegExp(`\\b${tokens}\\b`, 'i');
+  }
+}
+
 // build alert embed
 // NOTE: changed to include fullMessage parameter (the deleted message content)
 function buildAlertEmbed(guild, targetUser, matchedWord, channelId, fullMessage) {
@@ -226,8 +248,7 @@ async function sendAutomodAlert(client, guild, targetUser, matchedWord, channelI
 }
 
 // ------------------ MAIN CHECK ------------------
-// NOTE: This is the fixed portion — switched to substring checks so multi-word phrases match.
-// The function signature remains checkMessage(client, message) so it's drop-in compatible.
+// NOTE: This is the fixed portion — uses whole-word/phrase regexes so substrings don't trigger.
 async function checkMessage(client, message) {
   try {
     if (!message.guild || !message.member || message.author.bot) return;
@@ -235,24 +256,28 @@ async function checkMessage(client, message) {
     if (message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
 
     const guildId = message.guild.id;
-    const content = (message.content || '').toLowerCase();
+    const contentRaw = (message.content || '');
+    const content = contentRaw.toLowerCase();
 
-    // SOFT WORDS: substring match -> delete only
+    // SOFT WORDS: whole-word/phrase match -> delete only
     const softWords = listSoftWords(client, guildId);
     for (const bw of softWords) {
       if (!bw) continue;
-      if (content.includes(bw)) {
+      // build regex per entry
+      const pattern = buildWholeWordRegex(bw);
+      if (pattern.test(content)) {
         await message.delete().catch(() => {});
         console.log(`[Automod] Soft "${bw}" deleted from ${message.author.tag}`);
         return;
       }
     }
 
-    // HARD WORDS: substring match -> delete + 15m timeout + alert + log
+    // HARD WORDS: whole-word/phrase match -> delete + 15m timeout + alert + log
     const hardWords = listHardWords(client, guildId);
     for (const bw of hardWords) {
       if (!bw) continue;
-      if (content.includes(bw)) {
+      const pattern = buildWholeWordRegex(bw);
+      if (pattern.test(content)) {
         await message.delete().catch(() => {});
         try {
           if (message.member?.moderatable) {
@@ -263,7 +288,7 @@ async function checkMessage(client, message) {
           console.error('[Automod] Timeout failed:', tErr);
         }
         // send alert to staff channel (ghost ping) - include full deleted message content
-        await sendAutomodAlert(client, message.guild, message.author, bw, message.channel.id, message.content);
+        await sendAutomodAlert(client, message.guild, message.author, bw, message.channel.id, contentRaw);
         return;
       }
     }
