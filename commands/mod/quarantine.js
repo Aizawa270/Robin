@@ -27,7 +27,7 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
 
-    // Check if already quarantined
+    // Already quarantined check
     const dbRow = client.quarantineDB
       .prepare('SELECT roles FROM quarantine WHERE user_id = ?')
       .get(member.id);
@@ -39,7 +39,11 @@ module.exports = {
     // Save roles (excluding @everyone, managed roles, quarantine role)
     const rolesToSave = [];
     member.roles.cache.forEach(role => {
-      if (role.id !== message.guild.id && !role.managed && role.id !== QUARANTINE_ROLE_ID) {
+      if (
+        role.id !== message.guild.id &&
+        !role.managed &&
+        role.id !== QUARANTINE_ROLE_ID
+      ) {
         rolesToSave.push(role.id);
       }
     });
@@ -50,7 +54,7 @@ module.exports = {
     ).run(member.id, JSON.stringify(rolesToSave));
 
     try {
-      // Keep managed roles + quarantine role
+      // Preserve managed roles
       const managedRoles = Array.from(
         member.roles.cache.filter(r => r.managed).keys()
       );
@@ -60,22 +64,23 @@ module.exports = {
       console.log(
         `[Quarantine] ${targetUser.tag} (${targetUser.id}) quarantined by ${message.author.tag}`
       );
-
     } catch (err) {
       console.error('Quarantine role set error:', err);
 
-      // Rollback DB if role assignment fails
+      // Rollback DB
       client.quarantineDB
         .prepare('DELETE FROM quarantine WHERE user_id = ?')
         .run(member.id);
 
-      return message.reply('Failed to set quarantine role. Check bot permissions and role hierarchy.');
+      return message.reply(
+        'Failed to set quarantine role. Check bot permissions and role hierarchy.'
+      );
     }
 
-    // 🔥 SIMPLIFIED EMBED (ONLY WHAT YOU ASKED)
+    // ✅ CLEAN EMBED — NO TITLE, NO EMOJI
     const embed = new EmbedBuilder()
       .setColor('#f87171')
-      .setDescription(`Successfully sent **${targetUser.tag}** to the zoo 🦍`)
+      .setDescription(`Successfully sent **${targetUser.tag}** to the zoo.`)
       .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }));
 
     await message.reply({ embeds: [embed] });
