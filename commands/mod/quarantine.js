@@ -60,10 +60,6 @@ module.exports = {
       );
 
       await member.roles.set([QUARANTINE_ROLE_ID, ...managedRoles]);
-
-      console.log(
-        `[Quarantine] ${targetUser.tag} (${targetUser.id}) quarantined by ${message.author.tag}`
-      );
     } catch (err) {
       console.error('Quarantine role set error:', err);
 
@@ -77,7 +73,7 @@ module.exports = {
       );
     }
 
-    // ✅ CLEAN EMBED — NO TITLE, NO EMOJI
+    // FIXED EMBED — MAIN TEXT IN DESCRIPTION
     const embed = new EmbedBuilder()
       .setColor('#f87171')
       .setDescription(`Successfully sent **${targetUser.tag}** to the zoo.`)
