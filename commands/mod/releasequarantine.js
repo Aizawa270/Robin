@@ -27,7 +27,7 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
 
-    // Check if user is actually quarantined
+    // Check if user is quarantined
     if (!member.roles.cache.has(QUARANTINE_ROLE_ID)) {
       return message.reply('This user is not in quarantine.');
     }
@@ -50,7 +50,7 @@ module.exports = {
       }
     }
 
-    // Keep managed roles
+    // Preserve managed roles
     const managedRoles = Array.from(
       member.roles.cache.filter(r => r.managed && r.id !== QUARANTINE_ROLE_ID).keys()
     );
@@ -58,24 +58,27 @@ module.exports = {
     try {
       await member.roles.set([...rolesToRestore, ...managedRoles]);
 
-      // Cleanup DB
+      // Clean DB
       if (row) {
         client.quarantineDB
           .prepare('DELETE FROM quarantine WHERE user_id = ?')
           .run(member.id);
       }
 
-      console.log(`[Quarantine] ${targetUser.tag} released by ${message.author.tag}`);
-
+      console.log(
+        `[Quarantine] ${targetUser.tag} released by ${message.author.tag}`
+      );
     } catch (err) {
       console.error('Release quarantine error:', err);
-      return message.reply('Failed to restore roles. Check bot permissions and role hierarchy.');
+      return message.reply(
+        'Failed to restore roles. Check bot permissions and role hierarchy.'
+      );
     }
 
-    // 🔥 SIMPLIFIED EMBED
+    // ✅ CLEAN EMBED — MATCHES QUARANTINE STYLE
     const embed = new EmbedBuilder()
       .setColor('#34d399')
-      .setDescription(`Successfully removed **${targetUser.tag}** from the zoo 🕊️`)
+      .setDescription(`Successfully removed **${targetUser.tag}** from the zoo.`)
       .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }));
 
     await message.reply({ embeds: [embed] });
