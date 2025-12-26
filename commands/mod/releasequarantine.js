@@ -64,10 +64,6 @@ module.exports = {
           .prepare('DELETE FROM quarantine WHERE user_id = ?')
           .run(member.id);
       }
-
-      console.log(
-        `[Quarantine] ${targetUser.tag} released by ${message.author.tag}`
-      );
     } catch (err) {
       console.error('Release quarantine error:', err);
       return message.reply(
@@ -75,7 +71,7 @@ module.exports = {
       );
     }
 
-    // ✅ CLEAN EMBED — MATCHES QUARANTINE STYLE
+    // FIXED EMBED — MAIN MESSAGE IN DESCRIPTION
     const embed = new EmbedBuilder()
       .setColor('#34d399')
       .setDescription(`Successfully removed **${targetUser.tag}** from the zoo.`)
