@@ -1,50 +1,56 @@
 const universalHelper = require('./universalHelper');
 const fs = require('fs');
 const path = require('path');
-const { Collection } = require('discord.js');
+const { Collection, EmbedBuilder } = require('discord.js');
 
-// 🔒 STRIP REPLY TARGET FROM MENTIONS
+/* =========================
+   DEV PROTECTION CONFIG
+========================= */
+const DEVELOPER_ID = '852839588689870879';
+
+const DEV_IMMUNE_COMMANDS = new Set([
+  'quarantine',
+  'releasequarantine',
+  'mute',
+  'kick',
+  'ban',
+  'massmute',
+  'massban',
+  'warn', // ✅ added warn
+]);
+
+/* =========================
+   STRIP REPLY TARGET
+========================= */
 function stripReplyMentions(message) {
   if (!message.reference) return;
-
   const repliedUserId = message.mentions?.repliedUser?.id;
   if (!repliedUserId) return;
-
   message.mentions.users.delete(repliedUserId);
   message.mentions.members?.delete(repliedUserId);
 }
 
+/* =========================
+   LOAD COMMANDS
+========================= */
 function loadCommands(client) {
   client.commands = new Collection();
   client.aliases = new Collection();
   client.brokenCommands = [];
 
   const commandsPath = path.join(__dirname, '..', 'commands');
-  if (!fs.existsSync(commandsPath)) {
-    console.warn('No commands folder found.');
-    return;
-  }
+  if (!fs.existsSync(commandsPath)) return;
 
   const categories = fs.readdirSync(commandsPath);
 
   for (const category of categories) {
     const categoryPath = path.join(commandsPath, category);
     let stat;
-    try { 
-      stat = fs.statSync(categoryPath); 
-    } catch { 
-      continue; 
-    }
+    try { stat = fs.statSync(categoryPath); } catch { continue; }
 
     if (stat.isFile() && category.endsWith('.js')) {
-      try { 
-        registerCommand(client, require(categoryPath), categoryPath); 
-      } catch (err) { 
-        client.brokenCommands.push({ 
-          file: categoryPath, 
-          error: err.stack || String(err) 
-        }); 
-      }
+      try { registerCommand(client, require(categoryPath)); }
+      catch (e) { client.brokenCommands.push({ file: categoryPath, error: e }); }
       continue;
     }
 
@@ -53,123 +59,95 @@ function loadCommands(client) {
     const files = fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'));
     for (const file of files) {
       const filePath = path.join(categoryPath, file);
-      try { 
-        registerCommand(client, require(filePath), filePath); 
-      } catch (err) { 
-        client.brokenCommands.push({ 
-          file: filePath, 
-          error: err.stack || String(err) 
-        }); 
-      }
+      try { registerCommand(client, require(filePath)); }
+      catch (e) { client.brokenCommands.push({ file: filePath, error: e }); }
     }
   }
 
-  console.log(`✅ Loaded ${client.commands.size} commands. Broken: ${client.brokenCommands.length}`);
-
-  // Log broken commands for debugging
-  if (client.brokenCommands.length > 0) {
-    console.warn('Broken commands:');
-    client.brokenCommands.forEach(cmd => {
-      console.warn(`  ${cmd.file}: ${cmd.error.split('\n')[0]}`);
-    });
-  }
+  console.log(`✅ Loaded ${client.commands.size} commands`);
 }
 
-function registerCommand(client, command, filePath = 'unknown') {
-  if (!command || typeof command !== 'object') {
-    throw new Error(`Invalid command export in ${filePath}`);
-  }
-  if (!command.name || typeof command.name !== 'string') {
-    throw new Error(`Missing name in ${filePath}`);
-  }
-  if (typeof command.execute !== 'function') {
-    throw new Error(`Missing execute() in ${command.name}`);
-  }
+function registerCommand(client, command) {
+  if (!command?.name || typeof command.execute !== 'function') return;
 
-  if (!command.description) command.description = 'No description.';
-  if (!command.usage) command.usage = '';
-  if (!command.category) command.category = 'Misc';
-  if (!Array.isArray(command.aliases)) command.aliases = [];
+  command.aliases ??= [];
+  command.category ??= 'Misc';
+  command.usage ??= '';
+  command.description ??= 'No description';
 
   client.commands.set(command.name.toLowerCase(), command);
-
-  for (const alias of command.aliases) {
-    if (!client.aliases.has(alias.toLowerCase())) {
-      client.aliases.set(alias.toLowerCase(), command);
+  for (const a of command.aliases) {
+    if (!client.aliases.has(a.toLowerCase())) {
+      client.aliases.set(a.toLowerCase(), command);
     }
   }
-
-  console.log(`  ↳ Loaded: ${command.name} (${command.category})`);
 }
 
-// ===== PREFIX HELPER =====
+/* =========================
+   PREFIX HELPER
+========================= */
 function getCurrentPrefix(client, guildId) {
   return client.getPrefix(guildId) || '!';
 }
 
+/* =========================
+   DEV IMMUNITY CHECK
+========================= */
+function blocksDevTarget(message, cmd, args) {
+  if (message.author.id === DEVELOPER_ID) return false;
+
+  const targetsDev =
+    message.mentions.users.has(DEVELOPER_ID) ||
+    args.includes(DEVELOPER_ID);
+
+  if (!targetsDev) return false;
+
+  return DEV_IMMUNE_COMMANDS.has(cmd.name.toLowerCase());
+}
+
+/* =========================
+   MAIN HANDLER
+========================= */
 async function handleMessage(client, message) {
   if (message.author.bot) return;
+
+  stripReplyMentions(message);
 
   const content = message.content?.trim();
   if (!content) return;
 
-  // 🔒 APPLY FIX: strip reply mentions globally
-  stripReplyMentions(message);
-
-  // ===== AFK REMOVAL =====
-  if (client.afk?.has(message.author.id)) {
-    client.afk.delete(message.author.id);
-    try { 
-      await message.reply(`Welcome back, <@${message.author.id}>. I removed your AFK status.`); 
-    } catch {} 
-  }
-
-  // ===== AFK MENTION =====
-  if (message.mentions.users.size && client.afk) {
-    for (const [, user] of message.mentions.users) {
-      const data = client.afk.get(user.id);
-      if (data) {
-        try {
-          await message.reply(
-            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(data.since / 1000)}:R>)`
-          );
-        } catch {}
-      }
-    }
-  }
-
-  // ===== DYNAMIC PREFIX =====
   const prefix = getCurrentPrefix(client, message.guild?.id);
   const isPrefixed = content.startsWith(prefix);
 
-  // ===== PREFIXLESS =====
+  /* ===== PREFIXLESS ===== */
   if (!isPrefixed && client.prefixless?.has(message.author.id)) {
     const parts = content.split(/\s+/);
     const cmdName = parts.shift().toLowerCase();
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!cmd) return;
 
-    // ✅ Attach prefix and helpers to message
     message.prefix = prefix;
     message.commandName = cmd.name;
-    message.fixText = (text) => universalHelper.fixPrefixes(text, prefix);
-    message.createEmbed = (options) => universalHelper.createEmbed(client, message, options);
-    
-    // Patch reply for this message
+    message.createEmbed = (opts) => universalHelper.createEmbed(client, message, opts);
     universalHelper.patchMessageReply(message);
 
-    try { 
-      await cmd.execute(client, message, parts); 
-    } catch (err) {
-      console.error(`❌ Prefixless error (${cmdName}):`, err);
-      try { 
-        await message.reply(`Something went wrong while executing that command. Use **${prefix}help** for commands.`); 
-      } catch {}
+    if (blocksDevTarget(message, cmd, parts)) {
+      const embed = new EmbedBuilder()
+        .setColor('#facc15')
+        .setDescription("you ain't doing shit to him 😹");
+      return message.reply({ embeds: [embed] });
+    }
+
+    try {
+      await cmd.execute(client, message, parts);
+    } catch (e) {
+      console.error(e);
+      message.reply('Something went wrong.');
     }
     return;
   }
 
-  // ===== PREFIXED =====
+  /* ===== PREFIXED ===== */
   if (!isPrefixed) return;
 
   const args = content.slice(prefix.length).trim().split(/\s+/);
@@ -179,22 +157,23 @@ async function handleMessage(client, message) {
   const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
   if (!cmd) return;
 
-  // ✅ Attach prefix and helpers to message
   message.prefix = prefix;
-    message.commandName = cmd.name;
-    message.fixText = (text) => universalHelper.fixPrefixes(text, prefix);
-    message.createEmbed = (options) => universalHelper.createEmbed(client, message, options);
-  
-  // Patch reply for this message
+  message.commandName = cmd.name;
+  message.createEmbed = (opts) => universalHelper.createEmbed(client, message, opts);
   universalHelper.patchMessageReply(message);
 
-  try { 
-    await cmd.execute(client, message, args); 
-  } catch (err) {
-    console.error(`❌ Command execution error (${cmdName}):`, err);
-    try { 
-      await message.reply(`Something went wrong while executing that command. Use **${prefix}help** for commands.`); 
-    } catch {}
+  if (blocksDevTarget(message, cmd, args)) {
+    const embed = new EmbedBuilder()
+      .setColor('#facc15')
+      .setDescription("you ain't doing shit to him 😹");
+    return message.reply({ embeds: [embed] });
+  }
+
+  try {
+    await cmd.execute(client, message, args);
+  } catch (e) {
+    console.error(e);
+    message.reply('Something went wrong.');
   }
 }
 
