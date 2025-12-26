@@ -16,7 +16,7 @@ const DEV_IMMUNE_COMMANDS = new Set([
   'ban',
   'massmute',
   'massban',
-  'warn', // ✅ added warn
+  'warn',
 ]);
 
 /* =========================
@@ -116,6 +116,30 @@ async function handleMessage(client, message) {
   const content = message.content?.trim();
   if (!content) return;
 
+  /* ===== AFK REMOVAL ===== */
+  if (client.afk?.has(message.author.id)) {
+    client.afk.delete(message.author.id);
+    try {
+      await message.reply(
+        `Welcome back, <@${message.author.id}>. I removed your AFK status.`
+      );
+    } catch {}
+  }
+
+  /* ===== AFK MENTION CHECK ===== */
+  if (message.mentions.users.size && client.afk) {
+    for (const [, user] of message.mentions.users) {
+      const data = client.afk.get(user.id);
+      if (data) {
+        try {
+          await message.reply(
+            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(data.since / 1000)}:R>)`
+          );
+        } catch {}
+      }
+    }
+  }
+
   const prefix = getCurrentPrefix(client, message.guild?.id);
   const isPrefixed = content.startsWith(prefix);
 
@@ -128,7 +152,8 @@ async function handleMessage(client, message) {
 
     message.prefix = prefix;
     message.commandName = cmd.name;
-    message.createEmbed = (opts) => universalHelper.createEmbed(client, message, opts);
+    message.createEmbed = (opts) =>
+      universalHelper.createEmbed(client, message, opts);
     universalHelper.patchMessageReply(message);
 
     if (blocksDevTarget(message, cmd, parts)) {
@@ -159,7 +184,8 @@ async function handleMessage(client, message) {
 
   message.prefix = prefix;
   message.commandName = cmd.name;
-  message.createEmbed = (opts) => universalHelper.createEmbed(client, message, opts);
+  message.createEmbed = (opts) =>
+    universalHelper.createEmbed(client, message, opts);
   universalHelper.patchMessageReply(message);
 
   if (blocksDevTarget(message, cmd, args)) {
