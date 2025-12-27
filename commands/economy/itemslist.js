@@ -1,28 +1,23 @@
-// commands/economy/itemslist.js
 const { EmbedBuilder } = require('discord.js');
 const items = require('../../handlers/items');
 
 module.exports = {
   name: 'itemslist',
-  description: 'Show all available items.',
+  description: 'List all items',
   category: 'economy',
-  usage: '!itemslist',
   async execute(client, message, args) {
     const allItems = items.listMasterItems();
-
-    if (!allItems.length) return message.reply('No items found.');
-
     const embed = new EmbedBuilder()
-      .setTitle('🛠 Items List')
-      .setColor('#0ea5e9');
+      .setTitle('🛠️ Items List')
+      .setColor('#22c55e');
 
-    for (const it of allItems) {
+    for (const item of allItems) {
       embed.addFields({
-        name: `${it.name} [${it.rarity}]`,
-        value: `Type: ${it.type}\nSlug: \`${it.slug}\`\nDesc: ${it.description}`,
+        name: `${item.name} [${item.rarity}]`,
+        value: `${item.description}${item.data?.factionOnly ? '\nFaction Exclusive' : ''}\nType: ${item.type}`,
       });
     }
 
     return message.reply({ embeds: [embed] });
-  },
+  }
 };
