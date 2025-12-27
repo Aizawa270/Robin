@@ -1,92 +1,91 @@
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 
 const ARENA_CHANNEL_ID = '1453791150556319979';
 const BATTLE_ANNOUNCE_ROLE = '1437440501702721547';
-
-// 30 minutes max per battle
-const BATTLE_TIMEOUT = 30 * 60 * 1000;
 
 module.exports = {
   name: 'battle',
   description: 'Start a 1v1 battle between two users.',
   category: 'mod',
   usage: '!battle @user1 @user2',
+  aliases: [],
 
   async execute(client, message) {
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
       return message.reply('Admins only.');
     }
 
-    const mentions = message.mentions.users;
-    if (mentions.size !== 2) {
+    const mentions = [...message.mentions.users.values()];
+    if (mentions.length !== 2) {
       return message.reply('Mention exactly **2 users**.');
     }
 
-    const [user1, user2] = mentions.map(u => u);
+    const [user1, user2] = mentions;
     const fighters = [user1.id, user2.id];
 
     const arena = await message.guild.channels.fetch(ARENA_CHANNEL_ID).catch(() => null);
-    if (!arena) return message.reply('Arena channel not found.');
+    if (!arena || arena.type !== ChannelType.GuildText) {
+      return message.reply('Arena channel is invalid.');
+    }
 
-    const now = Date.now();
-
-    // 🔥 CLEAN STUCK / EXPIRED BATTLES
+    // ❌ block existing battle
     const existing = client.battleDB
       .prepare('SELECT * FROM ongoing_battles WHERE channel_id = ?')
       .get(ARENA_CHANNEL_ID);
 
     if (existing) {
-      const expired = now - existing.start_timestamp > BATTLE_TIMEOUT;
-
-      if (!expired) {
-        return message.reply('There is already an ongoing battle.');
-      }
-
-      // force cleanup if expired
-      client.battleDB
-        .prepare('DELETE FROM ongoing_battles WHERE channel_id = ?')
-        .run(ARENA_CHANNEL_ID);
+      return message.reply('There is already an ongoing battle.');
     }
 
-    // ✅ SAVE NEW BATTLE
+    // ✅ insert battle FIRST
     client.battleDB.prepare(`
       INSERT INTO ongoing_battles (channel_id, user1_id, user2_id, start_timestamp)
       VALUES (?, ?, ?, ?)
-    `).run(ARENA_CHANNEL_ID, user1.id, user2.id, now);
+    `).run(ARENA_CHANNEL_ID, user1.id, user2.id, Date.now());
 
-    // 🔒 LOCK FIGHTERS OUT OF OTHER CHANNELS
-    for (const channel of message.guild.channels.cache.values()) {
-      if (!channel.isTextBased()) continue;
-      if (channel.id === arena.id) continue;
+    try {
+      // 🔒 LOCK fighters out of all OTHER TEXT CHANNELS
+      for (const channel of message.guild.channels.cache.values()) {
+        if (channel.type !== ChannelType.GuildText) continue;
+        if (channel.id === arena.id) continue;
+
+        for (const id of fighters) {
+          await channel.permissionOverwrites.edit(id, {
+            ViewChannel: false,
+          });
+        }
+      }
+
+      // 🔓 Arena perms
+      await arena.permissionOverwrites.edit(message.guild.roles.everyone, {
+        ViewChannel: true,
+        SendMessages: false,
+      });
 
       for (const id of fighters) {
-        await channel.permissionOverwrites.edit(id, {
-          ViewChannel: false,
-        }).catch(() => {});
+        await arena.permissionOverwrites.edit(id, {
+          ViewChannel: true,
+          SendMessages: true,
+          ReadMessageHistory: true,
+        });
       }
+
+    } catch (err) {
+      // 🧹 HARD ROLLBACK
+      console.error('Battle setup failed:', err);
+
+      client.battleDB
+        .prepare('DELETE FROM ongoing_battles WHERE channel_id = ?')
+        .run(ARENA_CHANNEL_ID);
+
+      return message.reply('Battle failed to start. Permissions issue.');
     }
 
-    // 🔓 ARENA PERMS
-    await arena.permissionOverwrites.set([
-      {
-        id: message.guild.roles.everyone.id,
-        allow: [PermissionFlagsBits.ViewChannel],
-        deny: [PermissionFlagsBits.SendMessages],
-      },
-    ]);
-
-    for (const id of fighters) {
-      await arena.permissionOverwrites.edit(id, {
-        ViewChannel: true,
-        SendMessages: true,
-        ReadMessageHistory: true,
-      });
-    }
-
+    // 📣 ANNOUNCE
     const embed = new EmbedBuilder()
       .setColor('#f59e0b')
-      .setTitle('BATTLE STARTED')
       .setDescription(`<@${user1.id}> vs <@${user2.id}>`)
+      .setFooter({ text: 'They are locked in.' })
       .setTimestamp();
 
     await arena.send({
