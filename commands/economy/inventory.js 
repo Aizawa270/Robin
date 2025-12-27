@@ -1,0 +1,29 @@
+// commands/economy/inventory.js
+const { EmbedBuilder } = require('discord.js');
+const items = require('../../handlers/items');
+
+module.exports = {
+  name: 'inventory',
+  aliases: ['inv'],
+  category: 'economy',
+  usage: '$inventory [@user|id]',
+  description: 'Show full inventory for a user.',
+  async execute(client, message, args) {
+    const target = message.mentions.users.first() || (args[0] && await client.users.fetch(args[0]).catch(()=>null)) || message.author;
+    const inv = items.getUserInventory(target.id);
+    if (!inv.length) return message.reply('No items.');
+
+    const lines = inv.map(r => `**${r.name}** x${r.quantity} — ${r.rarity}${r.description ? ` — ${String(r.description).slice(0,80)}` : ''}`);
+    // chunk into pages of ~10 lines
+    const page = 0;
+    const perPage = 10;
+    const slice = lines.slice(page*perPage, (page+1)*perPage).join('\n');
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${target.tag} — Inventory`)
+      .setDescription(slice)
+      .setFooter({ text: `Showing ${Math.min(inv.length, perPage)} of ${inv.length} items` });
+
+    return message.reply({ embeds: [embed] });
+  }
+};
