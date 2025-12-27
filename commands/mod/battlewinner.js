@@ -1,76 +1,50 @@
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-
-const ARENA_CHANNEL_ID = '1453791150556319979';
-const LOSER_MUTE_DURATION = 10 * 60 * 1000;
+const { EmbedBuilder, PermissionsBitField } = require("discord.js");
 
 module.exports = {
-  name: 'battlewinner',
-  description: 'Declare the winner of a 1v1 battle.',
-  category: 'mod',
-  usage: '!battlewinner @user',
+  name: "battlewinner",
+  description: "Ends a battle and declares the winner",
+  category: "mod",
+  permissions: [PermissionsBitField.Flags.Administrator],
 
-  async execute(client, message) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Admins only.');
-    }
+  async execute(message, args, client) {
+    const mentions = message.mentions.users;
+    if (mentions.size < 2) return;
 
-    const winner = message.mentions.members.first();
-    if (!winner) return message.reply('Mention the winner.');
+    const winner = mentions.first();
+    const loser = mentions.at(1);
 
-    const battle = client.battleDB
-      .prepare('SELECT * FROM ongoing_battles WHERE channel_id = ?')
-      .get(ARENA_CHANNEL_ID);
+    const guildId = message.guild.id;
+    const battle = client.battles?.get(guildId);
+    if (!battle) return;
 
-    if (!battle) {
-      return message.reply('There is no ongoing battle.');
-    }
+    const fighters = battle.fighters;
+    const arena = battle.arena;
 
-    const loserId =
-      battle.user1_id === winner.id ? battle.user2_id : battle.user1_id;
+    // 🏆 WINNER EMBED
+    const embed = new EmbedBuilder()
+      .setColor("Red")
+      .setDescription(`(${winner}) has successfully humbed (${loser})`);
 
-    const loser = await message.guild.members.fetch(loserId).catch(() => null);
-    if (!loser) return message.reply('Loser not found.');
+    await message.channel.send({ embeds: [embed] });
 
-    const arena = await message.guild.channels.fetch(ARENA_CHANNEL_ID);
-
-    const winEmbed = new EmbedBuilder()
-      .setColor('#34d399')
-      .setDescription(`<@${winner.id}> defeated <@${loser.id}>`)
-      .setTimestamp();
-
-    await arena.send({ embeds: [winEmbed] });
-
-    const muteEmbed = new EmbedBuilder()
-      .setColor('#f87171')
-      .setDescription(`<@${loser.id}> is muted for **10 minutes**.`);
-
-    await arena.send({ embeds: [muteEmbed] });
-
-    try {
-      await loser.timeout(LOSER_MUTE_DURATION, 'Lost battle');
-    } catch {}
-
-    const fighters = [winner.id, loser.id];
-
-    // 🔓 RESTORE CHANNEL ACCESS
+    // 🔓 RESTORE PERMISSIONS SAFELY
     for (const channel of message.guild.channels.cache.values()) {
       if (!channel.isTextBased()) continue;
 
-      for (const id of fighters) {
-        await channel.permissionOverwrites.delete(id).catch(() => {});
+      for (const userId of fighters) {
+        const overwrite = channel.permissionOverwrites.cache.get(userId);
+        if (!overwrite) continue;
+
+        await channel.permissionOverwrites.delete(userId).catch(() => {});
       }
     }
 
-    // 🧹 CLEAR ARENA PERMS
-    for (const id of fighters) {
-      await arena.permissionOverwrites.delete(id).catch(() => {});
+    // 🧹 DELETE ARENA
+    if (arena) {
+      await arena.delete().catch(() => {});
     }
 
-    // 🗑️ DELETE BATTLE
-    client.battleDB
-      .prepare('DELETE FROM ongoing_battles WHERE channel_id = ?')
-      .run(ARENA_CHANNEL_ID);
-
-    return message.reply('Battle ended.');
-  },
+    // 🧠 CLEAR BATTLE STATE
+    client.battles.delete(guildId);
+  }
 };
