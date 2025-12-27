@@ -1,53 +1,39 @@
-// commands/economy/useitem.js
 const { EmbedBuilder } = require('discord.js');
 const items = require('../../handlers/items');
 const econ = require('../../handlers/economy');
 
 module.exports = {
   name: 'useitem',
-  description: 'Use a consumable item from your inventory.',
+  description: 'Use an item from your inventory',
   category: 'economy',
-  usage: '!useitem <item-slug>',
+  usage: '!useitem <item_slug>',
   async execute(client, message, args) {
-    const slug = args[0]?.toLowerCase();
-    if (!slug) return message.reply('Specify an item slug to use.');
+    if (!args[0]) return message.reply('Please provide an item slug to use.');
 
-    const masterItem = items.getMasterItem(slug);
-    if (!masterItem) return message.reply('Item not found.');
+    const slug = args[0].toLowerCase();
+    const item = items.getMasterItem(slug);
+    if (!item) return message.reply('Item not found.');
 
-    const qty = items.getUserItemQty(message.author.id, masterItem.id);
-    if (!qty) return message.reply('You do not own this item.');
+    const qty = items.getUserItemQty(message.author.id, item.id);
+    if (!qty) return message.reply('You do not have this item.');
 
-    if (masterItem.type !== 'consumable') return message.reply('This item is not consumable.');
+    // remove item
+    items.removeItem(message.author.id, item.id, 1);
 
-    // Apply item effects (basic examples, expand later)
-    const data = masterItem.data || {};
-    let effectMsg = '';
+    // apply effect
+    let effectText = '';
+    const data = item.data ? JSON.parse(JSON.stringify(item.data)) : {};
 
-    if (data.jobBoostPct) {
-      effectMsg += `💼 Job payout increased by ${data.jobBoostPct*100}% for next use.\n`;
-      // Could store in economy cooldowns or temp boosts
-    }
-
-    if (data.xpBoostPct) {
-      effectMsg += `⭐ Job XP increased by ${data.xpBoostPct*100}% for next use.\n`;
-    }
-
-    if (data.dailyBonus) {
-      econ.addWallet(message.author.id, data.dailyBonus);
-      effectMsg += `💰 You gained ${data.dailyBonus} Vyncoins instantly!\n`;
-    }
-
-    if (!effectMsg) effectMsg = 'Item used, but no immediate effect implemented yet.';
-
-    // Remove one from inventory
-    items.removeItem(message.author.id, masterItem.id, 1);
+    if (data.jobBoost) effectText += `Job earnings boosted by ${data.jobBoost}% for next job.\n`;
+    if (data.eventBoost) effectText += `Event rewards boosted by ${data.eventBoost}%.\n`;
+    if (data.factionBoost) effectText += `Faction earnings boosted by ${data.factionBoost}%.\n`;
+    if (data.risk) effectText += `Risk modifier applied: ${data.risk}%.\n`;
 
     const embed = new EmbedBuilder()
-      .setTitle(`Used ${masterItem.name}`)
-      .setDescription(effectMsg)
-      .setColor('#0ea5e9');
+      .setTitle(`Used Item: ${item.name}`)
+      .setColor('#f97316')
+      .setDescription(effectText || 'Used the item, but nothing happened.');
 
     return message.reply({ embeds: [embed] });
-  },
+  }
 };
