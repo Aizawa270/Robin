@@ -133,14 +133,77 @@ function deleteTrade(tradeId) {
 function bootstrapIfEmpty() {
   const count = db.prepare(`SELECT COUNT(*) as c FROM items_master`).get().c;
   if (count === 0) {
-    // add ~12 starter items (you asked for many later — expand offline)
-    addMasterItem({ name: 'Common Kit', slug: 'common-kit', rarity: 'common', description: 'A simple kit. Single use.', type: 'consumable' });
-    addMasterItem({ name: 'Uncommon Toolkit', slug: 'uncommon-toolkit', rarity: 'uncommon', description: 'Gives small boost to job rewards.', type: 'consumable' });
-    addMasterItem({ name: 'Rare Token', slug: 'rare-token', rarity: 'rare', description: 'Used in faction events.', type: 'quest' });
-    addMasterItem({ name: 'Legendary Sigil', slug: 'legendary-sigil', rarity: 'legendary', description: 'Powerful single-use item.', type: 'consumable' });
-    addMasterItem({ name: 'Pet Snake (dangerous)', slug: 'pet-snake', rarity: 'uncommon', description: 'Uh oh. This one bites (may cost coins).', type: 'pet' });
-    addMasterItem({ name: 'Trade Voucher', slug: 'trade-voucher', rarity: 'common', description: 'Can be traded for small bonuses.', type: 'currency' });
-    // add more later per your request — you wanted 40-50, we can expand in next pass
+    const items = [
+      // ====== COMMON (20) ======
+      { name: 'Common Kit', slug: 'common-kit', rarity: 'common', type: 'consumable', description: 'A basic kit. Single use. Small job reward boost.', data: { jobBoostPct: 0.05, uses: 1 } },
+      { name: 'Pocket Change', slug: 'pocket-change', rarity: 'common', type: 'currency', description: 'Small coin pouch. Instant 500–1,000 Vyncoins when used.', data: { min: 500, max: 1000 } },
+      { name: 'Worker\'s Snack', slug: 'workers-snack', rarity: 'common', type: 'consumable', description: 'Reduces next job cooldown by 5 minutes.', data: { reduceJobCooldownMs: 5*60*1000 } },
+      { name: 'Small XP Tonic', slug: 'small-xp-tonic', rarity: 'common', type: 'consumable', description: '+5% job XP for next work.', data: { xpBoostPct: 0.05, uses: 1 } },
+      { name: 'Trade Voucher', slug: 'trade-voucher', rarity: 'common', type: 'currency', description: 'Redeemable for small shop discounts or trade value.', data: { value: 1000 } },
+      { name: 'Basic Toolkit', slug: 'basic-toolkit', rarity: 'common', type: 'consumable', description: 'Slightly increases find/explore success chance.', data: { exploreBoostPct: 0.05, uses: 1 } },
+      { name: 'Lucky Coin', slug: 'lucky-coin', rarity: 'common', type: 'vanity', description: 'No gameplay effect. Flex item.', data: {} },
+      { name: 'Starter Pet', slug: 'starter-pet', rarity: 'common', type: 'pet', description: 'Cosmetic pet. Small daily bonus (100 coins).', data: { dailyBonus: 100 } },
+      { name: 'Crowbar', slug: 'crowbar', rarity: 'common', type: 'gear', description: 'Occasionally unlocks small loot in find.', data: { findBoostPct: 0.03 } },
+      { name: 'Map Fragment', slug: 'map-fragment', rarity: 'common', type: 'quest', description: 'Collect 5 to claim a small reward.', data: { partOf: 'treasure_map', partsNeeded: 5 } },
+      { name: 'Basic Charm', slug: 'basic-charm', rarity: 'common', type: 'consumable', description: 'Slightly reduces beg cooldown once.', data: { reduceBegCooldown: true, uses: 1 } },
+      { name: 'Rusty Token', slug: 'rusty-token', rarity: 'common', type: 'currency', description: 'Tradable token with minor value.', data: { value: 250 } },
+      { name: 'Common Badge', slug: 'common-badge', rarity: 'common', type: 'vanity', description: 'Badge showing you grind.', data: {} },
+      { name: 'Coffee Voucher', slug: 'coffee-voucher', rarity: 'common', type: 'consumable', description: 'Instant small stamina boost for jobs (flavor).', data: { jobBoostPct: 0.02, uses: 1 } },
+      { name: 'Pocket Knife', slug: 'pocket-knife', rarity: 'common', type: 'gear', description: 'Small chance to avoid a penalty in jobs.', data: { avoidPenaltyPct: 0.02 } },
+      { name: 'Beginner\'s Charm', slug: 'beginners-charm', rarity: 'common', type: 'consumable', description: 'Slightly increases beg payout once.', data: { begBoostPct: 0.05, uses: 1 } },
+      { name: 'Cloth Mask', slug: 'cloth-mask', rarity: 'common', type: 'vanity', description: 'Cosmetic. No gameplay effect.', data: {} },
+      { name: 'Field Ration', slug: 'field-ration', rarity: 'common', type: 'consumable', description: 'Prevents a small negative event on next explore.', data: { preventSmallLoss: true, uses: 1 } },
+      { name: 'Sellable Scrap', slug: 'sellable-scrap', rarity: 'common', type: 'currency', description: 'Can be sold for ~2k coins.', data: { value: 2000 } },
+      { name: 'Wooden Emblem', slug: 'wooden-emblem', rarity: 'common', type: 'vanity', description: 'Small title aesthetics.', data: {} },
+
+      // ====== UNCOMMON (12) ======
+      { name: 'Uncommon Toolkit', slug: 'uncommon-toolkit', rarity: 'uncommon', type: 'consumable', description: 'Boosts job payout by 8% for one use.', data: { jobBoostPct: 0.08, uses: 1 } },
+      { name: 'Silver Token', slug: 'silver-token', rarity: 'uncommon', type: 'currency', description: 'Worth a moderate amount (5k).', data: { value: 5000 } },
+      { name: 'Explorer\'s Shovel', slug: 'explorers-shovel', rarity: 'uncommon', type: 'gear', description: 'Increases explore max reward and chance of items.', data: { exploreMaxIncrease: 3000, exploreBoostPct: 0.08 } },
+      { name: 'Lucky Charm', slug: 'lucky-charm', rarity: 'uncommon', type: 'consumable', description: 'Improves gambling neutral outcomes slightly once.', data: { gamblingNeutralBoost: 0.03, uses: 1 } },
+      { name: 'Rare Bait', slug: 'rare-bait', rarity: 'uncommon', type: 'consumable', description: 'Use in find to increase chance of rare animal/item.', data: { findRareBoostPct: 0.12, uses: 1 } },
+      { name: 'Tinker\'s Kit', slug: 'tinkers-kit', rarity: 'uncommon', type: 'consumable', description: 'Increases chances of high payouts from jobs once.', data: { jobBoostPct: 0.10, uses: 1 } },
+      { name: 'Pocket Ledger', slug: 'pocket-ledger', rarity: 'uncommon', type: 'vanity', description: 'Shows small balance flair + minor bank interest (flavor).', data: { bankInterestPct: 0.002 } },
+      { name: 'Pet Fox', slug: 'pet-fox', rarity: 'uncommon', type: 'pet', description: 'Gives a 250 coin daily bonus.', data: { dailyBonus: 250 } },
+      { name: 'Quality Toolkit', slug: 'quality-toolkit', rarity: 'uncommon', type: 'consumable', description: 'Increases job XP by 10% for one use.', data: { xpBoostPct: 0.10, uses: 1 } },
+      { name: 'Mystery Key', slug: 'mystery-key', rarity: 'uncommon', type: 'quest', description: 'Opens a small locked chest event.', data: { opensChest: true } },
+      { name: 'Guild Token', slug: 'guild-token', rarity: 'uncommon', type: 'currency', description: 'Contribute to faction vault; adds status.', data: { value: 10000 } },
+      { name: 'Merchant\'s Receipt', slug: 'merchants-receipt', rarity: 'uncommon', type: 'consumable', description: 'Small guaranteed coins on next find.', data: { guaranteedFindCoins: 2000, uses: 1 } },
+
+      // ====== RARE (8) ======
+      { name: 'Rare Token', slug: 'rare-token', rarity: 'rare', type: 'quest', description: 'Used in faction events and special trades.', data: { eventWeight: 1 } },
+      { name: 'Veteran\'s Compass', slug: 'veterans-compass', rarity: 'rare', type: 'gear', description: 'Big boost to explore rewards once.', data: { exploreBoostPct: 0.20, uses: 1 } },
+      { name: 'Bank Vault Key', slug: 'bank-vault-key', rarity: 'rare', type: 'consumable', description: 'Temporarily increases bank interest and safety for 24 hours.', data: { bankInterestPct: 0.02, durationMs: 24*60*60*1000 } },
+      { name: 'Golden Bait', slug: 'golden-bait', rarity: 'rare', type: 'consumable', description: 'High chance to find valuable animals/items (max 15k).', data: { findMax: 15000, findRareBoostPct: 0.35, uses: 1 } },
+      { name: 'Lucky Horseshoe', slug: 'lucky-horseshoe', rarity: 'rare', type: 'consumable', description: 'One-time gambling safeplay: reduces chance of hard wipe once.', data: { reduceHardLossOnce: true } },
+      { name: 'Rare Pet: Hawk', slug: 'pet-hawk', rarity: 'rare', type: 'pet', description: 'Daily bonus +500 coins. Small utility in explore.', data: { dailyBonus: 500 } },
+      { name: 'Sturdy Toolkit', slug: 'sturdy-toolkit', rarity: 'rare', type: 'consumable', description: '+15% job payout for one use.', data: { jobBoostPct: 0.15, uses: 1 } },
+      { name: 'Artifact Shard', slug: 'artifact-shard', rarity: 'rare', type: 'quest', description: 'Trade 3 shards for a legendary reward in faction events.', data: { partOf: 'artifact', partsNeeded: 3 } },
+
+      // ====== LEGENDARY (5) ======
+      { name: 'Legendary Sigil', slug: 'legendary-sigil', rarity: 'legendary', type: 'consumable', description: 'Huge one-time job payout boost (40%) or convert to a large coin sum.', data: { jobBoostPct: 0.40, uses: 1, convertibleCoins: 150000 } },
+      { name: 'Mythic Banner', slug: 'mythic-banner', rarity: 'legendary', type: 'vanity', description: 'Faction/banner item. Massive prestige and faction event weight.', data: { factionBoostPct: 0.10 } },
+      { name: 'Phantom Pet', slug: 'phantom-pet', rarity: 'legendary', type: 'pet', description: 'Daily bonus +2k coins and passive explore perks.', data: { dailyBonus: 2000, exploreBoostPct: 0.10 } },
+      { name: 'Vault Master Key', slug: 'vault-master-key', rarity: 'legendary', type: 'consumable', description: 'One-time massive bank interest + safety window (48h).', data: { bankInterestPct: 0.05, durationMs: 48*60*60*1000 } },
+      { name: 'Legendary Token', slug: 'legendary-token', rarity: 'legendary', type: 'currency', description: 'High-value token used in top-tier faction events.', data: { value: 50000 } }
+    ];
+
+    for (const it of items) {
+      try {
+        addMasterItem({
+          name: it.name,
+          slug: it.slug,
+          rarity: it.rarity,
+          description: it.description,
+          type: it.type,
+          data: it.data || {}
+        });
+      } catch (e) {
+        console.error('bootstrap addMasterItem error for', it.slug, e);
+      }
+    }
+
+    console.log(`[Items] Bootstrapped ${items.length} master items.`);
   }
 }
 bootstrapIfEmpty();
