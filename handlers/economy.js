@@ -1,0 +1,117 @@
+// handlers/economy.js
+const path = require('path');
+const fs = require('fs');
+const Database = require('better-sqlite3');
+
+const DATA_DIR = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const dbPath = path.join(DATA_DIR, 'economy.sqlite');
+const db = new Database(dbPath);
+
+// PRAGMA for durability
+try {
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+} catch (e) {
+  console.warn('Could not set PRAGMA on economy DB:', e?.message || e);
+}
+
+// Users table
+db.prepare(`
+CREATE TABLE IF NOT EXISTS users (
+  user_id TEXT PRIMARY KEY,
+  wallet INTEGER DEFAULT 0,
+  bank INTEGER DEFAULT 0,
+  lifetime_earned INTEGER DEFAULT 0,
+  lifetime_lost INTEGER DEFAULT 0,
+  faction_id TEXT DEFAULT NULL,
+  last_daily INTEGER DEFAULT 0,
+  daily_streak INTEGER DEFAULT 0,
+  dailies_this_month INTEGER DEFAULT 0,
+  non_gambling_earned_month INTEGER DEFAULT 0,
+  monthly_claimed_at INTEGER DEFAULT 0,
+  inventory TEXT DEFAULT '[]',
+  cooldowns TEXT DEFAULT '{}'
+)
+`).run();
+
+function ensureUser(userId) {
+  const row = db.prepare('SELECT user_id FROM users WHERE user_id = ?').get(userId);
+  if (!row) {
+    db.prepare(`INSERT INTO users (user_id, wallet, bank) VALUES (?, ?, ?)`).run(userId, 0, 0);
+  }
+}
+
+function getUser(userId) {
+  ensureUser(userId);
+  return db.prepare('SELECT * FROM users WHERE user_id = ?').get(userId);
+}
+
+function setWallet(userId, amount) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET wallet = ? WHERE user_id = ?').run(Math.floor(amount), userId);
+}
+
+function addWallet(userId, amount) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ?').run(Math.floor(amount), userId);
+}
+
+function addBank(userId, amount) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET bank = bank + ? WHERE user_id = ?').run(Math.floor(amount), userId);
+}
+
+function addLifetimeEarned(userId, amount) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET lifetime_earned = lifetime_earned + ? WHERE user_id = ?').run(Math.floor(amount), userId);
+}
+
+function addLifetimeLost(userId, amount) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET lifetime_lost = lifetime_lost + ? WHERE user_id = ?').run(Math.floor(amount), userId);
+}
+
+function setLastDaily(userId, ts) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET last_daily = ? WHERE user_id = ?').run(ts || 0, userId);
+}
+function setDailyStreak(userId, streak) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET daily_streak = ? WHERE user_id = ?').run(streak, userId);
+}
+function incrementDailiesMonth(userId) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET dailies_this_month = dailies_this_month + 1 WHERE user_id = ?').run(userId);
+}
+function addNonGamblingEarnedMonth(userId, amount) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET non_gambling_earned_month = non_gambling_earned_month + ? WHERE user_id = ?').run(Math.floor(amount), userId);
+}
+function resetMonthlyProgress(userId) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET dailies_this_month = 0, non_gambling_earned_month = 0 WHERE user_id = ?').run(userId);
+}
+function setMonthlyClaimedAt(userId, ts) {
+  ensureUser(userId);
+  db.prepare('UPDATE users SET monthly_claimed_at = ? WHERE user_id = ?').run(ts || 0, userId);
+}
+
+// expose
+module.exports = {
+  db,
+  ensureUser,
+  getUser,
+  setWallet,
+  addWallet,
+  addBank,
+  addLifetimeEarned,
+  addLifetimeLost,
+  setLastDaily,
+  setDailyStreak,
+  incrementDailiesMonth,
+  addNonGamblingEarnedMonth,
+  resetMonthlyProgress,
+  setMonthlyClaimedAt
+};
