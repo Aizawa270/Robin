@@ -1,176 +1,136 @@
-// commands/gambling/blackjack.js
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const gh = require('../../handlers/gamblingHelper');
 
-function createDeck() {
-  const ranks = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
-  const suits = ['♠','♥','♦','♣'];
-  const deck = [];
-  for (const r of ranks) for (const s of suits) deck.push({ code: `${r}${s}`, rank: r });
-  return deck;
+const COOLDOWN_CMD = 'blackjack';
+const MAX_BET = 100_000;
+const SYMBOLS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+
+function cardValue(card) {
+  if (['J','Q','K'].includes(card)) return 10;
+  if (card === 'A') return 11; // handle Ace as 11 initially
+  return parseInt(card,10);
 }
-function shuffle(arr) {
-  for (let i = arr.length -1; i>0;i--) {
-    const j = Math.floor(Math.random()*(i+1));
-    [arr[i],arr[j]]=[arr[j],arr[i]];
-  }
-  return arr;
-}
-function handValue(cards) {
-  let total = 0;
-  let aces = 0;
-  for (const c of cards) {
-    const r = c.rank;
-    if (r === 'A') { aces++; total += 11; }
-    else if (['J','Q','K'].includes(r)) total += 10;
-    else total += parseInt(r,10);
-  }
+
+function handValue(hand) {
+  let total = hand.reduce((acc, c) => acc + cardValue(c), 0);
+  let aces = hand.filter(c => c === 'A').length;
   while (total > 21 && aces > 0) {
-    total -= 10; aces--;
+    total -= 10; // convert Ace 11 -> 1
+    aces--;
   }
   return total;
+}
+
+function drawCard() {
+  return SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
 }
 
 module.exports = {
   name: 'blackjack',
   aliases: ['bj'],
   category: 'gambling',
-  usage: '!blackjack <amount>',
-  description: 'Play blackjack. Hit/Stand via buttons. Dealer hits soft 17.',
+  usage: '!blackjack <bet>',
+  description: 'Play blackjack. H=Hit, S=Stand. Max bet 100k.',
   async execute(client, message, args) {
-    const bet = parseInt(args[0], 10);
+    // Cooldown
+    const cooldown = gh.getCooldown(message.author.id, COOLDOWN_CMD);
+    if (cooldown > 0) return message.reply(`Wait ${Math.ceil(cooldown/1000)}s before using Blackjack again.`);
+
+    const bet = parseInt(args[0],10);
     const v = gh.validateBet(bet);
     if (!v.ok) return message.reply(v.reason);
+
     const wallet = await gh.getWallet(client, message.author.id);
-    if (wallet == null) return gh.badSetupReply(message.channel);
     if (wallet < v.amount) return message.reply('Insufficient funds.');
 
-    // charge bet upfront
     await gh.changeWallet(client, message.author.id, -v.amount);
 
-    // prepare deck
-    let deck = shuffle(createDeck());
-
-    const player = [deck.pop(), deck.pop()];
-    const dealer = [deck.pop(), deck.pop()];
-
-    let playerVal = handValue(player);
-    let dealerVal = handValue(dealer);
-
-    const embed = new EmbedBuilder().setColor('#5865F2').setTitle('Blackjack');
-    function updateEmbed(desc) {
-      embed.setDescription(desc)
-        .setFields(
-          { name: 'Player', value: `${player.map(c=>c.code).join(' ')}\nValue: ${handValue(player)}` },
-          { name: 'Dealer', value: `${dealer[0].code} [hidden]` }
-        );
-    }
-
-    updateEmbed('Game started. Choose Hit or Stand.');
+    // Initial hands
+    let playerHand = [drawCard(), drawCard()];
+    let dealerHand = [drawCard(), drawCard()];
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('hit').setLabel('Hit (H)').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('stand').setLabel('Stand (S)').setStyle(ButtonStyle.Secondary)
     );
 
-    const sent = await message.channel.send({ embeds: [embed], components: [row] });
+    const embed = new EmbedBuilder()
+      .setColor('#5865F2')
+      .setTitle('Blackjack')
+      .setDescription(`Your hand: ${playerHand.join(' , ')} (Total: ${handValue(playerHand)})\nDealer: ${dealerHand[0]} , ?`)
+      .setFooter({ text: `Bet: ${v.amount} Vyncoins` });
 
-    const filter = (i) => i.user.id === message.author.id;
-    const collector = sent.createMessageComponentCollector({ filter, time: 120000 });
+    const msg = await message.channel.send({ embeds: [embed], components: [row] });
 
-    let finished = false;
+    const collector = msg.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: 2*60*1000
+    });
 
-    collector.on('collect', async interaction => {
-      if (!interaction.isButton()) return;
-      if (interaction.customId === 'bj_hit') {
-        player.push(deck.pop());
-        playerVal = handValue(player);
-        if (playerVal > 21) {
-          // busted
-          finished = true;
+    let ended = false;
+
+    collector.on('collect', async i => {
+      if (i.user.id !== message.author.id) return i.reply({ content: 'Not your game.', ephemeral: true });
+
+      if (i.customId === 'hit') {
+        playerHand.push(drawCard());
+        const total = handValue(playerHand);
+        if (total > 21) {
+          ended = true;
+          await i.update({
+            embeds: [embed.setDescription(`Your hand: ${playerHand.join(' , ')} (BUST!)\nDealer: ${dealerHand.join(' , ')} (Total: ${handValue(dealerHand)})`)],
+            components: []
+          });
           collector.stop('bust');
-          await interaction.update({ embeds: [embed.setDescription('You busted.') .setFields(
-            { name: 'Player', value: `${player.map(c=>c.code).join(' ')}\nValue: ${playerVal}` },
-            { name: 'Dealer', value: `${dealer.map(c=>c.code).join(' ')}\nValue: ${dealerVal}` }
-          )], components: [] });
-          return;
         } else {
-          // update embed
-          await interaction.update({ embeds: [embed.setDescription('You hit. Choose again.').setFields(
-            { name: 'Player', value: `${player.map(c=>c.code).join(' ')}\nValue: ${playerVal}` },
-            { name: 'Dealer', value: `${dealer[0].code} [hidden]` }
-          )] });
-          return;
+          await i.update({
+            embeds: [embed.setDescription(`Your hand: ${playerHand.join(' , ')} (Total: ${total})\nDealer: ${dealerHand[0]} , ?`)],
+            components: [row]
+          });
         }
-      } else if (interaction.customId === 'bj_stand') {
-        finished = true;
+      } else if (i.customId === 'stand') {
+        ended = true;
         collector.stop('stand');
-        await interaction.update({ embeds: [embed.setDescription('You stand. Dealer turn...').setFields(
-          { name: 'Player', value: `${player.map(c=>c.code).join(' ')}\nValue: ${playerVal}` },
-          { name: 'Dealer', value: `${dealer[0].code} [hidden]` }
-        )], components: [] });
-        return;
       }
     });
 
-    collector.on('end', async (_col, reason) => {
-      // if no interactions, refund bet? we'll treat as canceled and refund partial
-      if (!finished && reason === 'time') {
-        await sent.edit({ components: [] });
-        await gh.changeWallet(client, message.author.id, v.amount); // refund
-        return message.channel.send('Blackjack timed out. Bet refunded.');
+    collector.on('end', async (collected, reason) => {
+      if (!ended) reason = 'timeout';
+
+      // Dealer plays if player didn't bust
+      if (reason !== 'bust') {
+        while (handValue(dealerHand) < 17) dealerHand.push(drawCard());
       }
 
-      // If player busted earlier
-      if (reason === 'bust') {
-        // lost already (bet consumed)
-        return message.channel.send({ embeds: [new EmbedBuilder().setColor('#f87171').setTitle('Blackjack').setDescription(`You busted and lost **${v.amount}** Vyncoins.`)] });
+      const playerTotal = handValue(playerHand);
+      const dealerTotal = handValue(dealerHand);
+      let payout = 0;
+      let resultText = '';
+
+      if (playerTotal > 21) resultText = 'You busted! You lose.';
+      else if (dealerTotal > 21 || playerTotal > dealerTotal) { 
+        payout = v.amount*2; 
+        resultText = `You won! You receive **${payout}** Vyncoins.`; 
       }
-
-      // Dealer plays (dealer hits soft 17)
-      dealerVal = handValue(dealer);
-      while (dealerVal < 17 || (dealerVal === 17 && dealer.some(c => c.rank === 'A') && handValue(dealer) === 17)) {
-        dealer.push(deck.pop());
-        dealerVal = handValue(dealer);
+      else if (playerTotal === dealerTotal) { 
+        payout = v.amount; 
+        resultText = `Push! Your bet is returned.`; 
       }
+      else resultText = 'Dealer wins. You lose.';
 
-      // Evaluate results
-      playerVal = handValue(player);
-      dealerVal = handValue(dealer);
-
-      let resultEmbed = new EmbedBuilder().setColor('#5865F2').setTitle('Blackjack - Result')
-        .setFields(
-          { name: 'Player', value: `${player.map(c=>c.code).join(' ')}\nValue: ${playerVal}` },
-          { name: 'Dealer', value: `${dealer.map(c=>c.code).join(' ')}\nValue: ${dealerVal}` }
-        );
-
-      // Blackjack check (player has 2 cards totalling 21)
-      const playerBlackjack = (player.length === 2 && playerVal === 21);
-      const dealerBlackjack = (dealer.length === 2 && dealerVal === 21);
-
-      if (playerBlackjack && !dealerBlackjack) {
-        const payout = Math.floor(v.amount * 1.5);
-        await gh.changeWallet(client, message.author.id, v.amount + payout); // return bet + winnings
+      if (payout > 0) {
+        await gh.changeWallet(client, message.author.id, payout);
         await gh.addMonthlyGamblingProgress(client, message.author.id, payout);
-        resultEmbed.setDescription(`Blackjack! You won **${payout}** Vyncoins.`);
-      } else if (dealerBlackjack && !playerBlackjack) {
-        resultEmbed.setDescription(`Dealer has blackjack. You lost **${v.amount}** Vyncoins.`);
-      } else if (playerVal > 21) {
-        resultEmbed.setDescription(`You busted. You lost **${v.amount}** Vyncoins.`);
-      } else if (dealerVal > 21 || playerVal > dealerVal) {
-        const payout = v.amount;
-        await gh.changeWallet(client, message.author.id, v.amount + payout);
-        await gh.addMonthlyGamblingProgress(client, message.author.id, payout);
-        resultEmbed.setDescription(`You beat the dealer! You won **${payout}** Vyncoins.`);
-      } else if (playerVal === dealerVal) {
-        // push - refund bet
-        await gh.changeWallet(client, message.author.id, v.amount);
-        resultEmbed.setDescription(`Push. Bet refunded.`);
-      } else {
-        resultEmbed.setDescription(`Dealer wins. You lost **${v.amount}** Vyncoins.`);
       }
 
-      return message.channel.send({ embeds: [resultEmbed] });
+      const finalEmbed = new EmbedBuilder()
+        .setColor('#5865F2')
+        .setTitle('Blackjack Result')
+        .setDescription(`Your hand: ${playerHand.join(' , ')} (Total: ${playerTotal})\nDealer: ${dealerHand.join(' , ')} (Total: ${dealerTotal})\n\n${resultText}`)
+        .setFooter({ text: `Bet: ${v.amount} Vyncoins` });
+
+      gh.setCooldown(message.author.id, COOLDOWN_CMD);
+      await msg.edit({ embeds: [finalEmbed], components: [] });
     });
   }
 };
