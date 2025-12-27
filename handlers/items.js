@@ -192,3 +192,34 @@ module.exports = {
   listPendingTradesFor,
   deleteTrade
 };
+
+// add this at the end of handlers/items.js
+// ----------------- In-memory boosts -----------------
+const activeBoosts = new Map(); // userId => { jobBoost, factionBoost, eventBoost, expires }
+
+function applyItemEffect(userId, data) {
+  const now = Date.now();
+  const current = activeBoosts.get(userId) || {};
+  const expires = now + (data.duration || 3600 * 1000); // default 1h
+
+  activeBoosts.set(userId, {
+    jobBoost: (current.jobBoost || 0) + (data.jobBoost || 0),
+    factionBoost: (current.factionBoost || 0) + (data.factionBoost || 0),
+    eventBoost: (current.eventBoost || 0) + (data.eventBoost || 0),
+    expires
+  });
+}
+
+function getActiveBoosts(userId) {
+  const now = Date.now();
+  const boosts = activeBoosts.get(userId);
+  if (!boosts || boosts.expires < now) {
+    activeBoosts.delete(userId);
+    return { jobBoost: 0, factionBoost: 0, eventBoost: 0 };
+  }
+  return boosts;
+}
+
+module.exports.activeBoosts = activeBoosts;
+module.exports.applyItemEffect = applyItemEffect;
+module.exports.getActiveBoosts = getActiveBoosts;
