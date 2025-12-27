@@ -1,50 +1,51 @@
-const { EmbedBuilder, PermissionsBitField } = require("discord.js");
+const { EmbedBuilder, PermissionFlagsBits } = require("discord.js");
 
 module.exports = {
   name: "battlewinner",
-  description: "Ends a battle and declares the winner",
+  description: "Declare the winner of a battle",
   category: "mod",
-  permissions: [PermissionsBitField.Flags.Administrator],
 
-  async execute(message, args, client) {
-    const mentions = message.mentions.users;
-    if (mentions.size < 2) return;
+  async execute(client, message, args) {
+    if (!message.guild) return;
 
-    const winner = mentions.first();
-    const loser = mentions.at(1);
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return;
 
-    const guildId = message.guild.id;
-    const battle = client.battles?.get(guildId);
+    const users = message.mentions.users;
+    if (!users || users.size < 2) return;
+
+    const winner = users.first();
+    const loser = users.at(1);
+
+    if (!client.battles) return;
+
+    const battle = client.battles.get(message.guild.id);
     if (!battle) return;
 
-    const fighters = battle.fighters;
-    const arena = battle.arena;
-
-    // 🏆 WINNER EMBED
+    // EMBED
     const embed = new EmbedBuilder()
-      .setColor("Red")
+      .setColor("#ef4444")
       .setDescription(`(${winner}) has successfully humbed (${loser})`);
 
     await message.channel.send({ embeds: [embed] });
 
-    // 🔓 RESTORE PERMISSIONS SAFELY
+    // RESTORE PERMS
     for (const channel of message.guild.channels.cache.values()) {
       if (!channel.isTextBased()) continue;
 
-      for (const userId of fighters) {
+      for (const userId of battle.fighters) {
         const overwrite = channel.permissionOverwrites.cache.get(userId);
-        if (!overwrite) continue;
-
-        await channel.permissionOverwrites.delete(userId).catch(() => {});
+        if (overwrite) {
+          await channel.permissionOverwrites.delete(userId).catch(() => {});
+        }
       }
     }
 
-    // 🧹 DELETE ARENA
-    if (arena) {
-      await arena.delete().catch(() => {});
+    // DELETE ARENA
+    if (battle.arena) {
+      await battle.arena.delete().catch(() => {});
     }
 
-    // 🧠 CLEAR BATTLE STATE
-    client.battles.delete(guildId);
+    // CLEAR STATE
+    client.battles.delete(message.guild.id);
   }
 };
