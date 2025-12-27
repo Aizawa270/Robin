@@ -1,17 +1,17 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
 const ARENA_CHANNEL_ID = '1453791150556319979';
-const LOSER_MUTE_DURATION = 10 * 60 * 1000; // 10 minutes
+const LOSER_MUTE_DURATION = 10 * 60 * 1000;
 
 module.exports = {
   name: 'battlewinner',
   description: 'Declare the winner of a 1v1 battle.',
   category: 'mod',
   usage: '!battlewinner @user',
-  aliases: [],
-  async execute(client, message, args) {
+
+  async execute(client, message) {
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Admins only. Don’t try it.');
+      return message.reply('Admins only.');
     }
 
     const winner = message.mentions.members.first();
@@ -33,50 +33,44 @@ module.exports = {
 
     const arena = await message.guild.channels.fetch(ARENA_CHANNEL_ID);
 
-    // 🏆 WINNER EMBED
     const winEmbed = new EmbedBuilder()
       .setColor('#34d399')
-      .setTitle('BATTLE OVER')
-      .setDescription(`<@${winner.id}> absolutely folded <@${loser.id}>`)
+      .setDescription(`<@${winner.id}> defeated <@${loser.id}>`)
       .setTimestamp();
 
     await arena.send({ embeds: [winEmbed] });
 
-    // 🔇 LOSER EMBED
     const muteEmbed = new EmbedBuilder()
       .setColor('#f87171')
-      .setDescription(`<@${loser.id}> is muted for **10 minutes**. Hold that L.`);
+      .setDescription(`<@${loser.id}> is muted for **10 minutes**.`);
 
     await arena.send({ embeds: [muteEmbed] });
 
-    // 🔕 TIMEOUT LOSER
     try {
-      await loser.timeout(LOSER_MUTE_DURATION, 'Lost 1v1 battle');
-    } catch (err) {
-      console.error('Failed to mute loser:', err);
-    }
+      await loser.timeout(LOSER_MUTE_DURATION, 'Lost battle');
+    } catch {}
 
     const fighters = [winner.id, loser.id];
 
-    // 🔓 RESTORE ACCESS TO ALL CHANNELS
+    // 🔓 RESTORE CHANNEL ACCESS
     for (const channel of message.guild.channels.cache.values()) {
       if (!channel.isTextBased()) continue;
 
-      for (const userId of fighters) {
-        await channel.permissionOverwrites.delete(userId).catch(() => {});
+      for (const id of fighters) {
+        await channel.permissionOverwrites.delete(id).catch(() => {});
       }
     }
 
-    // 🧹 CLEAN ARENA PERMS
-    for (const userId of fighters) {
-      await arena.permissionOverwrites.delete(userId).catch(() => {});
+    // 🧹 CLEAR ARENA PERMS
+    for (const id of fighters) {
+      await arena.permissionOverwrites.delete(id).catch(() => {});
     }
 
-    // 🗑️ REMOVE BATTLE FROM DB
+    // 🗑️ DELETE BATTLE
     client.battleDB
       .prepare('DELETE FROM ongoing_battles WHERE channel_id = ?')
       .run(ARENA_CHANNEL_ID);
 
-    return message.reply('Battle ended. Permissions restored.');
+    return message.reply('Battle ended.');
   },
 };
