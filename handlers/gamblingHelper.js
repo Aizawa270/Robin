@@ -1,53 +1,61 @@
 // handlers/gamblingHelper.js
 const { EmbedBuilder } = require('discord.js');
+const COOLDOWN_MS = 15_000; // 15s per command
 
-const MAX_BET = 100_000;
-const MIN_BET = 1;
+const cooldowns = new Map(); // Map<userId_command, timestamp>
 
-function badSetupReply(channel, text = 'Economy handler not found. Wire client.economy with getWallet/addWallet/removeWallet/addMonthlyProgress.') {
+function now() { return Date.now(); }
+
+function getCooldown(userId, cmd) {
+  const key = `${userId}_${cmd}`;
+  const ts = cooldowns.get(key) || 0;
+  return Math.max(0, ts - now());
+}
+
+function setCooldown(userId, cmd) {
+  const key = `${userId}_${cmd}`;
+  cooldowns.set(key, now() + COOLDOWN_MS);
+}
+
+function badSetupReply(channel, text = 'Economy handler not found.') {
   return channel.send({ embeds: [new EmbedBuilder().setColor('#f87171').setDescription(text)] });
-}
-
-async function getWallet(client, userId) {
-  if (!client.economy || typeof client.economy.getWallet !== 'function') return null;
-  return await client.economy.getWallet(userId);
-}
-
-async function changeWallet(client, userId, amount) {
-  // amount may be negative (remove) or positive (add)
-  if (!client.economy) return null;
-  if (amount >= 0 && typeof client.economy.addWallet === 'function') {
-    return await client.economy.addWallet(userId, amount);
-  }
-  if (amount < 0 && typeof client.economy.removeWallet === 'function') {
-    return await client.economy.removeWallet(userId, -amount);
-  }
-  return null;
-}
-
-async function addMonthlyGamblingProgress(client, userId, amount) {
-  // If your economy has a dedicated method to record monthly gambling progress, use it.
-  if (client.economy && typeof client.economy.addMonthlyProgress === 'function') {
-    try {
-      await client.economy.addMonthlyProgress(userId, amount, 'gamble');
-    } catch (e) { /* ignore */ }
-  }
 }
 
 function validateBet(amount) {
   if (!Number.isFinite(amount)) return { ok: false, reason: 'Invalid number' };
   amount = Math.floor(amount);
-  if (amount < MIN_BET) return { ok: false, reason: `Minimum bet is ${MIN_BET}` };
-  if (amount > MAX_BET) return { ok: false, reason: `Maximum bet is ${MAX_BET}` };
+  if (amount < 1) return { ok: false, reason: 'Minimum bet is 1' };
+  if (amount > 100_000) return { ok: false, reason: 'Maximum bet is 100k' };
   return { ok: true, amount };
 }
 
+async function getWallet(client, userId) {
+  if (!client.economy || typeof client.economy.getUser !== 'function') return null;
+  const user = client.economy.getUser(userId);
+  return user?.wallet ?? 0;
+}
+
+async function changeWallet(client, userId, amount) {
+  if (!client.economy) return null;
+  if (amount >= 0) {
+    client.economy.addWallet(userId, amount);
+  } else {
+    client.economy.addWallet(userId, amount); // your addWallet handles negative values too
+  }
+}
+
+async function addMonthlyGamblingProgress(client, userId, amount) {
+  if (!client.economy) return;
+  client.economy.addNonGamblingEarnedMonth(userId, amount);
+}
+
 module.exports = {
-  MAX_BET,
-  MIN_BET,
+  COOLDOWN_MS,
+  getCooldown,
+  setCooldown,
   badSetupReply,
+  validateBet,
   getWallet,
   changeWallet,
-  addMonthlyGamblingProgress,
-  validateBet
+  addMonthlyGamblingProgress
 };
