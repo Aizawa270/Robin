@@ -8,39 +8,45 @@ module.exports = {
   category: 'economy',
   usage: '!useitem <item_slug>',
   async execute(client, message, args) {
-    if (!args[0]) return message.reply('Please provide an item slug to use.');
+    if (!args[0]) return message.reply('Provide an item slug.');
 
     const slug = args[0].toLowerCase();
     const item = items.getMasterItem(slug);
     if (!item) return message.reply('Item not found.');
 
     const qty = items.getUserItemQty(message.author.id, item.id);
-    if (!qty) return message.reply('You do not have this item.');
+    if (qty < 1) return message.reply('You do not own this item.');
 
-    // Check faction restriction
+    const data = JSON.parse(item.data || '{}');
+
+    // faction check
     const user = econ.getUser(message.author.id);
-    if (item.data?.factionOnly && !user.faction_id) {
-      return message.reply('This item can only be used by a faction member.');
+    if (data.factionOnly && !user.faction_id) {
+      return message.reply('Faction-only item.');
     }
 
-    // remove item
+    // consume
     items.removeItem(message.author.id, item.id, 1);
 
-    // apply effect in memory
-    const data = item.data || {};
-    require('../../handlers/items').applyItemEffect(message.author.id, data);
-
-    // effect text
-    let effectText = '';
-    if (data.jobBoost) effectText += `Job earnings boosted by ${data.jobBoost}% for next job.\n`;
-    if (data.eventBoost) effectText += `Event rewards boosted by ${data.eventBoost}%.\n`;
-    if (data.factionBoost) effectText += `Faction earnings boosted by ${data.factionBoost}%.\n`;
-    if (data.risk) effectText += `Risk modifier applied: ${data.risk}%.\n`;
+    // apply effects
+    let effects = [];
+    if (data.jobBoost) {
+      econ.applyModifier(message.author.id, 'jobBoost', data.jobBoost);
+      effects.push(`Job earnings boosted (+${data.jobBoost}%)`);
+    }
+    if (data.gambleEdge) {
+      econ.applyModifier(message.author.id, 'gambleEdge', data.gambleEdge);
+      effects.push(`Hidden gambling edge applied`);
+    }
+    if (data.cooldownReduce) {
+      econ.applyModifier(message.author.id, 'cooldownReduce', data.cooldownReduce);
+      effects.push(`Cooldowns reduced`);
+    }
 
     const embed = new EmbedBuilder()
-      .setTitle(`Used Item: ${item.name}`)
-      .setColor('#f97316')
-      .setDescription(effectText || 'Used the item, but nothing happened.');
+      .setColor('#f59e0b')
+      .setTitle(`Item Used — ${item.name}`)
+      .setDescription(effects.join('\n') || 'Item consumed.');
 
     return message.reply({ embeds: [embed] });
   }
