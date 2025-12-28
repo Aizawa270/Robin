@@ -1,28 +1,33 @@
+// commands/economy/explore.js
 const { EmbedBuilder } = require('discord.js');
 const mini = require('../../handlers/miniActivities');
 
 module.exports = {
   name: 'explore',
-  description: 'Explore far areas for coins or items. Legendary items are extremely rare.',
+  description: 'Explore the world to earn coins and discover rare items!',
   category: 'economy',
   usage: '!explore',
-  aliases: [],
   async execute(client, message, args) {
-    const res = await mini.explore(message.author.id);
-    if (!res.ok && res.reason === 'cooldown') {
-      const secs = Math.floor(res.remaining / 1000);
-      return message.reply(`Cooldown active. Try again in ${secs}s.`);
+    try {
+      const res = await mini.explore(message.author.id);
+
+      if (!res.ok) {
+        if (res.reason === 'cooldown') {
+          return message.reply(`Cooldown active. Try again in ${Math.floor(res.remaining/1000)}s.`);
+        }
+        return message.reply('Something went wrong.');
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('You explored the surroundings...')
+        .setColor('#3b82f6')
+        .setDescription(`Coins found: **${res.coins}**${res.droppedItem ? `\nYou discovered: **${res.droppedItem.name}** (${res.droppedItem.rarity})` : ''}`);
+
+      message.reply({ embeds: [embed] });
+
+    } catch (err) {
+      console.error(err);
+      message.reply('Error running explore.');
     }
-
-    const embed = new EmbedBuilder()
-      .setColor('#22c55e')
-      .setTitle('You went exploring!');
-
-    let desc = `You found **${res.coins} Vyncoins**.`;
-    if (res.nothing) desc = 'You found nothing this time.';
-    if (res.droppedItem) desc += `\nYou also found a **${res.droppedItem.name}** (${res.droppedItem.rarity})!`;
-
-    embed.setDescription(desc);
-    message.reply({ embeds: [embed] });
   }
 };
