@@ -1,44 +1,31 @@
-// commands/economy/beg.js
 const { EmbedBuilder } = require('discord.js');
-const econ = require('../../handlers/economy');
-
-const COOLDOWN_MS = 15 * 60 * 1000; // 15min default cooldown
-
-const LINES = [
-  "You begged at the fountain and someone pity-bought you a snack.",
-  "A kind stranger tossed you a coin. You're alive.",
-  "You held a sign. Someone gave spare change and a stare.",
-  "You tripped and a wallet burst open — small haul.",
-  "A rare blessing! Someone felt generous."
-];
+const gh = require('../../handlers/gamblingHelper');
+const items = require('../../handlers/items');
 
 module.exports = {
   name: 'beg',
   category: 'economy',
+  description: 'Beg for Vyncoins from NPCs.',
   usage: '!beg',
   async execute(client, message, args) {
-    const cdLeft = econ.getCooldown(message.author.id, 'beg');
-    if (cdLeft > 0) return message.reply(`Wait ${Math.ceil(cdLeft/1000)}s.`);
-    // tiny RNG
-    const roll = Math.random();
-    let amount = 0;
-    if (roll < 0.02) { // rare best -> up to 5k
-      amount = Math.floor(1000 + Math.random() * 4000);
-    } else if (roll < 0.20) {
-      amount = Math.floor(200 + Math.random() * 800);
-    } else {
-      amount = Math.floor(20 + Math.random() * 180);
-    }
-    // message
-    const text = LINES[Math.floor(Math.random()*LINES.length)];
-    econ.changeWallet(message.author.id, amount);
-    econ.setCooldown(message.author.id, 'beg', COOLDOWN_MS);
-    // non-gambling earned counts
-    econ.addNonGamblingEarnedMonth(message.author.id, amount);
+    const cooldown = gh.getCooldown(message.author.id, 'beg');
+    if (cooldown > 0) return message.reply(`Wait ${Math.ceil(cooldown/1000)}s before begging again.`);
+
+    // base coins: random 5-50
+    let coins = Math.floor(Math.random()*46 + 5);
+    coins = items.applyActionModifiers(message.author.id, coins, 'beg');
+
+    // max cap: 100
+    if (coins > 100) coins = 100;
+
+    await gh.changeWallet(client, message.author.id, coins);
+
     const embed = new EmbedBuilder()
-      .setColor('#f97316')
-      .setTitle('Beg Result')
-      .setDescription(`${text}\n\nYou received **${amount}** Vyncoins.`);
+      .setTitle('You begged for coins...')
+      .setDescription(`Someone gave you **${coins}** Vyncoins.`)
+      .setColor('#facc15');
+
+    gh.setCooldown(message.author.id, 'beg');
     return message.reply({ embeds: [embed] });
   }
 };
