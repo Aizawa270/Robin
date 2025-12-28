@@ -3,18 +3,38 @@ const items = require('../../handlers/items');
 
 module.exports = {
   name: 'itemslist',
-  description: 'List all items',
+  aliases: ['itemlist', 'items'],
   category: 'economy',
-  async execute(client, message, args) {
-    const allItems = items.listMasterItems();
-    const embed = new EmbedBuilder()
-      .setTitle('🛠️ Items List')
-      .setColor('#22c55e');
+  description: 'View all available items in the economy',
 
+  async execute(client, message) {
+    const allItems = items.listMasterItems();
+
+    if (!allItems || allItems.length === 0) {
+      return message.reply('No items found. Your item seed is broken.');
+    }
+
+    // group by rarity for readability
+    const grouped = {};
     for (const item of allItems) {
+      if (!grouped[item.rarity]) grouped[item.rarity] = [];
+      grouped[item.rarity].push(item);
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle('Economy Items')
+      .setColor('#1f2937')
+      .setFooter({ text: `Total items: ${allItems.length}` });
+
+    for (const rarity of Object.keys(grouped)) {
+      const value = grouped[rarity]
+        .map(i => `• **${i.name}** (${i.slug}) — ${i.type}`)
+        .join('\n')
+        .slice(0, 1024); // discord safety
+
       embed.addFields({
-        name: `${item.name} [${item.rarity}]`,
-        value: `${item.description}${item.data?.factionOnly ? '\nFaction Exclusive' : ''}\nType: ${item.type}`,
+        name: rarity.toUpperCase(),
+        value
       });
     }
 
