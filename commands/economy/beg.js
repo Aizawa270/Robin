@@ -4,38 +4,37 @@ const mini = require('../../handlers/miniActivities');
 
 module.exports = {
   name: 'beg',
-  aliases: [],
-  description: 'Beg for coins. Small payouts. Funny responses.',
+  description: 'Beg for coins, and maybe get lucky with an item!',
   category: 'economy',
   usage: '!beg',
+  aliases: ['panhandle'],
   async execute(client, message, args) {
-    const userId = message.author.id;
-
-    // cooldown check
-    const cd = mini.getCooldown(userId, 'beg');
-    if (cd > 0) return message.reply(`Cooldown: wait ${Math.ceil(cd/1000)}s.`);
-
     try {
-      const res = await mini.beg(userId);
-      if (res.nothing || res.coins === 0) {
-        const embed = new EmbedBuilder()
-          .setColor('#1f2937')
-          .setTitle('Begging Result')
-          .setDescription(`No one bothered to help you this time.`)
-          .addFields({ name: 'Outcome', value: 'You received nothing. Try again later.' });
-        return message.reply({ embeds: [embed] });
+      const res = await mini.beg(message.author.id);
+
+      if (!res.ok) {
+        if (res.reason === 'cooldown') {
+          const mins = Math.floor(res.remaining / 60000);
+          const secs = Math.floor((res.remaining % 60000) / 1000);
+          return message.reply(`Cooldown active. Try again in ${mins}m ${secs}s.`);
+        }
+        return message.reply('No one gave you anything this time...');
       }
 
-      // cap check: ensure we never return >5k (rare)
-      const capped = Math.min(res.coins, 5000);
+      let desc = '';
+      if (res.nothing) desc = 'No one gave you anything... try again later.';
+      else desc = `Someone gave you **${res.coins} Vyncoins**!`;
+
+      if (res.droppedItem) {
+        const item = res.droppedItem;
+        desc += `\n🎁 **Item received:** ${item.name} (${item.rarity.toUpperCase()})`;
+        if (item.rarity === 'legendary') desc = `💎 LEGENDARY ITEM RECEIVED! 💎\n` + desc;
+      }
 
       const embed = new EmbedBuilder()
-        .setColor('#06b6d4')
-        .setTitle('Begging Result')
-        .setDescription(`You received **${capped} Vyncoins**.`)
-        .addFields(
-          { name: 'Note', value: 'Begging payouts are usually small; rare yields hit the cap.' }
-        );
+        .setColor('#f87171')
+        .setTitle('Beg Activity')
+        .setDescription(desc);
 
       return message.reply({ embeds: [embed] });
     } catch (err) {
