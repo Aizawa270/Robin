@@ -1,28 +1,31 @@
+// commands/economy/find.js
 const { EmbedBuilder } = require('discord.js');
 const mini = require('../../handlers/miniActivities');
 
 module.exports = {
   name: 'find',
-  description: 'Try to find coins or items.',
+  description: 'Find coins and maybe items!',
   category: 'economy',
   usage: '!find',
-  aliases: [],
   async execute(client, message, args) {
-    const res = await mini.find(message.author.id);
-    if (!res.ok && res.reason === 'cooldown') {
-      const secs = Math.floor(res.remaining / 1000);
-      return message.reply(`Cooldown active. Try again in ${secs}s.`);
+    try {
+      const res = await mini.find(message.author.id);
+      if (!res.ok) {
+        if (res.reason === 'cooldown') {
+          return message.reply(`Cooldown active. Try again in ${Math.floor(res.remaining/1000)}s.`);
+        }
+        return message.reply('Something went wrong.');
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('You searched around...')
+        .setColor('#22c55e')
+        .setDescription(`Coins found: **${res.coins}**${res.droppedItem ? `\nYou also found: **${res.droppedItem.name}** (${res.droppedItem.rarity})` : ''}`);
+
+      message.reply({ embeds: [embed] });
+    } catch (err) {
+      console.error(err);
+      message.reply('Error running find.');
     }
-
-    const embed = new EmbedBuilder()
-      .setColor('#f59e0b')
-      .setTitle('You went exploring for loot!');
-
-    let desc = `You found **${res.coins} Vyncoins**.`;
-    if (res.nothing) desc = 'You found nothing this time.';
-    if (res.droppedItem) desc += `\nYou also found a **${res.droppedItem.name}**!`;
-
-    embed.setDescription(desc);
-    message.reply({ embeds: [embed] });
   }
 };
