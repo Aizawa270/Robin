@@ -1,44 +1,21 @@
-// commands/economy/monthly.js
+// commands/economy/claimmonthly.js
 const { EmbedBuilder } = require('discord.js');
 const econ = require('../../handlers/economy');
 
-const MONTHLY_REQUIRE_DAILIES = 14;
-const MONTHLY_REQUIRE_NON_GAMBLE = 500000;
-const MONTHLY_REWARD = 2000000; // 2M
-const MONTHLY_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-
 module.exports = {
   name: 'monthly',
-  description: 'Claim monthly reward if conditions met.',
+  aliases: ['monthly'],
   category: 'economy',
-  usage: '!monthly',
-  aliases: [],
+  usage: '!claimmonthly',
   async execute(client, message, args) {
-    const uid = message.author.id;
-    econ.ensureUser(uid);
-    const u = econ.getUser(uid);
-
-    const now = Date.now();
-    if (u.monthly_claimed_at && (now - (u.monthly_claimed_at || 0)) < MONTHLY_COOLDOWN_MS) {
-      return message.reply('You already claimed monthly recently. Wait before trying again.');
+    const userId = message.author.id;
+    if (!econ.canClaimMonthly(userId)) {
+      const u = econ.getUser(userId);
+      return message.reply(`You don't meet monthly requirements. You need ${econ.MONTHLY_REQUIRED_DAILIES || 14} dailies and ${econ.MONTHLY_NON_GAMBLING_REQ || 500000} non-gambling earned. You have ${u.dailies_this_month} dailies and ${u.non_gambling_earned_month} earned.`);
     }
-
-    if ((u.dailies_this_month || 0) < MONTHLY_REQUIRE_DAILIES || (u.non_gambling_earned_month || 0) < MONTHLY_REQUIRE_NON_GAMBLE) {
-      return message.reply(`Monthly requirements not met. Need ${MONTHLY_REQUIRE_DAILIES} dailies and ${MONTHLY_REQUIRE_NON_GAMBLE} non-gambling earnings this month.`);
-    }
-
-    // Give reward
-    econ.addWallet(uid, MONTHLY_REWARD);
-    econ.addLifetimeEarned(uid, MONTHLY_REWARD);
-    econ.setMonthlyClaimedAt(uid, now);
-    // reset monthly progress
-    econ.resetMonthlyProgress(uid);
-
-    const embed = new EmbedBuilder()
-      .setColor('#06b6d4')
-      .setTitle('Monthly Claimed')
-      .setDescription(`You received **${MONTHLY_REWARD} Vyncoins**. Congrats.`);
-
+    const award = econ.claimMonthly(userId);
+    if (!award) return message.reply('Failed to claim monthly (unknown).');
+    const embed = new EmbedBuilder().setColor('#22c55e').setTitle('Monthly Claimed').setDescription(`You received **${award}** Vyncoins!`);
     return message.reply({ embeds: [embed] });
   }
 };
