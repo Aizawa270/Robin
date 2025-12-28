@@ -1,10 +1,7 @@
+// handlers/miniActivities.js
+const { roll } = require('./helpers'); // simple roll helper
 const econ = require('./economy');
 const items = require('./items');
-
-// helper: simple roll
-function roll(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
 
 // ---- cooldown helpers ----
 function _readCooldownsRow(userRow) {
@@ -20,8 +17,7 @@ function getCooldown(userId, key) {
   const row = econ.getUser(userId);
   const cooldowns = _readCooldownsRow(row);
   const ts = cooldowns[key];
-  if (!ts) return 0;
-  return Math.max(0, ts - Date.now());
+  return ts ? Math.max(0, ts - Date.now()) : 0;
 }
 
 function setCooldown(userId, key, msFromNow) {
@@ -29,7 +25,7 @@ function setCooldown(userId, key, msFromNow) {
   const row = econ.getUser(userId);
   const cooldowns = _readCooldownsRow(row);
   cooldowns[key] = Date.now() + msFromNow;
-  econ.db.prepare('UPDATE users SET cooldowns = ? WHERE user_id = ?').run(JSON.stringify(cooldowns), userId);
+  econ.db.prepare('UPDATE users SET cooldowns=? WHERE user_id=?').run(JSON.stringify(cooldowns), userId);
 }
 
 // ---- item effect collector ----
@@ -57,44 +53,45 @@ function collectItemEffects(userId) {
 // ---- item drop logic ----
 function rollRarity() {
   const r = Math.random() * 100;
-  if (r < 1) return 'legendary';   // 1%
-  if (r < 6) return 'epic';         // 5%
-  if (r < 16) return 'rare';        // 10%
-  if (r < 36) return 'uncommon';    // 20%
-  return 'common';                   // 64%
+  if (r < 1) return 'legendary';  // 1% legendary
+  if (r < 6) return 'rare';       // 5% rare
+  if (r < 16) return 'epic';      // 10% epic
+  if (r < 46) return 'uncommon';  // 30% uncommon
+  return 'common';                // 54% common
 }
 
 function getRandomItemByRarity(rarity) {
   const all = items.listMasterItems().filter(it => (it.rarity || 'common').toLowerCase() === rarity);
-  if (!all.length) return null;
-  return all[roll(0, all.length - 1)];
+  return all.length ? all[roll(0, all.length - 1)] : null;
 }
 
-// ---- core activity reward wrapper ----
-async function runActivity({ userId, baseMin, baseMax, activityKey, baseCooldownMs, specialFailureCooldownMs = 0, nothingChance = 0.05, allowItemDrop = true }) {
+// ---- activity runner ----
+async function runActivity({ userId, minCoins, maxCoins, key, cooldownMs, nothingChance = 0.05, allowItemDrop = true }) {
   econ.ensureUser(userId);
 
-  const cd = getCooldown(userId, activityKey);
+  const cd = getCooldown(userId, key);
   if (cd > 0) return { ok: false, reason: 'cooldown', remaining: cd };
 
   const didNothing = Math.random() < nothingChance;
   if (didNothing) {
-    setCooldown(userId, activityKey, baseCooldownMs + specialFailureCooldownMs);
-    return { ok: true, coins: 0, nothing: true, appliedCooldownMs: baseCooldownMs + specialFailureCooldownMs };
+    setCooldown(userId, key, cooldownMs);
+    return { ok: true, coins: 0, nothing: true, appliedCooldownMs: cooldownMs };
   }
 
   const effects = collectItemEffects(userId);
-  let total = Math.floor(roll(baseMin, baseMax) * effects.multiplier + Math.floor(baseMin * (effects.flatPercent / 100)));
+
+  let total = Math.floor(roll(minCoins, maxCoins) * effects.multiplier + Math.floor(minCoins * (effects.flatPercent / 100)));
   total = Math.max(0, total);
 
   if (total > 0) {
     econ.addWallet(userId, total);
-    econ.addLifetimeEarned(userId, total);
-    econ.addNonGamblingEarnedMonth(userId, total);
+    // optional: if you track lifetime/non-gamble, implement these
+    if (typeof econ.addLifetimeEarned === 'function') econ.addLifetimeEarned(userId, total);
+    if (typeof econ.addNonGamblingEarnedMonth === 'function') econ.addNonGamblingEarnedMonth(userId, total);
   }
 
   let droppedItem = null;
-  if (allowItemDrop && Math.random() <= 0.1) { // 10% chance to drop
+  if (allowItemDrop) {
     const rarity = rollRarity();
     const it = getRandomItemByRarity(rarity);
     if (it) {
@@ -103,7 +100,7 @@ async function runActivity({ userId, baseMin, baseMax, activityKey, baseCooldown
     }
   }
 
-  setCooldown(userId, activityKey, baseCooldownMs);
+  setCooldown(userId, key, cooldownMs);
   return { ok: true, coins: total, effects, droppedItem };
 }
 
@@ -111,43 +108,36 @@ module.exports = {
   getCooldown,
   setCooldown,
 
-  async beg(userId) {
-    return runActivity({
-      userId,
-      baseMin: 100,
-      baseMax: 5000,
-      activityKey: 'beg',
-      baseCooldownMs: 2 * 60 * 1000,
-      nothingChance: 0.2,
-      allowItemDrop: true
-    });
-  },
-
   async find(userId) {
     return runActivity({
       userId,
-      baseMin: 2000,
-      baseMax: 15000,
-      activityKey: 'find',
-      baseCooldownMs: 5 * 60 * 1000,
-      specialFailureCooldownMs: 15 * 60 * 1000,
-      nothingChance: 0.08,
-      allowItemDrop: true
+      minCoins: 2000,
+      maxCoins: 15000,
+      key: 'find',
+      cooldownMs: 5 * 60 * 1000,
+      nothingChance: 0.08
+    });
+  },
+
+  async beg(userId) {
+    return runActivity({
+      userId,
+      minCoins: 100,
+      maxCoins: 5000,
+      key: 'beg',
+      cooldownMs: 2 * 60 * 1000,
+      nothingChance: 0.2
     });
   },
 
   async explore(userId) {
     return runActivity({
       userId,
-      baseMin: 8000,
-      baseMax: 25000,
-      activityKey: 'explore',
-      baseCooldownMs: 10 * 60 * 1000,
-      specialFailureCooldownMs: 15 * 60 * 1000,
-      nothingChance: 0.12,
-      allowItemDrop: true
+      minCoins: 8000,
+      maxCoins: 25000,
+      key: 'explore',
+      cooldownMs: 10 * 60 * 1000,
+      nothingChance: 0.12
     });
-  },
-
-  _internal: { collectItemEffects }
+  }
 };
