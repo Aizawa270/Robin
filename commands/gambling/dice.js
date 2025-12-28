@@ -45,8 +45,8 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setColor('#5865F2')
       .setTitle('Dice Roll')
-      .addFields({ name:'Rolls', value:`**${die1}**, **${die2}**` })
-      .setDescription(outcome);
+      .setDescription(`${message.author} has diced **${die1}** and **${die2}**\n\n${outcome}`)
+      .addFields({ name:'Rolls', value:`**${die1}**, **${die2}**` });
 
     gh.setCooldown(message.author.id, 'dice');
     return message.channel.send({ embeds: [embed] });
