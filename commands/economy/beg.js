@@ -1,31 +1,46 @@
+// commands/economy/beg.js
 const { EmbedBuilder } = require('discord.js');
-const gh = require('../../handlers/gamblingHelper');
-const items = require('../../handlers/items');
+const mini = require('../../handlers/miniActivities');
 
 module.exports = {
   name: 'beg',
+  aliases: [],
+  description: 'Beg for coins. Small payouts. Funny responses.',
   category: 'economy',
-  description: 'Beg for Vyncoins from NPCs.',
   usage: '!beg',
   async execute(client, message, args) {
-    const cooldown = gh.getCooldown(message.author.id, 'beg');
-    if (cooldown > 0) return message.reply(`Wait ${Math.ceil(cooldown/1000)}s before begging again.`);
+    const userId = message.author.id;
 
-    // base coins: random 5-50
-    let coins = Math.floor(Math.random()*46 + 5);
-    coins = items.applyActionModifiers(message.author.id, coins, 'beg');
+    // cooldown check
+    const cd = mini.getCooldown(userId, 'beg');
+    if (cd > 0) return message.reply(`Cooldown: wait ${Math.ceil(cd/1000)}s.`);
 
-    // max cap: 100
-    if (coins > 100) coins = 100;
+    try {
+      const res = await mini.beg(userId);
+      if (res.nothing || res.coins === 0) {
+        const embed = new EmbedBuilder()
+          .setColor('#1f2937')
+          .setTitle('Begging Result')
+          .setDescription(`No one bothered to help you this time.`)
+          .addFields({ name: 'Outcome', value: 'You received nothing. Try again later.' });
+        return message.reply({ embeds: [embed] });
+      }
 
-    await gh.changeWallet(client, message.author.id, coins);
+      // cap check: ensure we never return >5k (rare)
+      const capped = Math.min(res.coins, 5000);
 
-    const embed = new EmbedBuilder()
-      .setTitle('You begged for coins...')
-      .setDescription(`Someone gave you **${coins}** Vyncoins.`)
-      .setColor('#facc15');
+      const embed = new EmbedBuilder()
+        .setColor('#06b6d4')
+        .setTitle('Begging Result')
+        .setDescription(`You received **${capped} Vyncoins**.`)
+        .addFields(
+          { name: 'Note', value: 'Begging payouts are usually small; rare yields hit the cap.' }
+        );
 
-    gh.setCooldown(message.author.id, 'beg');
-    return message.reply({ embeds: [embed] });
+      return message.reply({ embeds: [embed] });
+    } catch (err) {
+      console.error('beg error:', err);
+      return message.reply('Failed to beg. Check console.');
+    }
   }
 };
