@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 
+// ================= SETUP =================
 const DATA_DIR = path.join(__dirname, '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -28,6 +29,27 @@ CREATE TABLE IF NOT EXISTS user_items (
   item_id INTEGER NOT NULL,
   quantity INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, item_id)
+)
+`).run();
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS active_effects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  item_id INTEGER NOT NULL,
+  effect TEXT,
+  applied_at INTEGER NOT NULL,
+  expires_at INTEGER
+)
+`).run();
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS user_passives (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  item_id INTEGER NOT NULL,
+  effect TEXT,
+  applied_at INTEGER NOT NULL
 )
 `).run();
 
@@ -67,18 +89,28 @@ function giveItem(userId, itemId, qty = 1) {
 }
 
 function removeItem(userId, itemId, qty = 1) {
-  const row = db.prepare(`SELECT quantity FROM user_items WHERE user_id=? AND item_id=?`).get(userId, itemId);
+  const row = db.prepare(`
+    SELECT quantity FROM user_items
+    WHERE user_id = ? AND item_id = ?
+  `).get(userId, itemId);
   if (!row || row.quantity < qty) return false;
   if (row.quantity === qty) {
-    db.prepare(`DELETE FROM user_items WHERE user_id=? AND item_id=?`).run(userId, itemId);
+    db.prepare(`DELETE FROM user_items WHERE user_id = ? AND item_id = ?`).run(userId, itemId);
   } else {
-    db.prepare(`UPDATE user_items SET quantity=quantity-? WHERE user_id=? AND item_id=?`).run(qty, userId, itemId);
+    db.prepare(`
+      UPDATE user_items
+      SET quantity = quantity - ?
+      WHERE user_id = ? AND item_id = ?
+    `).run(qty, userId, itemId);
   }
   return true;
 }
 
 function getUserItemQty(userId, itemId) {
-  return db.prepare(`SELECT quantity FROM user_items WHERE user_id=? AND item_id=?`).get(userId, itemId)?.quantity || 0;
+  return db.prepare(`
+    SELECT quantity FROM user_items
+    WHERE user_id = ? AND item_id = ?
+  `).get(userId, itemId)?.quantity || 0;
 }
 
 function getInventory(userId) {
@@ -86,7 +118,7 @@ function getInventory(userId) {
     SELECT im.*, ui.quantity
     FROM user_items ui
     JOIN items_master im ON im.id = ui.item_id
-    WHERE ui.user_id=? AND ui.quantity>0
+    WHERE ui.user_id = ? AND ui.quantity > 0
     ORDER BY
       CASE im.rarity
         WHEN 'common' THEN 1
@@ -98,9 +130,8 @@ function getInventory(userId) {
   `).all(userId);
 }
 
-// ================= ITEM SEED (ALL 45 ITEMS) =================
+// ================= ITEM SEED =================
 const ITEM_SEED = [
-  // COMMON (15)
   ['Rust Coin','rust-coin','common','Slightly boosts job income.','job_bonus_2','passive'],
   ['Bent Dice','bent-dice','common','Reroll one lost gamble daily.','reroll_gamble','active'],
   ['Courier Tag','courier-tag','common','Reduces cooldowns slightly.','cooldown_5','passive'],
@@ -117,7 +148,6 @@ const ITEM_SEED = [
   ['Pawn Ticket','pawn-ticket','common','Sell item for fixed value.','pawn_item','active'],
   ['Marked Coin','marked-coin','common','Faction attention.','faction_notice','passive'],
 
-  // UNCOMMON (12)
   ['Weighted Dice','weighted-dice','uncommon','Higher gamble wins.','gamble_win_4','passive'],
   ['Union Badge','union-badge','uncommon','Better job payouts.','job_bonus_8','passive'],
   ['Night Ledger','night-ledger','uncommon','Faster bank ticks.','bank_tick','passive'],
@@ -131,7 +161,6 @@ const ITEM_SEED = [
   ['Iron Will Token','iron-will-token','uncommon','Cooldown resistance.','cd_resist','passive'],
   ['Black Ink Stamp','black-ink-stamp','uncommon','Retry failed job.','retry_job','active'],
 
-  // RARE (9)
   ['Dealer Eye','dealer-eye','rare','Reveal odds.','see_odds','passive'],
   ['Golden Ledger','golden-ledger','rare','Higher bank cap.','bank_cap_20','passive'],
   ['Mercenary Emblem','mercenary-emblem','rare','Faction boost.','faction_15','passive'],
@@ -142,7 +171,6 @@ const ITEM_SEED = [
   ['Time Fracture','time-fracture','rare','Reset cooldowns.','reset_cd','active'],
   ['Oathbreaker Token','oathbreaker-token','rare','Leave faction safely.','leave_faction','active'],
 
-  // EPIC (6)
   ['Devil Ledger','devil-ledger','epic','High risk high reward.','devil_trade','passive'],
   ['Entropy Dice','entropy-dice','epic','Ignore caps.','no_caps','active'],
   ['Faction Crown Shard','faction-crown','epic','Faction dominance.','faction_30','passive'],
@@ -150,21 +178,48 @@ const ITEM_SEED = [
   ['Fate Anchor','fate-anchor','epic','Negate one loss.','negate_loss','active'],
   ['Chrono Seal','chrono-seal','epic','Cooldown reduction.','cd_25','passive'],
 
-  // LEGENDARY (3)
   ['Hand of Fortune','hand-of-fortune','legendary','Luck scales with wealth.','dynamic_luck','passive'],
   ['Sovereign Sigil','sovereign-sigil','legendary','Global boost.','global_20','passive'],
   ['Reality Die','reality-die','legendary','Reroll any outcome.','reroll_any','active'],
 ];
 
 // ================= SEED =================
-function seedAllItems() {
-  db.prepare('DELETE FROM items_master').run(); // wipe old
-  const insert = db.prepare('INSERT INTO items_master (name, slug, rarity, description, effect, type) VALUES (?, ?, ?, ?, ?, ?)');
-  for (const item of ITEM_SEED) insert.run(...item);
-  console.log('Seeded all 45 items.');
+function seedOrPatchItems() {
+  for (const item of ITEM_SEED) {
+    const exists = db.prepare('SELECT id FROM items_master WHERE slug = ?').get(item[1]);
+    if (!exists) db.prepare('INSERT INTO items_master (name, slug, rarity, description, effect, type) VALUES (?, ?, ?, ?, ?, ?)').run(...item);
+  }
 }
+seedOrPatchItems();
 
-seedAllItems();
+// ================= HELPER: APPLY ITEMS TO ACTIONS =================
+function applyActionModifiers(userId, baseAmount, actionType) {
+  // actionType: 'find', 'beg', 'explore', 'gamble'
+  const inv = getInventory(userId);
+  let modified = baseAmount;
+  const now = Date.now();
+
+  // include active effects
+  const active = db.prepare('SELECT * FROM active_effects WHERE user_id = ? AND expires_at > ?').all(userId, now);
+
+  const allEffects = [...inv, ...active.map(a => ({ effect: a.effect }))];
+
+  for (const item of allEffects) {
+    if (!item.effect) continue;
+
+    // luck based effects
+    if (item.effect === 'luck_1' && ['find','beg','explore'].includes(actionType)) modified += Math.floor(Math.random()*2 +1);
+    if (item.effect === 'luck_5' && ['find','beg','explore'].includes(actionType)) modified += Math.floor(Math.random()*5 +1);
+    if (item.effect === 'dynamic_luck' && ['find','beg','explore'].includes(actionType)) modified += Math.floor(Math.random()*10 +1);
+
+    // negate loss
+    if (item.effect === 'negate_loss' && ['find','beg','explore'].includes(actionType) && modified <=0) modified = 1;
+
+    // other effects can be added here...
+  }
+
+  return modified;
+}
 
 // ================= EXPORTS =================
 module.exports = {
@@ -177,5 +232,6 @@ module.exports = {
   getUserItemQty,
   getInventory,
   ITEM_SEED,
-  seedAllItems,
+  seedOrPatchItems,
+  applyActionModifiers
 };
