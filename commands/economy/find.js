@@ -1,27 +1,45 @@
+// commands/economy/find.js
 const { EmbedBuilder } = require('discord.js');
-const gh = require('../../handlers/gamblingHelper');
-const items = require('../../handlers/items');
+const mini = require('../../handlers/miniActivities');
 
 module.exports = {
   name: 'find',
+  description: 'Go out and find some coins or maybe even an item!',
   category: 'economy',
-  description: 'Find random Vyncoins.',
   usage: '!find',
+  aliases: ['search'],
   async execute(client, message, args) {
-    const cooldown = gh.getCooldown(message.author.id, 'find');
-    if (cooldown > 0) return message.reply(`Wait ${Math.ceil(cooldown/1000)}s.`);
+    try {
+      const res = await mini.find(message.author.id);
 
-    let coins = Math.floor(Math.random()*50 + 1); // base coins
-    coins = items.applyActionModifiers(message.author.id, coins, 'find');
+      if (!res.ok) {
+        if (res.reason === 'cooldown') {
+          const mins = Math.floor(res.remaining / 60000);
+          const secs = Math.floor((res.remaining % 60000) / 1000);
+          return message.reply(`Cooldown active. Try again in ${mins}m ${secs}s.`);
+        }
+        return message.reply('Could not find anything.');
+      }
 
-    await gh.changeWallet(client, message.author.id, coins);
+      let desc = '';
+      if (res.nothing) desc = 'You searched but found nothing... better luck next time.';
+      else desc = `You found **${res.coins} Vyncoins**!`;
 
-    const embed = new EmbedBuilder()
-      .setTitle('You went exploring!')
-      .setDescription(`You found **${coins}** Vyncoins.`)
-      .setColor('#22c55e');
+      if (res.droppedItem) {
+        const item = res.droppedItem;
+        desc += `\n🎁 **Item found:** ${item.name} (${item.rarity.toUpperCase()})`;
+        if (item.rarity === 'legendary') desc = `💎 RARE DROP ALERT! 💎\n` + desc;
+      }
 
-    gh.setCooldown(message.author.id, 'find');
-    return message.reply({ embeds: [embed] });
+      const embed = new EmbedBuilder()
+        .setColor('#facc15')
+        .setTitle('Find Activity')
+        .setDescription(desc);
+
+      return message.reply({ embeds: [embed] });
+    } catch (err) {
+      console.error('find error:', err);
+      return message.reply('Failed to perform find. Check console.');
+    }
   }
 };
