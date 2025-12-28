@@ -173,19 +173,19 @@ const ITEM_SEED = [
   ['Reality Die','reality-die','legendary','Reroll any outcome.','reroll_any','active'],
 ];
 
-function seedItems() {
-  const count = db.prepare(`SELECT COUNT(*) AS c FROM items_master`).get().c;
-  if (count > 0) return;
-
-  const insert = db.prepare(`
-    INSERT INTO items_master (name, slug, rarity, description, effect, type)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-
-  for (const item of ITEM_SEED) insert.run(...item);
+// ================= SEED & PATCH =================
+function seedOrPatchItems() {
+  for (const item of ITEM_SEED) {
+    const exists = db.prepare('SELECT id FROM items_master WHERE slug = ?').get(item[1]);
+    if (!exists) {
+      db.prepare('INSERT INTO items_master (name, slug, rarity, description, effect, type) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(...item);
+      console.log(`Inserted missing item: ${item[0]}`);
+    }
+  }
 }
 
-seedItems();
+seedOrPatchItems();
 
 // ================= EXPORTS =================
 module.exports = {
@@ -201,4 +201,8 @@ module.exports = {
   removeItem,
   getUserItemQty,
   getInventory,
+
+  // seed (for patching if needed)
+  ITEM_SEED,
+  seedOrPatchItems,
 };
