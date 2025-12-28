@@ -3,7 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
 
-// ================= SETUP =================
 const DATA_DIR = path.join(__dirname, '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -58,44 +57,28 @@ function listMasterItems() {
 // ================= INVENTORY =================
 function giveItem(userId, itemId, qty = 1) {
   if (!qty || qty <= 0) return false;
-
   db.prepare(`
     INSERT INTO user_items (user_id, item_id, quantity)
     VALUES (?, ?, ?)
     ON CONFLICT(user_id, item_id)
     DO UPDATE SET quantity = quantity + ?
   `).run(userId, itemId, qty, qty);
-
   return true;
 }
 
 function removeItem(userId, itemId, qty = 1) {
-  const row = db.prepare(`
-    SELECT quantity FROM user_items
-    WHERE user_id = ? AND item_id = ?
-  `).get(userId, itemId);
-
+  const row = db.prepare(`SELECT quantity FROM user_items WHERE user_id=? AND item_id=?`).get(userId, itemId);
   if (!row || row.quantity < qty) return false;
-
   if (row.quantity === qty) {
-    db.prepare(`DELETE FROM user_items WHERE user_id = ? AND item_id = ?`)
-      .run(userId, itemId);
+    db.prepare(`DELETE FROM user_items WHERE user_id=? AND item_id=?`).run(userId, itemId);
   } else {
-    db.prepare(`
-      UPDATE user_items
-      SET quantity = quantity - ?
-      WHERE user_id = ? AND item_id = ?
-    `).run(qty, userId, itemId);
+    db.prepare(`UPDATE user_items SET quantity=quantity-? WHERE user_id=? AND item_id=?`).run(qty, userId, itemId);
   }
-
   return true;
 }
 
 function getUserItemQty(userId, itemId) {
-  return db.prepare(`
-    SELECT quantity FROM user_items
-    WHERE user_id = ? AND item_id = ?
-  `).get(userId, itemId)?.quantity || 0;
+  return db.prepare(`SELECT quantity FROM user_items WHERE user_id=? AND item_id=?`).get(userId, itemId)?.quantity || 0;
 }
 
 function getInventory(userId) {
@@ -103,7 +86,7 @@ function getInventory(userId) {
     SELECT im.*, ui.quantity
     FROM user_items ui
     JOIN items_master im ON im.id = ui.item_id
-    WHERE ui.user_id = ? AND ui.quantity > 0
+    WHERE ui.user_id=? AND ui.quantity>0
     ORDER BY
       CASE im.rarity
         WHEN 'common' THEN 1
@@ -115,7 +98,7 @@ function getInventory(userId) {
   `).all(userId);
 }
 
-// ================= ITEM SEED (45 REAL ITEMS) =================
+// ================= ITEM SEED (ALL 45 ITEMS) =================
 const ITEM_SEED = [
   // COMMON (15)
   ['Rust Coin','rust-coin','common','Slightly boosts job income.','job_bonus_2','passive'],
@@ -173,36 +156,26 @@ const ITEM_SEED = [
   ['Reality Die','reality-die','legendary','Reroll any outcome.','reroll_any','active'],
 ];
 
-// ================= SEED & PATCH =================
-function seedOrPatchItems() {
-  for (const item of ITEM_SEED) {
-    const exists = db.prepare('SELECT id FROM items_master WHERE slug = ?').get(item[1]);
-    if (!exists) {
-      db.prepare('INSERT INTO items_master (name, slug, rarity, description, effect, type) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(...item);
-      console.log(`Inserted missing item: ${item[0]}`);
-    }
-  }
+// ================= SEED =================
+function seedAllItems() {
+  db.prepare('DELETE FROM items_master').run(); // wipe old
+  const insert = db.prepare('INSERT INTO items_master (name, slug, rarity, description, effect, type) VALUES (?, ?, ?, ?, ?, ?)');
+  for (const item of ITEM_SEED) insert.run(...item);
+  console.log('Seeded all 45 items.');
 }
 
-seedOrPatchItems();
+seedAllItems();
 
 // ================= EXPORTS =================
 module.exports = {
   db,
-
-  // master
   getItemBySlug,
   getItemById,
   listMasterItems,
-
-  // inventory
   giveItem,
   removeItem,
   getUserItemQty,
   getInventory,
-
-  // seed (for patching if needed)
   ITEM_SEED,
-  seedOrPatchItems,
+  seedAllItems,
 };
