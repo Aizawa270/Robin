@@ -1,4 +1,3 @@
-// handlers/miniActivities.js
 const econ = require('./economy');
 const items = require('./items');
 
@@ -15,27 +14,21 @@ function _readCooldownsRow(userRow) {
     return {};
   }
 }
+
 function getCooldown(userId, key) {
   econ.ensureUser(userId);
   const row = econ.getUser(userId);
   const cooldowns = _readCooldownsRow(row);
   const ts = cooldowns[key];
   if (!ts) return 0;
-  const now = Date.now();
-  return Math.max(0, ts - now);
+  return Math.max(0, ts - Date.now());
 }
+
 function setCooldown(userId, key, msFromNow) {
   econ.ensureUser(userId);
   const row = econ.getUser(userId);
   const cooldowns = _readCooldownsRow(row);
   cooldowns[key] = Date.now() + msFromNow;
-  econ.db.prepare('UPDATE users SET cooldowns = ? WHERE user_id = ?').run(JSON.stringify(cooldowns), userId);
-}
-function clearCooldown(userId, key) {
-  econ.ensureUser(userId);
-  const row = econ.getUser(userId);
-  const cooldowns = _readCooldownsRow(row);
-  delete cooldowns[key];
   econ.db.prepare('UPDATE users SET cooldowns = ? WHERE user_id = ?').run(JSON.stringify(cooldowns), userId);
 }
 
@@ -47,28 +40,28 @@ function collectItemEffects(userId) {
   let risky = false;
   let negateLoss = false;
   let guaranteeWin = false;
+
   for (const it of inv) {
     const e = (it.effect || '').toString();
     if (!e) continue;
     if (e === 'double_work') multiplier *= 2;
-    else if (e.startsWith('job_bonus_')) {
-      const n = parseInt(e.split('_').pop()) || 0;
-      flatPercent += n;
-    } else if (e === 'risky_job') risky = true;
+    else if (e.startsWith('job_bonus_')) flatPercent += parseInt(e.split('_').pop()) || 0;
+    else if (e === 'risky_job') risky = true;
     else if (e === 'negate_loss') negateLoss = true;
     else if (e === 'guarantee_win') guaranteeWin = true;
   }
+
   return { multiplier, flatPercent, risky, negateLoss, guaranteeWin };
 }
 
 // ---- item drop logic ----
 function rollRarity() {
   const r = Math.random() * 100;
-  if (r < 1) return 'legendary';
-  if (r < 6) return 'rare';
-  if (r < 16) return 'epic';
-  if (r < 46) return 'uncommon';
-  return 'common';
+  if (r < 1) return 'legendary';   // 1%
+  if (r < 6) return 'epic';         // 5%
+  if (r < 16) return 'rare';        // 10%
+  if (r < 36) return 'uncommon';    // 20%
+  return 'common';                   // 64%
 }
 
 function getRandomItemByRarity(rarity) {
@@ -78,7 +71,7 @@ function getRandomItemByRarity(rarity) {
 }
 
 // ---- core activity reward wrapper ----
-async function runActivity({ userId, baseMin, baseMax, econDb, activityKey, baseCooldownMs, specialFailureCooldownMs = 0, nothingChance = 0.05, allowItemDrop = true }) {
+async function runActivity({ userId, baseMin, baseMax, activityKey, baseCooldownMs, specialFailureCooldownMs = 0, nothingChance = 0.05, allowItemDrop = true }) {
   econ.ensureUser(userId);
 
   const cd = getCooldown(userId, activityKey);
@@ -91,7 +84,6 @@ async function runActivity({ userId, baseMin, baseMax, econDb, activityKey, base
   }
 
   const effects = collectItemEffects(userId);
-
   let total = Math.floor(roll(baseMin, baseMax) * effects.multiplier + Math.floor(baseMin * (effects.flatPercent / 100)));
   total = Math.max(0, total);
 
@@ -102,7 +94,7 @@ async function runActivity({ userId, baseMin, baseMax, econDb, activityKey, base
   }
 
   let droppedItem = null;
-  if (allowItemDrop) {
+  if (allowItemDrop && Math.random() <= 0.1) { // 10% chance to drop
     const rarity = rollRarity();
     const it = getRandomItemByRarity(rarity);
     if (it) {
@@ -112,37 +104,34 @@ async function runActivity({ userId, baseMin, baseMax, econDb, activityKey, base
   }
 
   setCooldown(userId, activityKey, baseCooldownMs);
-
   return { ok: true, coins: total, effects, droppedItem };
 }
 
 module.exports = {
-  getCooldown: (userId, key) => getCooldown(userId, key),
-  setCooldown: (userId, key, ms) => setCooldown(userId, key, ms),
-
-  async find(userId) {
-    return runActivity({
-      userId,
-      baseMin: 2000,
-      baseMax: 15000,
-      econDb: econ.db,
-      activityKey: 'find',
-      baseCooldownMs: 5 * 60 * 1000,
-      specialFailureCooldownMs: 15 * 60 * 1000,
-      nothingChance: 0.08,
-      allowItemDrop: true
-    });
-  },
+  getCooldown,
+  setCooldown,
 
   async beg(userId) {
     return runActivity({
       userId,
       baseMin: 100,
       baseMax: 5000,
-      econDb: econ.db,
       activityKey: 'beg',
       baseCooldownMs: 2 * 60 * 1000,
       nothingChance: 0.2,
+      allowItemDrop: true
+    });
+  },
+
+  async find(userId) {
+    return runActivity({
+      userId,
+      baseMin: 2000,
+      baseMax: 15000,
+      activityKey: 'find',
+      baseCooldownMs: 5 * 60 * 1000,
+      specialFailureCooldownMs: 15 * 60 * 1000,
+      nothingChance: 0.08,
       allowItemDrop: true
     });
   },
@@ -152,17 +141,12 @@ module.exports = {
       userId,
       baseMin: 8000,
       baseMax: 25000,
-      econDb: econ.db,
       activityKey: 'explore',
       baseCooldownMs: 10 * 60 * 1000,
       specialFailureCooldownMs: 15 * 60 * 1000,
       nothingChance: 0.12,
       allowItemDrop: true
     });
-  },
-
-  applyExtraPenalty(userId, key, extraMs) {
-    setCooldown(userId, key, getCooldown(userId, key) + extraMs);
   },
 
   _internal: { collectItemEffects }
