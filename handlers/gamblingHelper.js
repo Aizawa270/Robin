@@ -1,59 +1,58 @@
 // handlers/gamblingHelper.js
-const { EmbedBuilder } = require('discord.js');
-const COOLDOWN_MS = 15_000; // 15s per command
+const econ = require('./economy');
 
-const cooldowns = new Map(); // Map<userId_command, timestamp>
+const COOLDOWNS = new Map();
+const DEFAULT_CD = 15_000;
+const MAX_BET = 100_000;
 
-function now() { return Date.now(); }
+function now() {
+  return Date.now();
+}
 
+// ---------- Cooldowns ----------
 function getCooldown(userId, cmd) {
-  const key = `${userId}_${cmd}`;
-  const ts = cooldowns.get(key) || 0;
-  return Math.max(0, ts - now());
+  const key = `${userId}:${cmd}`;
+  const expires = COOLDOWNS.get(key) || 0;
+  return Math.max(0, expires - now());
 }
 
-function setCooldown(userId, cmd) {
-  const key = `${userId}_${cmd}`;
-  cooldowns.set(key, now() + COOLDOWN_MS);
+function setCooldown(userId, cmd, ms = DEFAULT_CD) {
+  const key = `${userId}:${cmd}`;
+  COOLDOWNS.set(key, now() + ms);
 }
 
-function badSetupReply(channel, text = 'Economy handler not found.') {
-  return channel.send({ embeds: [new EmbedBuilder().setColor('#f87171').setDescription(text)] });
-}
-
-function validateBet(amount) {
-  if (!Number.isFinite(amount)) return { ok: false, reason: 'Invalid number' };
-  amount = Math.floor(amount);
-  if (amount < 1) return { ok: false, reason: 'Minimum bet is 1' };
-  if (amount > 100_000) return { ok: false, reason: 'Maximum bet is 100k' };
-  return { ok: true, amount };
-}
-
-async function getWallet(client, userId) {
-  if (!client.economy || typeof client.economy.getUser !== 'function') return null;
-  const user = client.economy.getUser(userId);
-  return user?.wallet ?? 0;
-}
-
-async function changeWallet(client, userId, amount) {
-  if (!client.economy) return null;
-  if (amount >= 0) {
-    client.economy.addWallet(userId, amount);
-  } else {
-    client.economy.addWallet(userId, amount); // your addWallet handles negative values too
+// ---------- Bets ----------
+function validateBet(bet) {
+  if (!Number.isInteger(bet) || bet <= 0) {
+    return { ok: false, reason: 'Bet must be a positive number.' };
   }
+  if (bet > MAX_BET) {
+    return { ok: false, reason: `Max bet is ${MAX_BET}.` };
+  }
+  return { ok: true, amount: bet };
 }
 
-async function addMonthlyGamblingProgress(client, userId, amount) {
-  if (!client.economy) return;
-  client.economy.addNonGamblingEarnedMonth(userId, amount);
+// ---------- Wallet ----------
+function getWallet(_client, userId) {
+  econ.ensureUser(userId);
+  return econ.getUser(userId).wallet;
 }
 
+function changeWallet(_client, userId, delta) {
+  econ.ensureUser(userId);
+  econ.addWallet(userId, delta);
+}
+
+// ---------- Monthly ----------
+function addMonthlyGamblingProgress(_client, userId, amount) {
+  // Gambling DOES count to monthly (you confirmed)
+  econ.addNonGamblingEarnedMonth(userId, amount);
+}
+
+// ---------- Exports ----------
 module.exports = {
-  COOLDOWN_MS,
   getCooldown,
   setCooldown,
-  badSetupReply,
   validateBet,
   getWallet,
   changeWallet,
