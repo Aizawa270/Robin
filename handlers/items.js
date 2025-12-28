@@ -6,220 +6,158 @@ const Database = require('better-sqlite3');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const dbPath = path.join(DATA_DIR, 'items.sqlite');
-const db = new Database(dbPath);
+const db = new Database(path.join(DATA_DIR, 'items.sqlite'));
+db.pragma('journal_mode = WAL');
 
-// PRAGMA for durability
-try {
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
-} catch (e) {
-  console.warn('Could not set PRAGMA on items DB:', e?.message || e);
-}
+// ================= TABLES =================
 
-// ----------------- Master item table -----------------
 db.prepare(`
 CREATE TABLE IF NOT EXISTS items_master (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
-  slug TEXT NOT NULL UNIQUE,
+  slug TEXT UNIQUE NOT NULL,
   rarity TEXT NOT NULL,
-  description TEXT,
-  type TEXT,
-  data TEXT DEFAULT '{}'
+  description TEXT NOT NULL,
+  effect TEXT NOT NULL,
+  type TEXT NOT NULL
 )
 `).run();
 
-// ----------------- User inventory -----------------
 db.prepare(`
 CREATE TABLE IF NOT EXISTS user_items (
   user_id TEXT NOT NULL,
   item_id INTEGER NOT NULL,
-  quantity INTEGER DEFAULT 0,
+  quantity INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, item_id)
 )
 `).run();
 
-// ----------------- Trades table -----------------
-db.prepare(`
-CREATE TABLE IF NOT EXISTS pending_trades (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  from_id TEXT NOT NULL,
-  to_id TEXT NOT NULL,
-  offer_json TEXT NOT NULL,
-  request_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-)
-`).run();
+// ================= HELPERS =================
 
-// ----------------- Master Items Helpers -----------------
-function addMasterItem({ name, slug, rarity = 'common', description = '', type = 'consumable', data = {} }) {
-  const info = db.prepare(`
-    INSERT INTO items_master (name, slug, rarity, description, type, data)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(name, slug, rarity, description, type, JSON.stringify(data));
-  return getMasterItem(info.lastInsertRowid);
+function getItemBySlug(slug) {
+  return db.prepare(`SELECT * FROM items_master WHERE slug = ?`).get(slug);
 }
 
-function getMasterItem(idOrSlug) {
-  if (!idOrSlug) return null;
-  if (/^\d+$/.test(String(idOrSlug))) {
-    return db.prepare(`SELECT * FROM items_master WHERE id = ?`).get(Number(idOrSlug));
-  }
-  return db.prepare(`SELECT * FROM items_master WHERE slug = ?`).get(String(idOrSlug).toLowerCase());
-}
-
-function listMasterItems() {
-  return db.prepare(`SELECT id, name, slug, rarity, description, type, data FROM items_master ORDER BY rarity, name`).all();
-}
-
-// ----------------- Inventory Helpers -----------------
 function giveItem(userId, itemId, qty = 1) {
-  qty = Math.max(0, Math.floor(qty));
-  if (!qty) return false;
+  if (qty <= 0) return;
   db.prepare(`
     INSERT INTO user_items (user_id, item_id, quantity)
     VALUES (?, ?, ?)
-    ON CONFLICT(user_id, item_id) DO UPDATE SET quantity = quantity + ?
+    ON CONFLICT(user_id, item_id)
+    DO UPDATE SET quantity = quantity + ?
   `).run(userId, itemId, qty, qty);
-  return true;
 }
 
 function removeItem(userId, itemId, qty = 1) {
-  qty = Math.max(0, Math.floor(qty));
-  if (!qty) return false;
-  const row = db.prepare(`SELECT quantity FROM user_items WHERE user_id = ? AND item_id = ?`).get(userId, itemId);
+  const row = db.prepare(`
+    SELECT quantity FROM user_items
+    WHERE user_id = ? AND item_id = ?
+  `).get(userId, itemId);
+
   if (!row || row.quantity < qty) return false;
-  const newQty = row.quantity - qty;
-  if (newQty <= 0) {
-    db.prepare(`DELETE FROM user_items WHERE user_id = ? AND item_id = ?`).run(userId, itemId);
+
+  if (row.quantity === qty) {
+    db.prepare(`DELETE FROM user_items WHERE user_id = ? AND item_id = ?`)
+      .run(userId, itemId);
   } else {
-    db.prepare(`UPDATE user_items SET quantity = ? WHERE user_id = ? AND item_id = ?`).run(newQty, userId, itemId);
+    db.prepare(`
+      UPDATE user_items SET quantity = quantity - ?
+      WHERE user_id = ? AND item_id = ?
+    `).run(qty, userId, itemId);
   }
+
   return true;
 }
 
-function getUserInventory(userId) {
-  const rows = db.prepare(`
-    SELECT ui.item_id, ui.quantity, im.name, im.slug, im.rarity, im.description, im.type, im.data
+function getInventory(userId) {
+  return db.prepare(`
+    SELECT im.*, ui.quantity
     FROM user_items ui
-    LEFT JOIN items_master im ON im.id = ui.item_id
+    JOIN items_master im ON im.id = ui.item_id
     WHERE ui.user_id = ? AND ui.quantity > 0
     ORDER BY im.rarity, im.name
   `).all(userId);
-  return rows;
 }
 
-function getUserItemQty(userId, itemId) {
-  return db.prepare(`SELECT quantity FROM user_items WHERE user_id = ? AND item_id = ?`).get(userId, itemId)?.quantity || 0;
-}
+// ================= ITEM SEED (45 REAL ITEMS) =================
 
-// ----------------- Trades -----------------
-function createTrade(fromId, toId, offerObj, requestObj) {
-  const now = Date.now();
-  const info = db.prepare(`
-    INSERT INTO pending_trades (from_id, to_id, offer_json, request_json, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(fromId, toId, JSON.stringify(offerObj), JSON.stringify(requestObj), now);
-  return db.prepare(`SELECT * FROM pending_trades WHERE id = ?`).get(info.lastInsertRowid);
-}
+const ITEM_SEED = [
+  // COMMON (15)
+  ['Rust Coin','rust-coin','common','Slightly boosts job income.','job_bonus_2','passive'],
+  ['Bent Dice','bent-dice','common','Reroll one lost gamble daily.','reroll_gamble','active'],
+  ['Courier Tag','courier-tag','common','Reduces cooldowns slightly.','cooldown_5','passive'],
+  ['Cracked Ledger','cracked-ledger','common','Better bank efficiency.','bank_eff_5','passive'],
+  ['Pocket Lighter','pocket-lighter','common','Double next work payout, breaks.','double_work','active'],
+  ['Street Permit','street-permit','common','Unlocks shady job paths.','unlock_shady','passive'],
+  ['Fake ID','fake-id','common','Ignore one job cooldown.','skip_job_cd','active'],
+  ['Loose Change Bag','loose-change-bag','common','Convert item into coins.','scrap_item','active'],
+  ['Scrap Token','scrap-token','common','Extra inventory slot.','inv_slot_1','passive'],
+  ['Dirty Contract','dirty-contract','common','Risky job payout.','risky_job','active'],
+  ['Shady Receipt','shady-receipt','common','Slight gambling loss reduction.','gamble_loss_3','passive'],
+  ['Cracked Watch','cracked-watch','common','Shorter daily cooldowns.','daily_cd_minus','passive'],
+  ['Low-Grade Charm','low-grade-charm','common','Tiny luck boost.','luck_1','passive'],
+  ['Pawn Ticket','pawn-ticket','common','Sell item for fixed value.','pawn_item','active'],
+  ['Marked Coin','marked-coin','common','Factions notice you.','faction_notice','passive'],
 
-function getPendingTrade(tradeId) {
-  return db.prepare(`SELECT * FROM pending_trades WHERE id = ?`).get(tradeId);
-}
+  // UNCOMMON (12)
+  ['Weighted Dice','weighted-dice','uncommon','Higher gamble win chance.','gamble_win_4','passive'],
+  ['Union Badge','union-badge','uncommon','Better job payouts.','job_bonus_8','passive'],
+  ['Night Ledger','night-ledger','uncommon','Faster bank ticks.','bank_tick','passive'],
+  ['False Blessing','false-blessing','uncommon','Double or lose next win.','double_or_zero','active'],
+  ['Smuggler Pouch','smuggler-pouch','uncommon','More inventory space.','inv_slot_3','passive'],
+  ['Blood Contract','blood-contract','uncommon','Locks faction mission.','forced_faction','active'],
+  ['Counterfeit Seal','counterfeit-seal','uncommon','Shop discounts.','shop_5','passive'],
+  ['Backroom Key','backroom-key','uncommon','Unlocks secret actions.','unlock_secret','passive'],
+  ['Luck Fragment','luck-fragment','uncommon','Stackable luck.','luck_stack','passive'],
+  ['Tax Evasion File','tax-evasion-file','uncommon','No gamble fees.','no_fees','passive'],
+  ['Iron Will Token','iron-will-token','uncommon','Cooldown penalties reduced.','cd_resist','passive'],
+  ['Black Ink Stamp','black-ink-stamp','uncommon','Retry failed job.','retry_job','active'],
 
-function listPendingTradesFor(userId) {
-  return db.prepare(`SELECT * FROM pending_trades WHERE to_id = ? ORDER BY created_at`).all(userId);
-}
+  // RARE (9)
+  ['Dealer Eye','dealer-eye','rare','Reveal gamble odds.','see_odds','passive'],
+  ['Golden Ledger','golden-ledger','rare','Higher bank cap.','bank_cap_20','passive'],
+  ['Mercenary Emblem','mercenary-emblem','rare','Faction rewards boosted.','faction_15','passive'],
+  ['Loaded Coin','loaded-coin','rare','Guarantee next win.','guarantee_win','active'],
+  ['Shadow Permit','shadow-permit','rare','Illegal jobs unlocked.','unlock_illegal','passive'],
+  ['Luck Core','luck-core','rare','Major luck boost.','luck_5','passive'],
+  ['Vault Skeleton Key','vault-key','rare','Risky bank theft.','bank_steal','active'],
+  ['Time Fracture','time-fracture','rare','Reset cooldowns.','reset_cd','active'],
+  ['Oathbreaker Token','oathbreaker-token','rare','Leave faction safely.','leave_faction','active'],
 
-function deleteTrade(tradeId) {
-  db.prepare(`DELETE FROM pending_trades WHERE id = ?`).run(tradeId);
-}
+  // EPIC (6)
+  ['Devil Ledger','devil-ledger','epic','High reward, higher risk.','devil_trade','passive'],
+  ['Entropy Dice','entropy-dice','epic','Ignore gamble caps.','no_caps','active'],
+  ['Faction Crown Shard','faction-crown','epic','Huge faction influence.','faction_30','passive'],
+  ['Black Market Writ','black-writ','epic','Safer illegal actions.','illegal_safe','passive'],
+  ['Fate Anchor','fate-anchor','epic','Negate one loss.','negate_loss','active'],
+  ['Chrono Seal','chrono-seal','epic','Big cooldown reduction.','cd_25','passive'],
 
-// ----------------- Bootstrap 45+ Items -----------------
-function bootstrapItems() {
-  const count = db.prepare(`SELECT COUNT(*) as c FROM items_master`).get().c;
+  // LEGENDARY (3)
+  ['Hand of Fortune','hand-of-fortune','legendary','Luck scales with wealth.','dynamic_luck','passive'],
+  ['Sovereign Sigil','sovereign-sigil','legendary','Global earnings boost.','global_20','passive'],
+  ['Reality Die','reality-die','legendary','Reroll any outcome weekly.','reroll_any','active'],
+];
+
+function seedItems() {
+  const count = db.prepare(`SELECT COUNT(*) AS c FROM items_master`).get().c;
   if (count > 0) return;
 
-  const items = [
-    // Commons
-    { name:'Common Kit', slug:'common-kit', rarity:'common', description:'Single use kit', type:'consumable', data:{jobBoost:5} },
-    { name:'Common Coin', slug:'common-coin', rarity:'common', description:'Small bonus', type:'currency', data:{} },
-    { name:'Basic Toolkit', slug:'basic-toolkit', rarity:'common', description:'Boost small jobs', type:'consumable', data:{jobBoost:5} },
-    { name:'Common Badge', slug:'common-badge', rarity:'common', description:'Used for trading', type:'currency', data:{} },
-    { name:'Small Potion', slug:'small-potion', rarity:'common', description:'Heals 10%', type:'consumable', data:{} },
+  const insert = db.prepare(`
+    INSERT INTO items_master (name, slug, rarity, description, effect, type)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
 
-    // Uncommons
-    { name:'Uncommon Toolkit', slug:'uncommon-toolkit', rarity:'uncommon', description:'Boosts job earnings', type:'consumable', data:{jobBoost:10} },
-    { name:'Lucky Token', slug:'lucky-token', rarity:'uncommon', description:'Increases chance in events', type:'consumable', data:{eventBoost:5} },
-    { name:'Pet Snake', slug:'pet-snake', rarity:'uncommon', description:'Dangerous pet, may reduce coins', type:'pet', data:{risk:-5} },
-    { name:'Uncommon Badge', slug:'uncommon-badge', rarity:'uncommon', description:'Trading item', type:'currency', data:{} },
-    { name:'Medium Potion', slug:'medium-potion', rarity:'uncommon', description:'Heals 20%', type:'consumable', data:{} },
-
-    // Rares
-    { name:'Rare Token', slug:'rare-token', rarity:'rare', description:'Used in events', type:'quest', data:{} },
-    { name:'Rare Toolkit', slug:'rare-toolkit', rarity:'rare', description:'Boosts job earnings', type:'consumable', data:{jobBoost:15} },
-    { name:'Golden Badge', slug:'golden-badge', rarity:'rare', description:'Can be traded for coins', type:'currency', data:{} },
-    { name:'Rare Pet', slug:'rare-pet', rarity:'rare', description:'Special pet', type:'pet', data:{eventBoost:10} },
-    { name:'Large Potion', slug:'large-potion', rarity:'rare', description:'Heals 30%', type:'consumable', data:{} },
-
-    // Legendaries
-    { name:'Legendary Sigil', slug:'legendary-sigil', rarity:'legendary', description:'Powerful single-use', type:'consumable', data:{jobBoost:25, factionBoost:10} },
-    { name:'Epic Badge', slug:'epic-badge', rarity:'legendary', description:'Rare trading item', type:'currency', data:{} },
-    { name:'Legendary Pet', slug:'legendary-pet', rarity:'legendary', description:'Boost events and jobs', type:'pet', data:{eventBoost:25, jobBoost:20} },
-    { name:'Mega Potion', slug:'mega-potion', rarity:'legendary', description:'Heals 50%', type:'consumable', data:{} },
-    { name:'Faction Banner', slug:'faction-banner', rarity:'legendary', description:'Faction exclusive', type:'faction', data:{factionOnly:true} },
-
-    // Add more until 45+ with similar pattern
-  ];
-
-  for (const item of items) addMasterItem(item);
+  for (const item of ITEM_SEED) insert.run(...item);
 }
 
-bootstrapItems();
+seedItems();
+
+// ================= EXPORTS =================
 
 module.exports = {
   db,
-  addMasterItem,
-  getMasterItem,
-  listMasterItems,
+  getItemBySlug,
   giveItem,
   removeItem,
-  getUserInventory,
-  getUserItemQty,
-  createTrade,
-  getPendingTrade,
-  listPendingTradesFor,
-  deleteTrade
+  getInventory
 };
-
-// add this at the end of handlers/items.js
-// ----------------- In-memory boosts -----------------
-const activeBoosts = new Map(); // userId => { jobBoost, factionBoost, eventBoost, expires }
-
-function applyItemEffect(userId, data) {
-  const now = Date.now();
-  const current = activeBoosts.get(userId) || {};
-  const expires = now + (data.duration || 3600 * 1000); // default 1h
-
-  activeBoosts.set(userId, {
-    jobBoost: (current.jobBoost || 0) + (data.jobBoost || 0),
-    factionBoost: (current.factionBoost || 0) + (data.factionBoost || 0),
-    eventBoost: (current.eventBoost || 0) + (data.eventBoost || 0),
-    expires
-  });
-}
-
-function getActiveBoosts(userId) {
-  const now = Date.now();
-  const boosts = activeBoosts.get(userId);
-  if (!boosts || boosts.expires < now) {
-    activeBoosts.delete(userId);
-    return { jobBoost: 0, factionBoost: 0, eventBoost: 0 };
-  }
-  return boosts;
-}
-
-module.exports.activeBoosts = activeBoosts;
-module.exports.applyItemEffect = applyItemEffect;
-module.exports.getActiveBoosts = getActiveBoosts;
