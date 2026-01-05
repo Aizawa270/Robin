@@ -27,21 +27,38 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
 
-    // Check if user is quarantined
-    if (!member.roles.cache.has(QUARANTINE_ROLE_ID)) {
-      return message.reply('This user is not in quarantine.');
-    }
-
-    // Fetch saved roles
-    const row = client.quarantineDB
+    // Fetch DB row
+    const dbRow = client.quarantineDB
       .prepare('SELECT roles FROM quarantine WHERE user_id = ?')
       .get(member.id);
 
-    let rolesToRestore = [];
+    // Check if user is quarantined
+    if (!member.roles.cache.has(QUARANTINE_ROLE_ID) && !dbRow) {
+      return message.reply('This user is not in quarantine.');
+    }
 
-    if (row) {
+    // If role missing but DB exists, restore roles from DB
+    if (!member.roles.cache.has(QUARANTINE_ROLE_ID) && dbRow) {
       try {
-        rolesToRestore = JSON.parse(row.roles || '[]').filter(id => {
+        const rolesToRestore = JSON.parse(dbRow.roles || '[]').filter(id => message.guild.roles.cache.has(id));
+        await member.roles.set([...rolesToRestore]);
+
+        client.quarantineDB
+          .prepare('DELETE FROM quarantine WHERE user_id = ?')
+          .run(member.id);
+
+        return message.reply(`Fixed quarantine mismatch for **${member.user.tag}**, roles restored.`);
+      } catch (err) {
+        console.error('Fix quarantine mismatch error:', err);
+        return message.reply('Failed to fix quarantine mismatch.');
+      }
+    }
+
+    // Normal release
+    let rolesToRestore = [];
+    if (dbRow) {
+      try {
+        rolesToRestore = JSON.parse(dbRow.roles || '[]').filter(id => {
           const role = message.guild.roles.cache.get(id);
           return role && role.id !== QUARANTINE_ROLE_ID;
         });
@@ -59,7 +76,7 @@ module.exports = {
       await member.roles.set([...rolesToRestore, ...managedRoles]);
 
       // Clean DB
-      if (row) {
+      if (dbRow) {
         client.quarantineDB
           .prepare('DELETE FROM quarantine WHERE user_id = ?')
           .run(member.id);
@@ -71,7 +88,6 @@ module.exports = {
       );
     }
 
-    // FIXED EMBED — MAIN MESSAGE IN DESCRIPTION
     const embed = new EmbedBuilder()
       .setColor('#34d399')
       .setDescription(`Successfully removed **${targetUser.tag}** from the zoo.`)
