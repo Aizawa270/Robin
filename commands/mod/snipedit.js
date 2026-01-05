@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, PermissionsBitField } = require('discord.js');
 
 module.exports = {
   name: 'snipedit',
@@ -7,6 +7,10 @@ module.exports = {
   category: 'utility',
 
   async execute(client, message, args) {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+      return message.reply('You need the **Manage Messages** permission to use this command.');
+    }
+
     const edits = client.edits.get(message.channel.id) || [];
     if (!edits.length) return message.reply('No edited messages found in this channel.');
 
