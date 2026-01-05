@@ -27,13 +27,21 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not found in this server.');
 
-    // Already quarantined check
+    // Check DB
     const dbRow = client.quarantineDB
       .prepare('SELECT roles FROM quarantine WHERE user_id = ?')
       .get(member.id);
 
-    if (member.roles.cache.has(QUARANTINE_ROLE_ID) || dbRow) {
+    // Already quarantined check
+    if (member.roles.cache.has(QUARANTINE_ROLE_ID)) {
       return message.reply('This user is already in quarantine.');
+    }
+
+    // If DB exists but role missing, clean DB
+    if (dbRow && !member.roles.cache.has(QUARANTINE_ROLE_ID)) {
+      client.quarantineDB
+        .prepare('DELETE FROM quarantine WHERE user_id = ?')
+        .run(member.id);
     }
 
     // Save roles (excluding @everyone, managed roles, quarantine role)
@@ -73,7 +81,6 @@ module.exports = {
       );
     }
 
-    // FIXED EMBED — MAIN TEXT IN DESCRIPTION
     const embed = new EmbedBuilder()
       .setColor('#f87171')
       .setDescription(`Successfully sent **${targetUser.tag}** to the zoo.`)
