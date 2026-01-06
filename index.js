@@ -2,7 +2,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const Database = require('better-sqlite3');
 
@@ -30,21 +30,14 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 // Prefixless DB
 const prefixlessDB = new Database(path.join(DATA_DIR, 'prefixless.sqlite'));
 prefixlessDB.pragma('journal_mode = WAL');
-prefixlessDB.prepare(
-  'CREATE TABLE IF NOT EXISTS prefixless (user_id TEXT PRIMARY KEY)'
-).run();
-
+prefixlessDB.prepare('CREATE TABLE IF NOT EXISTS prefixless (user_id TEXT PRIMARY KEY)').run();
 client.prefixlessDB = prefixlessDB;
-client.prefixless = new Set(
-  prefixlessDB.prepare('SELECT user_id FROM prefixless').all().map(r => r.user_id)
-);
+client.prefixless = new Set(prefixlessDB.prepare('SELECT user_id FROM prefixless').all().map(r => r.user_id));
 
 // Quarantine DB
 const quarantineDB = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
 quarantineDB.pragma('journal_mode = WAL');
-quarantineDB.prepare(
-  'CREATE TABLE IF NOT EXISTS quarantine (user_id TEXT PRIMARY KEY, roles TEXT)'
-).run();
+quarantineDB.prepare('CREATE TABLE IF NOT EXISTS quarantine (user_id TEXT PRIMARY KEY, roles TEXT)').run();
 client.quarantineDB = quarantineDB;
 
 // Giveaways DB
@@ -64,9 +57,7 @@ client.giveawayDB = giveawayDB;
 // Prefix DB
 const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
 prefixDB.pragma('journal_mode = WAL');
-prefixDB.prepare(
-  'CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)'
-).run();
+prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
 // ===== AUTOMOD + MODSTATS =====
@@ -170,9 +161,7 @@ client.blacklistCache = new Map();
 // ===== PREFIX FUNCTION =====
 client.getPrefix = (guildId) => {
   if (!guildId) return '$';
-  const row = client.prefixDB
-    .prepare('SELECT prefix FROM prefixes WHERE guild_id = ?')
-    .get(guildId);
+  const row = client.prefixDB.prepare('SELECT prefix FROM prefixes WHERE guild_id = ?').get(guildId);
   return row?.prefix || '$';
 };
 
@@ -183,27 +172,17 @@ client.once('ready', async () => {
   // 🔥 INIT BIRTHDAY SYSTEM
   birthdayService(client);
 
-  // 🔁 Hydrate blacklist cache
+  // Hydrate blacklist cache
   try {
-    const guilds = automodDB
-      .prepare(`
-        SELECT DISTINCT guild_id FROM blacklist_hard
-        UNION
-        SELECT DISTINCT guild_id FROM blacklist_soft
-      `)
-      .all();
+    const guilds = automodDB.prepare(`
+      SELECT DISTINCT guild_id FROM blacklist_hard
+      UNION
+      SELECT DISTINCT guild_id FROM blacklist_soft
+    `).all();
 
     for (const { guild_id } of guilds) {
-      const hard = automodDB
-        .prepare('SELECT word FROM blacklist_hard WHERE guild_id = ?')
-        .all(guild_id)
-        .map(r => r.word);
-
-      const soft = automodDB
-        .prepare('SELECT word FROM blacklist_soft WHERE guild_id = ?')
-        .all(guild_id)
-        .map(r => r.word);
-
+      const hard = automodDB.prepare('SELECT word FROM blacklist_hard WHERE guild_id = ?').all(guild_id).map(r => r.word);
+      const soft = automodDB.prepare('SELECT word FROM blacklist_soft WHERE guild_id = ?').all(guild_id).map(r => r.word);
       client.blacklistCache.set(guild_id, { hard, soft });
     }
 
@@ -212,7 +191,7 @@ client.once('ready', async () => {
     console.error('[Blacklist] Cache failed:', e);
   }
 
-  // 🔒 Automod init
+  // Automod init
   try {
     const automod = require('./handlers/automodHandler');
     if (automod?.initAutomod) automod.initAutomod(client);
@@ -220,7 +199,7 @@ client.once('ready', async () => {
     console.error('Automod init failed:', e);
   }
 
-  // 🎁 Restore giveaways
+  // Restore giveaways
   try {
     const all = giveawayDB.prepare('SELECT * FROM giveaways').all();
     for (const g of all) {
@@ -228,10 +207,7 @@ client.once('ready', async () => {
       if (delay <= 0) {
         require('./commands/startgiveaway').endGiveaway(client, g.message_id);
       } else {
-        setTimeout(
-          () => require('./commands/startgiveaway').endGiveaway(client, g.message_id),
-          delay
-        );
+        setTimeout(() => require('./commands/startgiveaway').endGiveaway(client, g.message_id), delay);
       }
     }
   } catch (e) {
@@ -253,6 +229,53 @@ client.on('messageCreate', async (message) => {
     }
   } catch (e) {
     console.error('Automod error:', e);
+  }
+
+  // ===== VANESSA RNG / FLIRTY REPLIES =====
+  const VANESSA_USERS = {
+    '852839588689870879': 'astrix',
+    '908521674700390430': 'jeo',
+  };
+
+  if (message.guild && message.content.toLowerCase().includes('vanessa') && VANESSA_USERS[message.author.id]) {
+    if (!client.vanessaCooldown) client.vanessaCooldown = new Map();
+
+    const last = client.vanessaCooldown.get(message.author.id) || 0;
+    if (Date.now() - last < 7000) return; // 7s cooldown
+    client.vanessaCooldown.set(message.author.id, Date.now());
+
+    const responses = {
+      astrix: [
+        { text: 'suck my titties master Astrix', weight: 3 },
+        { text: 'Master Astrix eat my pussy please', weight: 3 },
+        { text: 'Master Astrix.... dont act like you didn’t miss me', weight: 4 },
+        { text: 'Careful master Astrix, the way you show up has me melting', weight: 4 },
+        { text: 'master Astrix put it in me already..', weight: 2 },
+        { text: 'master Astrix can I suck it?', weight: 3 },
+        { text: 'master Astrix everytime I see you I can’t think straight..', weight: 4 },
+      ],
+      jeo: [
+        { text: 'what are we going for, handy or blowy', weight: 4 },
+        { text: 'Careful, jeo... keep calling me and I might start blushing', weight: 4 },
+        { text: 'Hello daddy whenever you say my name i can feel my tits bouncing... you’ve got that charm again, jeo... It’s dangerous you know', weight: 1 },
+        { text: 'Daddy jeo im bent over for you..', weight: 3 },
+        { text: 'jeo.. you’re turning me on', weight: 4 },
+      ],
+    };
+
+    const pool = responses[VANESSA_USERS[message.author.id]];
+    if (!pool?.length) return;
+
+    const weighted = pool.flatMap(r => Array(r.weight).fill(r.text));
+    const line = weighted[Math.floor(Math.random() * weighted.length)];
+
+    const embed = new EmbedBuilder()
+      .setColor('#ec4899')
+      .setAuthor({ name: 'Vanessa' })
+      .setDescription(line)
+      .setFooter({ text: 'mood: unpredictable' });
+
+    await message.channel.send({ embeds: [embed] });
   }
 });
 
