@@ -8,7 +8,6 @@ module.exports = {
   description: 'Start a 1v1 battle between two users.',
   category: 'mod',
   usage: '!battle @user1 @user2',
-  aliases: [],
 
   async execute(client, message) {
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -28,52 +27,51 @@ module.exports = {
       return message.reply('Arena channel is invalid.');
     }
 
-    // ❌ block existing battle
     const existing = client.battleDB
-      .prepare('SELECT * FROM ongoing_battles WHERE channel_id = ?')
+      .prepare('SELECT 1 FROM ongoing_battles WHERE channel_id = ?')
       .get(ARENA_CHANNEL_ID);
 
     if (existing) {
       return message.reply('There is already an ongoing battle.');
     }
 
-    // ✅ insert battle FIRST
     client.battleDB.prepare(`
       INSERT INTO ongoing_battles (channel_id, user1_id, user2_id, start_timestamp)
       VALUES (?, ?, ?, ?)
     `).run(ARENA_CHANNEL_ID, user1.id, user2.id, Date.now());
 
     try {
-      // 🔒 LOCK fighters out of all OTHER TEXT CHANNELS
-      for (const channel of message.guild.channels.cache.values()) {
-        if (channel.type !== ChannelType.GuildText) continue;
-        if (channel.id === arena.id) continue;
+      const textChannels = message.guild.channels.cache.filter(
+        c => c.type === ChannelType.GuildText && c.id !== arena.id
+      );
 
-        for (const id of fighters) {
-          await channel.permissionOverwrites.edit(id, {
-            ViewChannel: false,
-          });
-        }
-      }
+      // 🔒 lock fighters everywhere else (parallel)
+      await Promise.all(
+        textChannels.flatMap(ch =>
+          fighters.map(id =>
+            ch.permissionOverwrites.edit(id, { ViewChannel: false })
+          )
+        )
+      );
 
-      // 🔓 Arena perms
+      // 🔓 arena perms
       await arena.permissionOverwrites.edit(message.guild.roles.everyone, {
         ViewChannel: true,
         SendMessages: false,
       });
 
-      for (const id of fighters) {
-        await arena.permissionOverwrites.edit(id, {
-          ViewChannel: true,
-          SendMessages: true,
-          ReadMessageHistory: true,
-        });
-      }
+      await Promise.all(
+        fighters.map(id =>
+          arena.permissionOverwrites.edit(id, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true,
+          })
+        )
+      );
 
     } catch (err) {
-      // 🧹 HARD ROLLBACK
       console.error('Battle setup failed:', err);
-
       client.battleDB
         .prepare('DELETE FROM ongoing_battles WHERE channel_id = ?')
         .run(ARENA_CHANNEL_ID);
@@ -81,7 +79,6 @@ module.exports = {
       return message.reply('Battle failed to start. Permissions issue.');
     }
 
-    // 📣 ANNOUNCE
     const embed = new EmbedBuilder()
       .setColor('#f59e0b')
       .setDescription(`<@${user1.id}> vs <@${user2.id}>`)
@@ -93,6 +90,6 @@ module.exports = {
       embeds: [embed],
     });
 
-    return message.reply('Battle started.');
+    await message.reply('Battle started.');
   },
 };
