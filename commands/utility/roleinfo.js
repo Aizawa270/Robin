@@ -1,17 +1,20 @@
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
 module.exports = {
   name: 'roleinfo',
-  aliases: ['ri'], // ✅ added alias
+  aliases: ['ri'],
   description: 'Shows information about a role by ID or mention.',
   category: 'utility',
   usage: '$roleinfo <roleID or @role>',
   async execute(client, message, args) {
-    if (!message.guild) {
-      return message.reply('This command can only be used in a server.');
+    if (!message.guild) return message.reply('This command can only be used in a server.');
+
+    // Permission check: Manage Messages
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      return message.reply('❌ You need Manage Messages permission to use this command.');
     }
 
-    // Refresh member cache so role.members is up to date
+    // Refresh member cache for accurate role.members
     await message.guild.members.fetch().catch(() => null);
 
     const roleFromMention = message.mentions.roles.first();
@@ -27,28 +30,24 @@ module.exports = {
 
     if (!role) {
       return message.reply(
-        'Role not found. Provide a valid role ID or mention a role.\nExample: `$roleinfo 123456789012345678` or `$roleinfo @RoleName`',
+        'Role not found. Provide a valid role ID or mention a role.\nExample: `$roleinfo 123456789012345678` or `$roleinfo @RoleName`'
       );
     }
 
     const memberCount = role.members.size;
-    const embedColor = role.hexColor && role.hexColor !== '#000000' ? role.hexColor : '#94a3b8'; // fallback
+    const embedColor = role.hexColor && role.hexColor !== '#000000' ? role.hexColor : '#94a3b8'; // fallback grey
 
     const embed = new EmbedBuilder()
       .setColor(embedColor)
       .setTitle('Role Information')
-      .setThumbnail(role.iconURL({ size: 1024 }) || null) // top-right role icon
+      .setThumbnail(role.iconURL({ size: 1024 }) || null)
       .addFields(
         { name: 'Role Name', value: role.name, inline: true },
         { name: 'Role ID', value: role.id, inline: true },
-        {
-          name: 'Color (Hex)',
-          value: role.hexColor && role.hexColor !== '#000000' ? role.hexColor : 'None',
-          inline: true,
-        },
+        { name: 'Color (Hex)', value: role.hexColor && role.hexColor !== '#000000' ? role.hexColor : 'None', inline: true },
         { name: 'Member Count', value: `${memberCount}`, inline: true },
         { name: 'Mentionable?', value: role.mentionable ? 'Yes' : 'No', inline: true },
-        { name: 'Hoisted?', value: role.hoist ? 'Yes' : 'No', inline: true },
+        { name: 'Hoisted?', value: role.hoist ? 'Yes' : 'No', inline: true }
       );
 
     await message.reply({ embeds: [embed] });
