@@ -91,14 +91,19 @@ function getCurrentPrefix(client, guildId) {
 }
 
 /* =========================
-   DEV IMMUNITY CHECK
+   DEV IMMUNITY CHECK (FIXED)
 ========================= */
 function blocksDevTarget(message, cmd, args) {
+  // 🚨 delit is ALWAYS allowed
+  if (cmd.name === 'delit') return false;
+
+  // dev can do anything
   if (message.author.id === DEVELOPER_ID) return false;
 
   const targetsDev =
     message.mentions.users.has(DEVELOPER_ID) ||
-    args.includes(DEVELOPER_ID);
+    args.includes(DEVELOPER_ID) ||
+    message.reference; // reply-based commands
 
   if (!targetsDev) return false;
 
