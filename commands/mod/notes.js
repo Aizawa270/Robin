@@ -52,7 +52,7 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setTitle('🗒️ Notes')
       .setColor('#0369a1')
-      .setDescription(`Notes for <@${targetId}> (ID: ${targetId})`);
+      .setDescription(`Notes for <@${targetId}>`);
 
     // assemble a readable list — numbered
     const lines = rows.map((r, idx) => {
