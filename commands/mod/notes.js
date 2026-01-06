@@ -48,21 +48,22 @@ module.exports = {
     const rows = db.prepare('SELECT id, moderator_id, note_text, created_at FROM notes WHERE target_id = ? ORDER BY created_at ASC').all(targetId);
     if (!rows || rows.length === 0) return message.reply('No notes found for that user.');
 
-    // Build paginated or single embed with numbered lines
+    // Build embed
+    const user = await client.users.fetch(targetId).catch(() => null);
     const embed = new EmbedBuilder()
       .setTitle('🗒️ Notes')
       .setColor('#0369a1')
-      .setDescription(`Notes for <@${targetId}>`);
+      .setDescription(`Notes for ${user ? user.tag : 'Unknown User'}`);
 
-    // assemble a readable list — numbered
+    // Assemble readable list — numbered
     const lines = rows.map((r, idx) => {
-      const date = `<t:${Math.floor(r.created_at/1000)}:f>`;
+      const date = `<t:${Math.floor(r.created_at / 1000)}:f>`;
       const mod = `<@${r.moderator_id}>`;
       const text = r.note_text.length > 500 ? r.note_text.slice(0, 497) + '...' : r.note_text;
-      return `**${idx+1}.** ${text}\n• By: ${mod} • ${date}`;
+      return `**${idx + 1}.** ${text}\n• By: ${mod} • ${date}`;
     });
 
-    // Discord embed description length limit ~4096, keep within safe bounds
+    // Discord embed description length limit ~4096
     const chunk = lines.join('\n\n').slice(0, 3800);
     embed.setDescription(`${embed.data.description}\n\n${chunk}`);
 
