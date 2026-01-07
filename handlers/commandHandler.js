@@ -1,23 +1,7 @@
 const universalHelper = require('./universalHelper');
 const fs = require('fs');
 const path = require('path');
-const { Collection, EmbedBuilder } = require('discord.js');
-
-/* =========================
-   DEV PROTECTION CONFIG
-========================= */
-const DEVELOPER_ID = '852839588689870879';
-
-const DEV_IMMUNE_COMMANDS = new Set([
-  'quarantine',
-  'releasequarantine',
-  'mute',
-  'kick',
-  'ban',
-  'massmute',
-  'massban',
-  'warn',
-]);
+const { Collection } = require('discord.js');
 
 /* =========================
    STRIP REPLY TARGET
@@ -91,26 +75,6 @@ function getCurrentPrefix(client, guildId) {
 }
 
 /* =========================
-   DEV IMMUNITY CHECK (FIXED)
-========================= */
-function blocksDevTarget(message, cmd, args) {
-  // 🚨 delit is ALWAYS allowed
-  if (cmd.name === 'delit') return false;
-
-  // dev can do anything
-  if (message.author.id === DEVELOPER_ID) return false;
-
-  const targetsDev =
-    message.mentions.users.has(DEVELOPER_ID) ||
-    args.includes(DEVELOPER_ID) ||
-    message.reference; // reply-based commands
-
-  if (!targetsDev) return false;
-
-  return DEV_IMMUNE_COMMANDS.has(cmd.name.toLowerCase());
-}
-
-/* =========================
    MAIN HANDLER
 ========================= */
 async function handleMessage(client, message) {
@@ -161,13 +125,6 @@ async function handleMessage(client, message) {
       universalHelper.createEmbed(client, message, opts);
     universalHelper.patchMessageReply(message);
 
-    if (blocksDevTarget(message, cmd, parts)) {
-      const embed = new EmbedBuilder()
-        .setColor('#facc15')
-        .setDescription("you ain't doing shit to him 😹");
-      return message.reply({ embeds: [embed] });
-    }
-
     try {
       await cmd.execute(client, message, parts);
     } catch (e) {
@@ -192,13 +149,6 @@ async function handleMessage(client, message) {
   message.createEmbed = (opts) =>
     universalHelper.createEmbed(client, message, opts);
   universalHelper.patchMessageReply(message);
-
-  if (blocksDevTarget(message, cmd, args)) {
-    const embed = new EmbedBuilder()
-      .setColor('#facc15')
-      .setDescription("you ain't doing shit to him 😹");
-    return message.reply({ embeds: [embed] });
-  }
 
   try {
     await cmd.execute(client, message, args);
