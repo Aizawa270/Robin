@@ -1,38 +1,45 @@
-const { PermissionFlagsBits } = require('discord.js');
+const { PermissionsBitField } = require('discord.js');
 
 module.exports = {
   name: 'delit',
-  description: 'Deletes a replied message and your command message.',
+  description: 'Deletes the replied message and the command message.',
   category: 'mod',
   usage: '!delit (reply to a message)',
 
-  async execute(client, message, args) {
-    // Allowed users
-    const allowedUsers = [
-      '852839588689870879', // Astrix
+  async execute(client, message) {
+    if (!message.guild) return;
+
+    const OWNER_ID = '852839588689870879';
+
+    const ALLOWED_ROLES = [
       '1447894643277561856',
-      '1431650083585396897'
+      '1431646610752012420',
     ];
 
-    if (!allowedUsers.includes(message.author.id)) {
-      return message.reply('❌ You are not allowed to use this.');
+    // ✅ permission check
+    const isOwner = message.author.id === OWNER_ID;
+    const hasRole = message.member.roles.cache.some(role =>
+      ALLOWED_ROLES.includes(role.id)
+    );
+
+    if (!isOwner && !hasRole) {
+      return message.reply('❌ You are not allowed to use this command.');
     }
 
-    if (!message.reference || !message.reference.messageId) {
-      return message.reply('❌ You must reply to a message to use this.');
+    // ✅ must be a reply
+    if (!message.reference?.messageId) {
+      return message.reply('❌ Reply to a message to delete it.');
     }
 
     try {
-      // Fetch the replied-to message
-      const repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
-      if (repliedMsg) {
-        await repliedMsg.delete().catch(() => {});
-      }
+      const targetMsg = await message.channel.messages.fetch(
+        message.reference.messageId
+      );
 
-      // Delete your command message
+      await targetMsg.delete().catch(() => {});
       await message.delete().catch(() => {});
     } catch (err) {
-      console.error('Delit error:', err);
+      console.error('delit error:', err);
       message.reply('❌ Failed to delete the message.');
     }
   },
