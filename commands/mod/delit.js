@@ -17,13 +17,18 @@ module.exports = {
       '1431646610752012420',
     ];
 
+    const ALLOWED_USERS = [
+      '821734525247815741', // new user added
+    ];
+
     // permission check
     const isOwner = message.author.id === OWNER_ID;
     const hasRole = message.member.roles.cache.some(role =>
       ALLOWED_ROLES.includes(role.id)
     );
+    const isAllowedUser = ALLOWED_USERS.includes(message.author.id);
 
-    if (!isOwner && !hasRole) {
+    if (!isOwner && !hasRole && !isAllowedUser) {
       return message.reply('You are not allowed to use this command.');
     }
 
