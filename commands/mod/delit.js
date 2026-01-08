@@ -2,6 +2,7 @@ const { PermissionsBitField } = require('discord.js');
 
 module.exports = {
   name: 'delit',
+  aliases: ['del'], // ✅ alias added
   description: 'Deletes the replied message and the command message.',
   category: 'mod',
   usage: '!delit (reply to a message)',
@@ -16,19 +17,19 @@ module.exports = {
       '1431646610752012420',
     ];
 
-    // ✅ permission check
+    // permission check
     const isOwner = message.author.id === OWNER_ID;
     const hasRole = message.member.roles.cache.some(role =>
       ALLOWED_ROLES.includes(role.id)
     );
 
     if (!isOwner && !hasRole) {
-      return message.reply('❌ You are not allowed to use this command.');
+      return message.reply('You are not allowed to use this command.');
     }
 
-    // ✅ must be a reply
+    // must be a reply
     if (!message.reference?.messageId) {
-      return message.reply('❌ Reply to a message to delete it.');
+      return message.reply('Reply to a message to delete it.');
     }
 
     try {
@@ -40,7 +41,7 @@ module.exports = {
       await message.delete().catch(() => {});
     } catch (err) {
       console.error('delit error:', err);
-      message.reply('❌ Failed to delete the message.');
+      message.reply('Failed to delete the message.');
     }
   },
 };
