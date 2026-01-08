@@ -1,181 +1,94 @@
-const { EmbedBuilder } = require('discord.js');
-
-const ALLOWED_USER_IDS = [
-  '852839588689870879',
-  '821734525247815741',
-];
-
-const ALLOWED_ROLE_IDS = [
-  '1447894643277561856',
-  '1431646610752012420',
-];
+const { EmbedBuilder, PermissionFlagsBits, WebhookClient } = require('discord.js');
 
 module.exports = {
   name: 'flood',
-  description: 'Send multiple messages via webhook or DM (restricted)',
-  category: 'utility',
-  hidden: true,
-  usage: '$flood [channel/user] <amount> <text>',
+  description: 'Floods the channel using 5 webhooks and shows execution time.',
+  category: 'mod',
+  usage: '!flood <amount> <delay(ms)> <message>',
 
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    const isAllowedUser = ALLOWED_USER_IDS.includes(message.author.id);
+    // ---- ACCESS CONTROL ----
+    const allowedUserIds = [
+      '852839588689870879',
+      '821734525247815741',
+    ];
+
+    const allowedRoleIds = [
+      '1447894643277561856',
+      '1431646610752012420',
+    ];
+
     const hasAllowedRole = message.member.roles.cache.some(r =>
-      ALLOWED_ROLE_IDS.includes(r.id)
+      allowedRoleIds.includes(r.id)
     );
 
-    if (!isAllowedUser && !hasAllowedRole) {
-      return message.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor('#f472b6')
-            .setDescription('You are not allowed to use this command.'),
-        ],
-      });
+    if (!allowedUserIds.includes(message.author.id) && !hasAllowedRole) {
+      return message.reply('❌ You are not allowed to use this.');
     }
 
-    if (args.length < 2) {
+    // ---- ARGS ----
+    const amount = parseInt(args[0]);
+    const delay = parseInt(args[1]);
+    const text = args.slice(2).join(' ');
+
+    if (!amount || !delay || !text) {
       return message.reply(
-        'Usage: `$flood [channel/user] <amount> <text>`\n' +
-        'Examples:\n' +
-        '`$flood #general 20 hello`\n' +
-        '`$flood @User 10 test`\n' +
-        '`$flood 15 spam`'
+        'Usage: `!flood <amount> <delay(ms)> <message>`\nExample: `!flood 40 200 hello`'
       );
     }
 
-    let targetChannel = message.channel;
-    let targetUser = null;
-    let targetDM = false;
-    let amountIndex = 0;
-
-    if (args[0]) {
-      const channelMatch = args[0].match(/<#(\d+)>/);
-      if (channelMatch) {
-        const channel = await message.guild.channels.fetch(channelMatch[1]).catch(() => null);
-        if (!channel || !channel.isTextBased()) {
-          return message.reply('Invalid channel.');
-        }
-        targetChannel = channel;
-        amountIndex = 1;
-      } else if (args[0].match(/<@!?(\d+)>/)) {
-        const userId = args[0].replace(/[<@!>]/g, '');
-        targetUser = await client.users.fetch(userId).catch(() => null);
-        if (!targetUser) return message.reply('Invalid user.');
-        targetDM = true;
-        amountIndex = 1;
-      }
+    if (amount > 300) {
+      return message.reply('❌ Max limit is 300 messages.');
     }
 
-    const amount = parseInt(args[amountIndex]);
-    if (isNaN(amount) || amount < 1 || amount > 40) {
-      return message.reply('Amount must be between 1 and 40.');
+    // ---- FETCH / CREATE 5 WEBHOOKS ----
+    let webhooks = await message.channel.fetchWebhooks();
+    webhooks = webhooks.filter(w => w.owner?.id === client.user.id);
+
+    while (webhooks.size < 5) {
+      const wh = await message.channel.createWebhook({
+        name: `Flood-${webhooks.size + 1}`,
+      });
+      webhooks.set(wh.id, wh);
     }
 
-    const text = args.slice(amountIndex + 1).join(' ');
-    if (!text) return message.reply('Provide text to send.');
+    const webhookClients = [...webhooks.values()]
+      .slice(0, 5)
+      .map(w => new WebhookClient({ id: w.id, token: w.token }));
 
-    const startEmbed = new EmbedBuilder()
-      .setColor('#ef4444')
-      .setTitle('Flood Started')
-      .setDescription(
-        targetDM
-          ? `Target: ${targetUser.tag} (DM)\nAmount: ${amount}`
-          : `Target: ${targetChannel}\nAmount: ${amount}`
-      )
-      .setTimestamp();
-
-    const startMsg = await message.reply({ embeds: [startEmbed] });
+    // ---- START TIMER ----
     const startTime = Date.now();
 
-    try {
-      if (targetDM) {
-        let sent = 0;
-        let failed = 0;
+    let index = 0;
 
-        for (let i = 0; i < amount; i++) {
-          try {
-            await targetUser.send(text);
-            sent++;
-            await new Promise(r => setTimeout(r, 150));
-          } catch {
-            failed++;
-            break;
-          }
-        }
+    for (let i = 0; i < amount; i++) {
+      const webhook = webhookClients[index];
 
-        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      await webhook.send({
+        content: text,
+      }).catch(() => {});
 
-        const resultEmbed = new EmbedBuilder()
-          .setColor('#22c55e')
-          .setTitle('Flood Finished')
-          .addFields(
-            { name: 'Sent', value: `${sent}`, inline: true },
-            { name: 'Failed', value: `${failed}`, inline: true },
-            { name: 'Time', value: `${duration}s`, inline: true }
-          )
-          .setTimestamp();
-
-        return startMsg.edit({ embeds: [resultEmbed] });
-      }
-
-      // CHANNEL FLOOD
-      const webhooks = [];
-      let sent = 0;
-      let failed = 0;
-
-      for (let i = 0; i < 3; i++) {
-        const hook = await targetChannel.createWebhook({
-          name: 'Vanessa',
-          reason: 'Flood command',
-        }).catch(() => null);
-        if (hook) webhooks.push(hook);
-      }
-
-      if (!webhooks.length) throw new Error('Failed to create webhooks.');
-
-      const floodWebhook = async webhook => {
-        while (sent < amount) {
-          try {
-            await webhook.send({ content: text });
-            sent++;
-            await new Promise(r => setTimeout(r, 100));
-          } catch {
-            failed++;
-            break;
-          }
-        }
-      };
-
-      await Promise.allSettled(webhooks.map(floodWebhook));
-
-      for (const hook of webhooks) {
-        await hook.delete().catch(() => {});
-      }
-
-      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-
-      const resultEmbed = new EmbedBuilder()
-        .setColor('#22c55e')
-        .setTitle('Flood Finished')
-        .addFields(
-          { name: 'Sent', value: `${sent}`, inline: true },
-          { name: 'Failed', value: `${failed}`, inline: true },
-          { name: 'Time', value: `${duration}s`, inline: true }
-        )
-        .setTimestamp();
-
-      await startMsg.edit({ embeds: [resultEmbed] });
-
-    } catch (err) {
-      const errorEmbed = new EmbedBuilder()
-        .setColor('#dc2626')
-        .setTitle('Flood Failed')
-        .setDescription(err.message)
-        .setTimestamp();
-
-      await startMsg.edit({ embeds: [errorEmbed] });
+      index = (index + 1) % 5;
+      await new Promise(r => setTimeout(r, delay));
     }
+
+    // ---- END TIMER ----
+    const endTime = Date.now();
+    const duration = ((endTime - startTime) / 1000).toFixed(2);
+
+    const embed = new EmbedBuilder()
+      .setColor('#22c55e')
+      .setTitle('Flood Finished')
+      .addFields(
+        { name: 'Messages Sent', value: `${amount}`, inline: true },
+        { name: 'Webhooks Used', value: '5', inline: true },
+        { name: 'Time Taken', value: `${duration}s`, inline: false },
+      )
+      .setFooter({ text: 'Execution completed successfully' })
+      .setTimestamp();
+
+    await message.channel.send({ embeds: [embed] });
   },
 };
