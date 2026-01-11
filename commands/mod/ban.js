@@ -4,7 +4,7 @@ const { logModAction } = require('../../handlers/modstatsHelper');
 module.exports = {
   name: 'ban',
   aliases: ['B', 'b'],
-  description: 'Ban a user by mention or ID.',
+  description: 'Ban a user by reply, mention, or ID.',
   category: 'mod',
   usage: '$ban <@user|userID> [reason]',
   async execute(client, message, args) {
@@ -16,25 +16,32 @@ module.exports = {
 
     const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
 
-    if (!args.length) {
-      const embed = new EmbedBuilder()
-        .setColor('#ef4444')
-        .setTitle('Ban Command Usage')
-        .setDescription(
-          '**Usage:**\n' +
-          `\`${prefix}ban <@user|userID> [reason]\`\n\n` +
-          '**Examples:**\n' +
-          `\`${prefix}ban @User spamming\`\n` +
-          `\`${prefix}ban 123456789012345678 breaking rules\``
-        )
-        .setFooter({ text: `Use ${prefix}help for more info` });
-
-      return message.reply({ embeds: [embed] });
+    if (!args.length && !message.reference) {
+      return message.reply(
+        `Usage: \`${prefix}ban <@user|userID> [reason]\` or reply + \`${prefix}ban\``
+      );
     }
 
-    const targetUser =
-      message.mentions.users.first() ||
-      (await client.users.fetch(args[0]).catch(() => null));
+    // ✅ 1. REPLY TARGET
+    let targetUser = null;
+
+    if (message.reference?.messageId) {
+      const repliedMsg = await message.channel.messages
+        .fetch(message.reference.messageId)
+        .catch(() => null);
+
+      if (repliedMsg) targetUser = repliedMsg.author;
+    }
+
+    // ✅ 2. MENTION
+    if (!targetUser) {
+      targetUser = message.mentions.users.first();
+    }
+
+    // ✅ 3. ID
+    if (!targetUser && args[0]) {
+      targetUser = await client.users.fetch(args[0]).catch(() => null);
+    }
 
     if (!targetUser) {
       return message.reply('User not found.');
@@ -63,7 +70,7 @@ module.exports = {
       return message.reply('I cannot ban that user.');
     }
 
-    // ✅ CHECK IF USER IS ALREADY BANNED
+    // ✅ ALREADY BANNED CHECK
     const existingBan = await message.guild.bans
       .fetch(targetUser.id)
       .catch(() => null);
@@ -72,7 +79,6 @@ module.exports = {
       const alreadyBannedEmbed = new EmbedBuilder()
         .setColor('#f59e0b')
         .setTitle('Already Banned')
-        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .setDescription(`<@${targetUser.id}> is already banned from this server.`)
         .setTimestamp();
 
@@ -84,7 +90,7 @@ module.exports = {
         reason: `${reason} (banned by ${message.author.tag})`,
       });
 
-      const logSuccess = logModAction(
+      logModAction(
         client,
         message.guild.id,
         message.author.id,
@@ -93,21 +99,16 @@ module.exports = {
         reason
       );
 
-      if (!logSuccess) {
-        console.error('[Ban] Failed to log to modstats');
-      }
-
       const embed = new EmbedBuilder()
         .setColor('#ef4444')
         .setTitle('User Banned')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
-          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
-          { name: 'Banned by', value: `<@${message.author.id}>`, inline: false },
-          { name: 'Reason', value: reason, inline: false }
+          { name: 'User', value: `<@${targetUser.id}>` },
+          { name: 'Banned by', value: `<@${message.author.id}>` },
+          { name: 'Reason', value: reason }
         )
-        .setTimestamp()
-        .setFooter({ text: `Banned by ${message.author.tag}` });
+        .setTimestamp();
 
       await message.reply({ embeds: [embed] });
     } catch (err) {
@@ -116,10 +117,7 @@ module.exports = {
       const errorEmbed = new EmbedBuilder()
         .setColor('#ef4444')
         .setTitle('Failed to Ban User')
-        .setDescription('There was an error trying to ban the user.')
-        .addFields(
-          { name: 'Error', value: err.message.substring(0, 100), inline: false }
-        );
+        .setDescription('There was an error trying to ban the user.');
 
       await message.reply({ embeds: [errorEmbed] });
     }
