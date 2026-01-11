@@ -14,7 +14,6 @@ module.exports = {
       return message.reply('You need **Ban Members** permission.');
     }
 
-    // Get dynamic prefix
     const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
 
     if (!args.length) {
@@ -41,7 +40,10 @@ module.exports = {
       return message.reply('User not found.');
     }
 
-    const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+    const targetMember = await message.guild.members
+      .fetch(targetUser.id)
+      .catch(() => null);
+
     const reason = args.slice(1).join(' ') || 'No reason provided';
 
     if (targetUser.id === message.author.id)
@@ -61,12 +63,27 @@ module.exports = {
       return message.reply('I cannot ban that user.');
     }
 
+    // ✅ CHECK IF USER IS ALREADY BANNED
+    const existingBan = await message.guild.bans
+      .fetch(targetUser.id)
+      .catch(() => null);
+
+    if (existingBan) {
+      const alreadyBannedEmbed = new EmbedBuilder()
+        .setColor('#f59e0b')
+        .setTitle('Already Banned')
+        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
+        .setDescription(`<@${targetUser.id}> is already banned from this server.`)
+        .setTimestamp();
+
+      return message.reply({ embeds: [alreadyBannedEmbed] });
+    }
+
     try {
       await message.guild.bans.create(targetUser.id, {
         reason: `${reason} (banned by ${message.author.tag})`,
       });
 
-      // 🔹 Log to modstats - WITH PROPER CLIENT PARAMETER
       const logSuccess = logModAction(
         client,
         message.guild.id,
