@@ -3,7 +3,7 @@ const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'kick',
-  description: 'Kick a user by mention or ID.',
+  description: 'Kick a user by reply, mention, or ID.',
   aliases: ['k', 'K'],
   category: 'mod',
   usage: '$kick <@user|userID> [reason]',
@@ -14,31 +14,53 @@ module.exports = {
       return message.reply('You need **Kick Members** permission.');
     }
 
-    // Get dynamic prefix
     const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
 
-    if (!args.length) {
-      const embed = new EmbedBuilder()
-        .setColor('#fb923c')
-        .setTitle('Kick Command Usage')
-        .setDescription(
-          '**Usage:**\n' +
-          `\`${prefix}kick <@user|userID> [reason]\`\n\n` +
-          '**Examples:**\n' +
-          `\`${prefix}kick @User being rude\`\n` +
-          `\`${prefix}kick 123456789012345678 spam\``
-        );
-      return message.reply({ embeds: [embed] });
+    if (!args.length && !message.reference) {
+      return message.reply(
+        `Usage: \`${prefix}kick <@user|userID> [reason]\` or reply + \`${prefix}kick\``
+      );
     }
 
-    const targetUser =
-      message.mentions.users.first() ||
-      (await client.users.fetch(args[0]).catch(() => null));
+    // ✅ 1. REPLY TARGET
+    let targetUser = null;
 
-    if (!targetUser) return message.reply('User not found.');
+    if (message.reference?.messageId) {
+      const repliedMsg = await message.channel.messages
+        .fetch(message.reference.messageId)
+        .catch(() => null);
 
-    const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!targetMember) return message.reply('User not in this server.');
+      if (repliedMsg) targetUser = repliedMsg.author;
+    }
+
+    // ✅ 2. MENTION
+    if (!targetUser) {
+      targetUser = message.mentions.users.first();
+    }
+
+    // ✅ 3. ID
+    if (!targetUser && args[0]) {
+      targetUser = await client.users.fetch(args[0]).catch(() => null);
+    }
+
+    if (!targetUser) {
+      return message.reply('User not found.');
+    }
+
+    const targetMember = await message.guild.members
+      .fetch(targetUser.id)
+      .catch(() => null);
+
+    // 🚫 prevents fake kick messages
+    if (!targetMember) {
+      const embed = new EmbedBuilder()
+        .setColor('#f59e0b')
+        .setTitle('Kick Failed')
+        .setDescription(`<@${targetUser.id}> is not in this server.`)
+        .setTimestamp();
+
+      return message.reply({ embeds: [embed] });
+    }
 
     const reason = args.slice(1).join(' ') || 'No reason provided';
 
@@ -48,17 +70,20 @@ module.exports = {
     if (targetUser.id === client.user.id)
       return message.reply('I cannot kick myself.');
 
-    if (targetMember.permissions.has(PermissionFlagsBits.Administrator))
-      return message.reply('You cannot kick an administrator.');
+    if (
+      targetMember.roles.highest.position >= message.member.roles.highest.position
+    ) {
+      return message.reply('You cannot kick someone with equal or higher role.');
+    }
 
-    if (!targetMember.kickable)
+    if (!targetMember.kickable) {
       return message.reply('I cannot kick that user.');
+    }
 
     try {
       await targetMember.kick(`${reason} (kicked by ${message.author.tag})`);
 
-      // 🔹 Log to modstats - WITH PROPER CLIENT PARAMETER
-      const logSuccess = logModAction(
+      logModAction(
         client,
         message.guild.id,
         message.author.id,
@@ -67,25 +92,27 @@ module.exports = {
         reason
       );
 
-      if (!logSuccess) {
-        console.error('[Kick] Failed to log to modstats');
-      }
-
       const embed = new EmbedBuilder()
         .setColor('#fb923c')
         .setTitle('User Kicked')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
-          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
-          { name: 'Kicked by', value: `<@${message.author.id}>`, inline: false },
-          { name: 'Reason', value: reason, inline: false }
+          { name: 'User', value: `<@${targetUser.id}>` },
+          { name: 'Kicked by', value: `<@${message.author.id}>` },
+          { name: 'Reason', value: reason }
         )
         .setTimestamp();
 
       await message.reply({ embeds: [embed] });
     } catch (err) {
       console.error('Kick command error:', err);
-      await message.reply('Failed to kick the user.');
+
+      const errorEmbed = new EmbedBuilder()
+        .setColor('#ef4444')
+        .setTitle('Failed to Kick User')
+        .setDescription('There was an error trying to kick the user.');
+
+      await message.reply({ embeds: [errorEmbed] });
     }
   },
 };
