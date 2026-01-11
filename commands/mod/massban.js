@@ -20,7 +20,7 @@ module.exports = {
       return message.reply('You need to provide at least **1 user** to ban.');
     }
 
-    const reason = 'Mass ban issued by staff';
+    const reason = `Mass ban issued by ${message.author.tag}`;
 
     // Collect user IDs
     const userIds = new Set();
@@ -43,48 +43,66 @@ module.exports = {
       return message.reply('You can only massban **up to 10 users at once**.');
     }
 
+    // Fetch current bans once (important)
+    const existingBans = await message.guild.bans.fetch().catch(() => null);
+
     const banned = [];
+    const alreadyBanned = [];
     const failed = [];
 
     for (const userId of userIds) {
       try {
+        // ✅ Already banned check
+        if (existingBans?.has(userId)) {
+          alreadyBanned.push(userId);
+          continue;
+        }
+
+        // Role hierarchy safety (if member exists)
+        const member = await message.guild.members.fetch(userId).catch(() => null);
+        if (
+          member &&
+          member.roles.highest.position >= message.member.roles.highest.position
+        ) {
+          failed.push(userId);
+          continue;
+        }
+
         await message.guild.members.ban(userId, {
-          reason: `${reason} (by ${message.author.tag})`,
+          reason,
         });
+
         banned.push(userId);
       } catch {
         failed.push(userId);
       }
     }
 
-    // 🔹 Fake pings
-    const bannedList = banned.length
-      ? banned.map(id => `• <@${id}>`).join('\n')
-      : 'None';
-
-    const failedList = failed.length
-      ? failed.map(id => `• <@${id}>`).join('\n')
-      : 'None';
-
-    const fakeModPing = `<@${message.author.id}>`;
+    const formatList = arr =>
+      arr.length ? arr.map(id => `• <@${id}>`).join('\n') : 'None';
 
     const embed = new EmbedBuilder()
       .setColor('#dc2626')
-      .setTitle('Mass Ban Executed')
+      .setTitle('Mass Ban Results')
       .addFields(
         {
-          name: 'Banned Users',
-          value: bannedList,
+          name: '✅ Banned',
+          value: formatList(banned),
           inline: false,
         },
         {
-          name: 'Failed',
-          value: failedList,
+          name: '⚠️ Already Banned',
+          value: formatList(alreadyBanned),
+          inline: false,
+        },
+        {
+          name: '❌ Failed',
+          value: formatList(failed),
           inline: false,
         },
         {
           name: 'Banned by',
-          value: fakeModPing,
+          value: `<@${message.author.id}>`,
           inline: false,
         },
       )
