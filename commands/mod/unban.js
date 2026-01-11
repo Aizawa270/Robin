@@ -3,21 +3,42 @@ const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'unban',
-  description: 'Unban a user by ID.',
+  description: 'Unban a user by ID, mention, or reply.',
   category: 'mod',
-  usage: '$unban <userID>',
+  usage: '$unban <userID | @user | reply>',
   async execute(client, message, args) {
-    if (!message.guild) return message.reply('This command can only be used in a server.');
-
-    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
-      return message.reply('You need the **Ban Members** permission to use this command.');
+    if (!message.guild) {
+      return message.reply('This command can only be used in a server.');
     }
 
-    const userId = args[0];
+    if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+      return message.reply('You need the **Ban Members** permission.');
+    }
+
+    let userId = null;
+
+    // 1️⃣ Mention
+    if (message.mentions.users.first()) {
+      userId = message.mentions.users.first().id;
+    }
+
+    // 2️⃣ Reply
+    if (!userId && message.reference?.messageId) {
+      const repliedMsg = await message.channel.messages
+        .fetch(message.reference.messageId)
+        .catch(() => null);
+      if (repliedMsg?.author) {
+        userId = repliedMsg.author.id;
+      }
+    }
+
+    // 3️⃣ Raw ID
+    if (!userId && args[0] && /^\d{17,20}$/.test(args[0])) {
+      userId = args[0];
+    }
+
     if (!userId) {
-      // Get dynamic prefix
       const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
-      
       return message.reply({
         embeds: [
           new EmbedBuilder()
@@ -25,22 +46,28 @@ module.exports = {
             .setTitle('Unban Command Usage')
             .setDescription(
               '**Usage:**\n' +
-              `\`${prefix}unban <userID>\`\n\n` +
-              '**Example:**\n' +
-              `\`${prefix}unban 123456789012345678\``
-            )
-        ]
+              `\`${prefix}unban <userID | @user | reply>\`\n\n` +
+              '**Examples:**\n' +
+              `\`${prefix}unban 123456789012345678\`\n` +
+              `\`${prefix}unban @User\`\n` +
+              `Reply to a user → \`${prefix}unban\``
+            ),
+        ],
       });
     }
 
     try {
       const banInfo = await message.guild.bans.fetch(userId).catch(() => null);
-      if (!banInfo) return message.reply('That user is not banned or the ID is invalid.');
+      if (!banInfo) {
+        return message.reply('That user is not banned.');
+      }
 
-      await message.guild.bans.remove(userId, `Unbanned by ${message.author.tag}`);
+      await message.guild.bans.remove(
+        userId,
+        `Unbanned by ${message.author.tag}`
+      );
 
-      // 🔹 Log to modstats - WITH PROPER CLIENT PARAMETER
-      const logSuccess = logModAction(
+      logModAction(
         client,
         message.guild.id,
         message.author.id,
@@ -49,24 +76,24 @@ module.exports = {
         'Unbanned by moderator'
       );
 
-      if (!logSuccess) {
-        console.error('[Unban] Failed to log to modstats');
-      }
-
       const embed = new EmbedBuilder()
         .setColor('#22c55e')
         .setTitle('User Unbanned')
         .addFields(
-          { name: 'User', value: `<@${banInfo.user.id}>`, inline: false },
+          { name: 'User', value: `<@${userId}>`, inline: false },
           { name: 'Unbanned by', value: `<@${message.author.id}>`, inline: false },
-          { name: 'Original Ban Reason', value: banInfo.reason || 'No reason provided', inline: false }
+          {
+            name: 'Original Ban Reason',
+            value: banInfo.reason || 'No reason provided',
+            inline: false,
+          }
         )
         .setTimestamp();
 
       await message.reply({ embeds: [embed] });
     } catch (err) {
-      console.error('Unban command error:', err);
-      await message.reply('There was an error trying to unban that user.');
+      console.error('[Unban] Error:', err);
+      await message.reply('Failed to unban the user.');
     }
   },
 };
