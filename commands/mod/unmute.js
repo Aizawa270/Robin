@@ -9,11 +9,11 @@ module.exports = {
     if (!message.guild) return message.reply('Server only.');
 
     const memberPerms = message.member.permissions;
-    const canModerate =
-      memberPerms.has(PermissionFlagsBits.ModerateMembers) ||
-      memberPerms.has(PermissionFlagsBits.Administrator);
-
-    if (!canModerate) return message.reply('You need **Timeout Members** permission or admin.');
+    if (
+      !memberPerms.has(PermissionFlagsBits.ModerateMembers) &&
+      !memberPerms.has(PermissionFlagsBits.Administrator)
+    )
+      return message.reply('You need **Timeout Members** permission or admin.');
 
     if (!args.length) {
       const usageEmbed = new EmbedBuilder()
@@ -35,7 +35,6 @@ module.exports = {
     const targetUser =
       message.mentions.users.first() ||
       (await client.users.fetch(targetArg).catch(() => null));
-
     if (!targetUser) return message.reply('User not found.');
 
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
@@ -48,26 +47,23 @@ module.exports = {
     if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers))
       return message.reply('I need **Timeout Members** permission.');
 
-    if (!member.communicationDisabledUntil) return message.reply('This user is not muted.');
+    if (!member.communicationDisabledUntilTimestamp || member.communicationDisabledUntilTimestamp < Date.now())
+      return message.reply('This user is not muted.');
 
     try {
       await member.timeout(null, `${reason} (unmuted by ${message.author.tag})`);
 
-      // 🔹 IMPORTANT: NO LOGGING FOR UNMUTES
-      console.log(`[Unmute] ${message.author.tag} unmuted ${targetUser.tag} - NOT logging to modstats`);
-
-      // 🔹 Fake pings
-      const fakeUserPing = `<@${targetUser.id}>`;
-      const fakeModPing = `<@${message.author.id}>`;
+      // Logging is intentionally skipped
+      console.log(`[Unmute] ${message.author.tag} unmuted ${targetUser.tag}`);
 
       const embed = new EmbedBuilder()
         .setColor('#22c55e')
         .setTitle('✅ User Unmuted')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
-          { name: 'User', value: fakeUserPing, inline: false },
-          { name: 'Unmuted by', value: fakeModPing, inline: false },
-          { name: 'Reason', value: reason, inline: false },
+          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
+          { name: 'Unmuted by', value: `<@${message.author.id}>`, inline: false },
+          { name: 'Reason', value: reason, inline: false }
         )
         .setTimestamp();
 
