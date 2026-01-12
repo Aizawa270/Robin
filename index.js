@@ -149,6 +149,40 @@ battleDB.prepare(`
 
 client.battleDB = battleDB;
 
+// ===== SPY LOBBIES DB =====
+const spyDB = new Database(path.join(DATA_DIR, 'spy.sqlite'));
+spyDB.pragma('journal_mode = WAL');
+spyDB.pragma('synchronous = NORMAL');
+
+// tables (id autoinc)
+spyDB.prepare(`
+  CREATE TABLE IF NOT EXISTS spy_lobbies (
+    lobby_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL UNIQUE,
+    host_id TEXT NOT NULL,
+    channel_id TEXT,
+    spy_channel_id TEXT,
+    secret_word TEXT,
+    status TEXT NOT NULL DEFAULT 'lobby',
+    round INTEGER DEFAULT 0,
+    created_at INTEGER DEFAULT (strftime('%s','now')*1000)
+  )
+`).run();
+
+spyDB.prepare(`
+  CREATE TABLE IF NOT EXISTS spy_players (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lobby_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    alive INTEGER DEFAULT 1,
+    is_spy INTEGER DEFAULT 0,
+    joined_at INTEGER DEFAULT (strftime('%s','now')*1000),
+    FOREIGN KEY(lobby_id) REFERENCES spy_lobbies(lobby_id) ON DELETE CASCADE
+  )
+`).run();
+
+client.spyDB = spyDB;
+
 // ===== MEMORY MAPS =====
 client.afk = new Map();
 client.snipes = new Map();
