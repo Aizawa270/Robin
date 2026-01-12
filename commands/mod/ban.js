@@ -1,14 +1,15 @@
+// commands/mod/ban.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { logModAction } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'ban',
   aliases: ['B', 'b'],
-  description: 'Ban a user by reply, mention, or ID.',
+  description: 'Ban a user by mention or ID.',
   category: 'mod',
   usage: '$ban <@user|userID> [reason]',
   async execute(client, message, args) {
-    if (!message.guild) return message.reply('Server only.');
+    if (!message.guild) return message.reply('This command can only be used in a server.');
 
     if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
       return message.reply('You need **Ban Members** permission.');
@@ -16,40 +17,30 @@ module.exports = {
 
     const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
 
-    if (!args.length && !message.reference) {
-      return message.reply(
-        `Usage: \`${prefix}ban <@user|userID> [reason]\` or reply + \`${prefix}ban\``
-      );
+    // No args => show usage embed
+    if (!args.length) {
+      const usageEmbed = new EmbedBuilder()
+        .setColor('#f43f5e')
+        .setTitle('Ban Command Usage')
+        .setDescription(`**Usage:** \`${prefix}ban <@user|userID> [reason]\`\n\n**Examples:**\n${prefix}ban @User spamming\n${prefix}ban 123456789012345678 breaking rules`);
+      return message.reply({ embeds: [usageEmbed] });
     }
 
-    // ✅ 1. REPLY TARGET
-    let targetUser = null;
-
-    if (message.reference?.messageId) {
-      const repliedMsg = await message.channel.messages
-        .fetch(message.reference.messageId)
-        .catch(() => null);
-
-      if (repliedMsg) targetUser = repliedMsg.author;
-    }
-
-    // ✅ 2. MENTION
-    if (!targetUser) {
-      targetUser = message.mentions.users.first();
-    }
-
-    // ✅ 3. ID
+    // ✅ Target: mention or ID only
+    let targetUser = message.mentions.users.first();
     if (!targetUser && args[0]) {
       targetUser = await client.users.fetch(args[0]).catch(() => null);
     }
 
     if (!targetUser) {
-      return message.reply('User not found.');
+      const usageEmbed = new EmbedBuilder()
+        .setColor('#f43f5e')
+        .setTitle('Ban Command Usage')
+        .setDescription(`**Usage:** \`${prefix}ban <@user|userID> [reason]\`\n\n**Examples:**\n${prefix}ban @User spamming\n${prefix}ban 123456789012345678 breaking rules`);
+      return message.reply({ embeds: [usageEmbed] });
     }
 
-    const targetMember = await message.guild.members
-      .fetch(targetUser.id)
-      .catch(() => null);
+    const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
 
     const reason = args.slice(1).join(' ') || 'No reason provided';
 
@@ -59,10 +50,7 @@ module.exports = {
     if (targetUser.id === client.user.id)
       return message.reply('I cannot ban myself.');
 
-    if (
-      targetMember &&
-      targetMember.roles.highest.position >= message.member.roles.highest.position
-    ) {
+    if (targetMember && targetMember.roles.highest.position >= message.member.roles.highest.position) {
       return message.reply('You cannot ban someone with equal or higher role.');
     }
 
@@ -70,21 +58,18 @@ module.exports = {
       return message.reply('I cannot ban that user.');
     }
 
-    // ✅ ALREADY BANNED CHECK
-    const existingBan = await message.guild.bans
-      .fetch(targetUser.id)
-      .catch(() => null);
-
+    // ✅ Already banned
+    const existingBan = await message.guild.bans.fetch(targetUser.id).catch(() => null);
     if (existingBan) {
       const alreadyBannedEmbed = new EmbedBuilder()
         .setColor('#f59e0b')
         .setTitle('Already Banned')
         .setDescription(`<@${targetUser.id}> is already banned from this server.`)
         .setTimestamp();
-
       return message.reply({ embeds: [alreadyBannedEmbed] });
     }
 
+    // ✅ Ban action
     try {
       await message.guild.bans.create(targetUser.id, {
         reason: `${reason} (banned by ${message.author.tag})`,
