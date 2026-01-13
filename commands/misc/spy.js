@@ -1,125 +1,174 @@
 // commands/misc/spy.js
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const {
+  PermissionFlagsBits,
+  EmbedBuilder,
+  ChannelType
+} = require('discord.js');
 
 module.exports = {
   name: 'spy',
-  description: 'Spy game commands (create/join/leave/list/start).',
+  description: 'Spy game system',
   category: 'misc',
-  usage: 'spy <create|join|leave|list|start>',
-  aliases: ['spygame'],
+  usage: 'spy <create|join|start|end>',
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    const db = client.spyDB;
-    const sub = args[0]?.toLowerCase();
+    const spyDB = client.spyDB;
+    const sub = args[0];
 
-    if (!sub || !['create','join','leave','list','start'].includes(sub)) {
-      return message.reply('Usage: `spy <create|join|leave|list|start>`');
-    }
-
-    // ===== GET LOBBY =====
-    let lobby = db.prepare('SELECT * FROM spy_lobbies WHERE guild_id = ?').get(message.guild.id);
-
-    // ===== CREATE =====
+    // ===============================
+    // CREATE LOBBY
+    // ===============================
     if (sub === 'create') {
-      if (lobby) return message.reply('A spy lobby already exists in this server.');
+      // check existing lobby
+      const existing = spyDB
+        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
+        .get(message.guild.id);
 
-      const res = db.prepare(`
+      if (existing) {
+        return message.reply('There is already an active spy lobby.');
+      }
+
+      // create lobby row
+      const result = spyDB.prepare(`
         INSERT INTO spy_lobbies (guild_id, host_id, status)
         VALUES (?, ?, 'lobby')
       `).run(message.guild.id, message.author.id);
 
-      const lobbyId = res.lastInsertRowid;
+      const lobbyId = result.lastInsertRowid;
 
-      // Add host to players table
-      db.prepare(`
+      // create PRIVATE CHANNEL
+      const channel = await message.guild.channels.create({
+        name: `spy-lobby-${lobbyId}`,
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+          {
+            id: message.guild.roles.everyone.id,
+            deny: ['ViewChannel'],
+          },
+          {
+            id: message.author.id,
+            allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'],
+          },
+        ],
+      });
+
+      // save channel id
+      spyDB.prepare(`
+        UPDATE spy_lobbies
+        SET channel_id = ?
+        WHERE lobby_id = ?
+      `).run(channel.id, lobbyId);
+
+      // add host as player
+      spyDB.prepare(`
         INSERT INTO spy_players (lobby_id, user_id)
         VALUES (?, ?)
       `).run(lobbyId, message.author.id);
 
-      return message.reply('✅ Spy lobby created! You are the host.');
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ec4899')
+            .setTitle('🕵️ Spy Lobby Created')
+            .setDescription(
+              `Lobby ID: **${lobbyId}**\n` +
+              `Private channel created: ${channel}\n\n` +
+              `Others can join with:\n\`spy join\``
+            ),
+        ],
+      });
     }
 
-    // ===== JOIN =====
+    // ===============================
+    // JOIN LOBBY
+    // ===============================
     if (sub === 'join') {
-      if (!lobby) return message.reply('No lobby exists. Create one with `spy create`.');
+      const lobby = spyDB
+        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
+        .get(message.guild.id);
 
-      const exists = db.prepare('SELECT * FROM spy_players WHERE lobby_id = ? AND user_id = ?')
-                       .get(lobby.lobby_id, message.author.id);
-      if (exists) return message.reply('You are already in the lobby.');
-
-      db.prepare('INSERT INTO spy_players (lobby_id, user_id) VALUES (?, ?)').run(lobby.lobby_id, message.author.id);
-      return message.reply('✅ You joined the spy lobby!');
-    }
-
-    // ===== LEAVE =====
-    if (sub === 'leave') {
-      if (!lobby) return message.reply('No lobby exists.');
-      const player = db.prepare('SELECT * FROM spy_players WHERE lobby_id = ? AND user_id = ?')
-                       .get(lobby.lobby_id, message.author.id);
-      if (!player) return message.reply('You are not in the lobby.');
-
-      db.prepare('DELETE FROM spy_players WHERE lobby_id = ? AND user_id = ?')
-        .run(lobby.lobby_id, message.author.id);
-
-      // if host leaves, transfer or delete lobby
-      if (lobby.host_id === message.author.id) {
-        const nextPlayer = db.prepare('SELECT * FROM spy_players WHERE lobby_id = ? LIMIT 1').get(lobby.lobby_id);
-        if (nextPlayer) {
-          db.prepare('UPDATE spy_lobbies SET host_id = ? WHERE lobby_id = ?')
-            .run(nextPlayer.user_id, lobby.lobby_id);
-          return message.reply(`Host left. New host is <@${nextPlayer.user_id}>`);
-        } else {
-          db.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobby.lobby_id);
-          return message.reply('Lobby deleted as all players left.');
-        }
+      if (!lobby) {
+        return message.reply('No active spy lobby.');
       }
 
-      return message.reply('✅ You left the lobby.');
+      const already = spyDB.prepare(`
+        SELECT * FROM spy_players
+        WHERE lobby_id = ? AND user_id = ?
+      `).get(lobby.lobby_id, message.author.id);
+
+      if (already) {
+        return message.reply('You are already in the lobby.');
+      }
+
+      // add player
+      spyDB.prepare(`
+        INSERT INTO spy_players (lobby_id, user_id)
+        VALUES (?, ?)
+      `).run(lobby.lobby_id, message.author.id);
+
+      // give channel access
+      const channel = message.guild.channels.cache.get(lobby.channel_id);
+      if (channel) {
+        await channel.permissionOverwrites.create(message.author.id, {
+          ViewChannel: true,
+          SendMessages: true,
+          ReadMessageHistory: true,
+        });
+      }
+
+      return message.reply('You joined the spy lobby.');
     }
 
-    // ===== LIST =====
-    if (sub === 'list') {
-      if (!lobby) return message.reply('No lobby exists.');
-      const players = db.prepare('SELECT user_id FROM spy_players WHERE lobby_id = ?')
-                        .all(lobby.lobby_id).map(r => `<@${r.user_id}>`);
-      const embed = new EmbedBuilder()
-        .setTitle('Spy Lobby Players')
-        .setDescription(players.join('\n') || 'No players?')
-        .setFooter({ text: `Host: <@${lobby.host_id}>` })
-        .setColor('#ec4899');
-      return message.reply({ embeds: [embed] });
-    }
-
-    // ===== START =====
+    // ===============================
+    // START GAME (HOST ONLY)
+    // ===============================
     if (sub === 'start') {
+      const lobby = spyDB
+        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
+        .get(message.guild.id);
+
       if (!lobby) return message.reply('No lobby exists.');
-      if (lobby.host_id !== message.author.id) return message.reply('Only the host can start the game.');
+      if (lobby.host_id !== message.author.id) {
+        return message.reply('Only the host can start the game.');
+      }
 
-      const players = db.prepare('SELECT user_id FROM spy_players WHERE lobby_id = ?')
-                        .all(lobby.lobby_id)
-                        .map(r => r.user_id);
+      spyDB.prepare(`
+        UPDATE spy_lobbies
+        SET status = 'playing', round = 1
+        WHERE lobby_id = ?
+      `).run(lobby.lobby_id);
 
-      if (players.length < 3) return message.reply('Need at least 3 players to start.');
-
-      // pick random spy
-      const spyIndex = Math.floor(Math.random() * players.length);
-      const spyId = players[spyIndex];
-
-      // set spy in db
-      db.prepare('UPDATE spy_players SET is_spy = 1 WHERE lobby_id = ? AND user_id = ?')
-        .run(lobby.lobby_id, spyId);
-
-      // update lobby status
-      db.prepare('UPDATE spy_lobbies SET status = ? WHERE lobby_id = ?').run('started', lobby.lobby_id);
-
-      // DM spy
-      try {
-        const user = await client.users.fetch(spyId);
-        await user.send(`You are the SPY! Shhh 🤫`);
-      } catch {}
-
-      return message.reply('🚀 Spy game started! Spy has been chosen.');
+      return message.reply('🟢 Spy game started.');
     }
+
+    // ===============================
+    // END GAME (HOST ONLY)
+    // ===============================
+    if (sub === 'end') {
+      const lobby = spyDB
+        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
+        .get(message.guild.id);
+
+      if (!lobby) return message.reply('No lobby exists.');
+      if (lobby.host_id !== message.author.id) {
+        return message.reply('Only the host can end the game.');
+      }
+
+      // delete channel
+      const channel = message.guild.channels.cache.get(lobby.channel_id);
+      if (channel) await channel.delete().catch(() => {});
+
+      // clean DB
+      spyDB.prepare(`DELETE FROM spy_players WHERE lobby_id = ?`).run(lobby.lobby_id);
+      spyDB.prepare(`DELETE FROM spy_lobbies WHERE lobby_id = ?`).run(lobby.lobby_id);
+
+      return message.reply('🛑 Spy game ended and lobby deleted.');
+    }
+
+    // ===============================
+    // FALLBACK
+    // ===============================
+    return message.reply('Usage: `spy create | join | start | end`');
   },
 };
