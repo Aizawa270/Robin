@@ -11,39 +11,42 @@ module.exports = {
   async execute(client, message) {
     if (!message.guild) return;
 
-    // hard gate: mods only
-    const isMod =
+    // hard gate: staff only
+    const isStaff =
       message.member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
       message.member.permissions.has(PermissionFlagsBits.Administrator);
 
-    if (!isMod) {
-      return message.reply('You are not staff. Nice try though.');
+    if (!isStaff) {
+      return message.reply('You are not staff. Relax.');
     }
 
-    // filter staff commands
+    // collect staff commands
     const staffCommands = Array.from(client.commands.values()).filter(cmd =>
       !cmd.hidden &&
       (
         cmd.category?.toLowerCase() === 'mod' ||
         cmd.category?.toLowerCase() === 'automod' ||
-        cmd.modOnly ||
-        cmd.staffOnly
+        cmd.modOnly === true ||
+        cmd.staffOnly === true
       )
     );
 
     if (!staffCommands.length) {
-      return message.reply('No staff commands found. That’s concerning.');
+      return message.reply('No staff commands found. That’s bad.');
     }
 
-    // call universal helper
+    // ✅ correct universalHelper call
     return universalHelper({
       client,
       message,
       commands: staffCommands,
       title: 'Staff Commands',
+      description: 'Moderator & Automod commands',
       footer: 'Staff Only',
-      color: '#ec4899', // 💗 pink, same as help.js
+      color: '#ec4899', // 💗 pink (same as help.js)
       thumbnail: client.user.displayAvatarURL({ size: 1024 }),
+      perPage: 10,          // 🔥 REQUIRED
+      staffOnly: true,      // 🔥 REQUIRED
     });
   },
 };
