@@ -9,6 +9,15 @@ const {
 // ✅ SAME helper as help.js
 const { createEmbed } = require('../../handlers/universalHelper');
 
+// Helper to chunk arrays into smaller sizes
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 module.exports = {
   name: 'helpstaff',
   description: 'Shows all mod commands (for mods only).',
@@ -58,23 +67,28 @@ module.exports = {
 
       for (const [categoryName, cmds] of sortedCategoryEntries) {
         const sortedCmds = cmds.sort((a, b) => a.name.localeCompare(b.name));
-
-        const embed = createEmbed(client, message, {
-          title: `${categoryName.toUpperCase()} Commands`,
-          description: `Prefix: \`${prefix}\``,
-          thumbnail: client.user.displayAvatarURL({ size: 1024 }),
-          footer: 'Staff Only'
-        });
-
-        for (const cmd of sortedCmds) {
-          embed.addFields({
-            name: `\`${prefix}${cmd.name}\``,
-            value: cmd.description || 'No description',
-            inline: false
+        
+        // Split into chunks of 25 (Discord's field limit)
+        const chunks = chunkArray(sortedCmds, 25);
+        
+        for (let i = 0; i < chunks.length; i++) {
+          const embed = createEmbed(client, message, {
+            title: `${categoryName.toUpperCase()} Commands${chunks.length > 1 ? ` (${i + 1}/${chunks.length})` : ''}`,
+            description: `Prefix: \`${prefix}\``,
+            thumbnail: client.user.displayAvatarURL({ size: 1024 }),
+            footer: 'Staff Only'
           });
-        }
 
-        pages.push(embed);
+          for (const cmd of chunks[i]) {
+            embed.addFields({
+              name: `\`${prefix}${cmd.name}\``,
+              value: cmd.description || 'No description',
+              inline: false
+            });
+          }
+
+          pages.push(embed);
+        }
       }
 
       // send first page (no buttons needed to prove it works)
