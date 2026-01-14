@@ -61,8 +61,8 @@ module.exports = {
           `• \`spy start\` - Start game (min 5 players)\n\n` +
           `**How it works:**\n` +
           `• 3 rounds of turn-based speaking\n` +
-          `• Each player gets 10 seconds per turn\n` +
-          `• Discussion time after each round\n` +
+          `• Each player gets 15 seconds per turn\n` +
+          `• Discussion time after each round (2 mins)\n` +
           `• Vote to eliminate the spy!`
         )
         .setFooter({ text: `Lobby ID: ${lobbyId} • Need 4 more players` });
@@ -334,7 +334,9 @@ module.exports = {
         }
       }
 
-      // Announce in spy channel
+      // Announce in spy channel WITH PINGS
+      const playerPings = players.map(p => `<@${p.user_id}>`).join(' ');
+      
       const announceEmbed = new EmbedBuilder()
         .setColor('#00ff00')
         .setTitle('🎮 SPY GAME STARTED!')
@@ -346,15 +348,15 @@ module.exports = {
           `**📋 Game Rules:**\n` +
           `• Check your DMs for your role\n` +
           `• 3 rounds of turn-based speaking\n` +
-          `• Each player gets 10 seconds per turn\n` +
-          `• Discussion time after each round\n` +
+          `• Each player gets 15 seconds per turn\n` +
+          `• 2 minutes discussion after each round\n` +
           `• Vote to eliminate suspects\n\n` +
           `🚨 **If anyone says the secret word, spies win instantly!**`
         )
         .setFooter({ text: 'Game starting in 5 seconds...' })
         .setTimestamp();
 
-      await channel.send({ embeds: [announceEmbed] });
+      await channel.send({ content: playerPings, embeds: [announceEmbed] });
 
       // Wait 5 seconds then start game loop
       await sleep(5000);
@@ -397,10 +399,11 @@ module.exports = {
         const spyChannel = message.guild.channels.cache.get(lobby.spy_channel_id);
         if (spyChannel) {
           const closeEmbed = new EmbedBuilder()
-            .setColor('#ff0000')
+            .setColor('#ff6600')
             .setTitle('🛑 Game Ended by Host')
-            .setDescription('This channel will be deleted in 5 seconds...');
-          
+            .setDescription('The game has been manually ended by the host.\n\nThis channel will be deleted in 5 seconds...')
+            .setTimestamp();
+
           await spyChannel.send({ embeds: [closeEmbed] }).catch(() => {});
           await sleep(5000);
           await spyChannel.delete().catch(() => {});
@@ -449,18 +452,18 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
 
   // Message listener for word detection
   const messageCollector = channel.createMessageCollector();
-  
+
   messageCollector.on('collect', async (msg) => {
     if (msg.author.bot) return;
-    
+
     // Check if secret word was mentioned
     const content = msg.content.toLowerCase();
     const word = secretWord.toLowerCase();
-    
+
     if (content.includes(word)) {
       messageCollector.stop();
       timers.forEach(t => clearTimeout(t));
-      
+
       const embed = new EmbedBuilder()
         .setColor('#ff0000')
         .setTitle('🚨 SECRET WORD MENTIONED!')
@@ -470,15 +473,16 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
           `Channel closing in 10 seconds...`
         )
         .setTimestamp();
-      
+
       await channel.send({ embeds: [embed] });
-      
+
       setTimeout(async () => {
         await channel.delete().catch(() => {});
         spyDB.prepare(`DELETE FROM spy_players WHERE lobby_id = ?`).run(lobbyId);
         spyDB.prepare(`DELETE FROM spy_lobbies WHERE lobby_id = ?`).run(lobbyId);
+        activeGames.delete(lobbyId);
       }, 10000);
-      
+
       return;
     }
   });
@@ -498,7 +502,7 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
       .setTitle(`🎯 ROUND ${currentRound}/3`)
       .setDescription(
         `**Turn-based speaking begins!**\n\n` +
-        `Each player gets **10 seconds** to describe the word.\n` +
+        `Each player gets **15 seconds** to describe the word.\n` +
         `🔒 Chat is locked except for the current player.`
       )
       .setFooter({ text: 'Get ready!' });
@@ -511,7 +515,14 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
       const user = await client.users.fetch(player.user_id).catch(() => null);
       if (!user) continue;
 
-      // Lock everyone, unlock current player
+      // Lock EVERYONE first
+      for (const p of alivePlayers) {
+        await channel.permissionOverwrites.edit(p.user_id, {
+          SendMessages: false,
+        });
+      }
+
+      // Then unlock ONLY current player
       await channel.permissionOverwrites.edit(player.user_id, {
         SendMessages: true,
       });
@@ -519,23 +530,22 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
       const turnEmbed = new EmbedBuilder()
         .setColor('#ffaa00')
         .setTitle('🎤 Your Turn!')
-        .setDescription(`${user}, you have **10 seconds** to describe!`)
+        .setDescription(`<@${player.user_id}>, you have **15 seconds** to describe!`)
         .setFooter({ text: 'Say one thing about the word' });
 
       await channel.send({ embeds: [turnEmbed] });
 
-      // 10 second wait
-      await sleep(10000);
+      // 15 second wait
+      await sleep(15000);
 
-      // Lock player again
+      // Lock current player again
       await channel.permissionOverwrites.edit(player.user_id, {
         SendMessages: false,
       });
     }
 
-    // Discussion phase
-    const discussTime = currentRound === 3 ? 300000 : 120000; // 5min or 2min
-    const discussMin = currentRound === 3 ? 5 : 2;
+    // Discussion phase - 2 minutes for ALL rounds
+    const discussTime = 120000; // 2 minutes
 
     // Unlock chat for everyone
     for (const player of alivePlayers) {
@@ -549,10 +559,10 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
       .setTitle('💬 DISCUSSION TIME')
       .setDescription(
         `Round ${currentRound} complete!\n\n` +
-        `🔓 Chat unlocked for **${discussMin} minutes**.\n` +
+        `🔓 Chat unlocked for **2 minutes**.\n` +
         `Discuss who you think the spy is!`
       )
-      .setFooter({ text: `Discussion ends in ${discussMin} minute(s)` });
+      .setFooter({ text: 'Discussion ends in 2 minutes' });
 
     await channel.send({ embeds: [discussEmbed] });
     await sleep(discussTime);
@@ -576,7 +586,7 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
 // ===============================
 async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, totalSpies, messageCollector) {
   const spyDB = client.spyDB;
-  
+
   const voteEmbed = new EmbedBuilder()
     .setColor('#ff6600')
     .setTitle('🗳️ VOTING TIME')
@@ -640,16 +650,31 @@ async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, 
       .setDescription(
         `<@${eliminated.user_id}> was **THE SPY!**\n\n` +
         `🎉 Congratulations to all regular players!\n\n` +
-        `**The secret word was:** \`${secretWord}\`\n\n` +
-        `Channel closing in 15 seconds...`
+        `**The secret word was:** \`${secretWord}\``
       )
       .setTimestamp();
 
     await channel.send({ embeds: [resultEmbed] });
+    
+    // Game successfully ended embed
+    const endEmbed = new EmbedBuilder()
+      .setColor('#5865F2')
+      .setTitle('🎮 Game Successfully Ended')
+      .setDescription(
+        `Thanks for playing Spy!\n\n` +
+        `This channel will be deleted in 15 seconds...`
+      )
+      .setFooter({ text: 'GG WP!' })
+      .setTimestamp();
+
+    await channel.send({ embeds: [endEmbed] });
     messageCollector.stop();
 
     setTimeout(async () => {
       await channel.delete().catch(() => {});
+      spyDB.prepare(`DELETE FROM spy_players WHERE lobby_id = ?`).run(lobbyId);
+      spyDB.prepare(`DELETE FROM spy_lobbies WHERE lobby_id = ?`).run(lobbyId);
+      activeGames.delete(lobbyId);
     }, 15000);
 
   } else if (isSpy && totalSpies === 2 && remainingSpies === 1) {
@@ -677,23 +702,38 @@ async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, 
   } else {
     // Non-spy eliminated - spies win
     const spyList = alivePlayers.filter(p => p.is_spy === 1).map(p => `<@${p.user_id}>`).join(', ');
-    
+
     resultEmbed = new EmbedBuilder()
       .setColor('#ff0000')
-      .setTitle('🕵️ SPIES WIN!')
+      .setTitle('SPIES WIN!')
       .setDescription(
         `<@${eliminated.user_id}> was **NOT A SPY!**\n\n` +
         `The ${totalSpies === 1 ? 'spy was' : 'spies were'}: ${spyList}\n\n` +
-        `**The secret word was:** \`${secretWord}\`\n\n` +
-        `Channel closing in 15 seconds...`
+        `**The secret word was:** \`${secretWord}\``
       )
       .setTimestamp();
 
     await channel.send({ embeds: [resultEmbed] });
+
+    // Game successfully ended embed
+    const endEmbed = new EmbedBuilder()
+      .setColor('#5865F2')
+      .setTitle('Game Successfully Ended')
+      .setDescription(
+        `Thanks for playing Spy!\n\n` +
+        `This channel will be deleted in 15 seconds...`
+      )
+      .setFooter({ text: 'GG WP!' })
+      .setTimestamp();
+
+    await channel.send({ embeds: [endEmbed] });
     messageCollector.stop();
 
     setTimeout(async () => {
       await channel.delete().catch(() => {});
+      spyDB.prepare(`DELETE FROM spy_players WHERE lobby_id = ?`).run(lobbyId);
+      spyDB.prepare(`DELETE FROM spy_lobbies WHERE lobby_id = ?`).run(lobbyId);
+      activeGames.delete(lobbyId);
     }, 15000);
   }
 }
