@@ -131,7 +131,6 @@ const QUESTIONS = {
 function getRandomQuestions(category, count) {
   const pool = QUESTIONS[category] || [];
   if (pool.length === 0) {
-    // Fallback to all questions if category not found
     const allQuestions = Object.values(QUESTIONS).flat();
     return shuffleArray(allQuestions).slice(0, count);
   }
@@ -148,6 +147,10 @@ function shuffleArray(array) {
   return arr;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 module.exports = {
   name: 'trivia',
   description: 'Start a trivia game',
@@ -161,31 +164,66 @@ module.exports = {
 
     // Check if game already running
     if (activeGames.has(channelId)) {
-      return message.reply('A trivia game is already running in this channel.');
+      const embed = new EmbedBuilder()
+        .setColor('#ff0000')
+        .setDescription('A trivia game is already running in this channel!');
+      return message.reply({ embeds: [embed] });
+    }
+
+    // Show help if no args
+    if (args.length === 0) {
+      const embed = new EmbedBuilder()
+        .setColor('#3b82f6')
+        .setTitle('Trivia Game')
+        .setDescription(
+          'Test your knowledge with trivia questions!\n\n' +
+          '**Usage:**\n' +
+          '`trivia <category> [rounds]`\n\n' +
+          '**Categories:**\n' +
+          '• `general` - General knowledge\n' +
+          '• `science` - Science & nature\n' +
+          '• `history` - Historical events\n' +
+          '• `geography` - World geography\n' +
+          '• `entertainment` - Movies, TV & music\n' +
+          '• `sports` - Sports trivia\n' +
+          '• `technology` - Tech & computers\n' +
+          '• `random` - Mix of all categories\n\n' +
+          '**Examples:**\n' +
+          '`trivia science`\n' +
+          '`trivia history 15`\n' +
+          '`trivia random 20`\n\n' +
+          '**Scoring:**\n' +
+          '🥇 1st correct answer: **3 points**\n' +
+          '🥈 2nd correct answer: **2 points**\n' +
+          '🥉 3rd correct answer: **1 point**'
+        )
+        .setFooter({ text: 'Default: 5 rounds • Max: 20 rounds' });
+      return message.reply({ embeds: [embed] });
     }
 
     // Parse arguments
     let category = 'random';
     let rounds = 5;
 
-    if (args.length > 0) {
-      const firstArg = args[0].toLowerCase();
-      const validCategories = ['general', 'science', 'history', 'geography', 'entertainment', 'sports', 'technology', 'random'];
-      
-      if (validCategories.includes(firstArg)) {
-        category = firstArg;
-        if (args[1]) {
-          const parsedRounds = parseInt(args[1]);
-          if (!isNaN(parsedRounds)) {
-            rounds = Math.min(Math.max(parsedRounds, 1), 20);
-          }
-        }
-      } else {
-        const parsedRounds = parseInt(firstArg);
+    const firstArg = args[0].toLowerCase();
+    const validCategories = ['general', 'science', 'history', 'geography', 'entertainment', 'sports', 'technology', 'random'];
+
+    if (validCategories.includes(firstArg)) {
+      category = firstArg;
+      if (args[1]) {
+        const parsedRounds = parseInt(args[1]);
         if (!isNaN(parsedRounds)) {
           rounds = Math.min(Math.max(parsedRounds, 1), 20);
         }
       }
+    } else {
+      const embed = new EmbedBuilder()
+        .setColor('#ff0000')
+        .setDescription(
+          `Invalid category! Choose from:\n` +
+          `\`general\`, \`science\`, \`history\`, \`geography\`, \`entertainment\`, \`sports\`, \`technology\`, \`random\``
+        );
+      return message.reply({ embeds: [embed] });
     }
 
     // Get questions
@@ -201,203 +239,158 @@ module.exports = {
       return message.reply('No questions available for this category.');
     }
 
-    // Adjust rounds to available questions
     rounds = Math.min(rounds, questions.length);
 
     // Send start embed
     const startEmbed = new EmbedBuilder()
-      .setColor('#3b82f6')
-      .setTitle('Trivia Game Starting')
-      .addFields(
-        { name: 'Category', value: category.charAt(0).toUpperCase() + category.slice(1), inline: true },
-        { name: 'Rounds', value: `${rounds}`, inline: true },
-        { name: 'Time per Question', value: '15 seconds', inline: true }
+      .setColor('#00ff00')
+      .setTitle('A new trivia game will start soon!')
+      .setDescription(
+        `Will you be able to answer all those questions?\n\n` +
+        `The game will last **${rounds}** round${rounds === 1 ? '' : 's'}.`
       )
-      .setDescription('Type **join** to participate in the next 10 seconds.')
-      .setFooter({ text: 'Get ready' })
-      .setTimestamp();
+      .setFooter({ text: 'Game starts in 3 seconds...' });
 
-    const startMsg = await message.channel.send({ embeds: [startEmbed] });
+    await message.reply({ embeds: [startEmbed] });
+
+    // Mark game as active
+    activeGames.set(channelId, true);
+
+    // Wait 3 seconds
+    await sleep(3000);
 
     // Game state
-    const gameState = {
-      channelId,
-      players: new Set(),
-      scores: new Map(),
-      questions,
-      currentRound: 0,
-      totalRounds: rounds,
-      category,
-      answeredThisRound: new Set(),
-    };
+    const scores = new Map();
+    let currentRound = 0;
 
-    activeGames.set(channelId, gameState);
+    // Start game loop
+    for (const question of questions) {
+      currentRound++;
 
-    // Collector for join phase
-    const joinFilter = m => m.content.toLowerCase() === 'join' && !m.author.bot;
-    const joinCollector = message.channel.createMessageCollector({ filter: joinFilter, time: 10000 });
+      const questionEmbed = new EmbedBuilder()
+        .setColor('#3b82f6')
+        .setTitle(`Question ${currentRound} of ${rounds}`)
+        .setDescription(question.q)
+        .addFields(
+          { name: '🅰️ A', value: question.options[0], inline: true },
+          { name: '🅱️ B', value: question.options[1], inline: true },
+          { name: '🆎 C', value: question.options[2], inline: true },
+          { name: '🅾️ D', value: question.options[3], inline: true }
+        )
+        .setFooter({ text: 'You have 15 seconds to answer • Type A, B, C, or D' });
 
-    joinCollector.on('collect', m => {
-      if (!gameState.players.has(m.author.id)) {
-        gameState.players.add(m.author.id);
-        gameState.scores.set(m.author.id, {
-          points: 0,
-          correct: 0,
-          total: 0,
-          username: m.author.username
+      await message.channel.send({ embeds: [questionEmbed] });
+
+      // Collect answers
+      const winners = [];
+      const collectedUsers = new Set();
+
+      const collector = message.channel.createMessageCollector({
+        filter: m => {
+          const content = m.content.toUpperCase();
+          return ['A', 'B', 'C', 'D'].includes(content) && 
+                 !m.author.bot && 
+                 !collectedUsers.has(m.author.id);
+        },
+        time: 15000
+      });
+
+      await new Promise((resolve) => {
+        collector.on('collect', async (m) => {
+          const answer = m.content.toUpperCase();
+          collectedUsers.add(m.author.id);
+
+          if (answer === question.a) {
+            winners.push({ user: m.author, message: m });
+
+            // Award points
+            if (winners.length === 1) {
+              scores.set(m.author.id, (scores.get(m.author.id) || 0) + 3);
+            } else if (winners.length === 2) {
+              scores.set(m.author.id, (scores.get(m.author.id) || 0) + 2);
+            } else if (winners.length === 3) {
+              scores.set(m.author.id, (scores.get(m.author.id) || 0) + 1);
+              collector.stop();
+            }
+          }
         });
-        m.react('✅').catch(() => {});
+
+        collector.on('end', () => {
+          resolve();
+        });
+      });
+
+      // Show result
+      let resultEmbed;
+
+      if (winners.length > 0) {
+        const winnersText = winners.map((w, i) => {
+          const medals = ['🥇', '🥈', '🥉'];
+          const points = [3, 2, 1];
+          return `${medals[i]} ${w.user} - **${points[i]} point${points[i] === 1 ? '' : 's'}**`;
+        }).join('\n');
+
+        resultEmbed = new EmbedBuilder()
+          .setColor('#00ff00')
+          .setTitle(`${winners[0].user.username} got it right!`)
+          .setDescription(
+            `The correct answer is **${question.a}: ${question.options[question.a.charCodeAt(0) - 65]}**\n\n` +
+            `**Points awarded:**\n${winnersText}\n\n` +
+            (currentRound < rounds ? `The game will move on in 5 seconds...` : 'This was the last round.')
+          )
+          .setFooter({ text: `Round ${currentRound}/${rounds}` });
+      } else {
+        resultEmbed = new EmbedBuilder()
+          .setColor('#ff0000')
+          .setTitle('No one got it right!')
+          .setDescription(
+            `The correct answer is **${question.a}: ${question.options[question.a.charCodeAt(0) - 65]}**\n\n` +
+            (currentRound < rounds ? `The game will move on in 5 seconds...` : 'This was the last round.')
+          )
+          .setFooter({ text: `Round ${currentRound}/${rounds}` });
       }
-    });
 
-    // Start game after 10 seconds
-    setTimeout(async () => {
-      joinCollector.stop();
+      await message.channel.send({ embeds: [resultEmbed] });
 
-      if (gameState.players.size === 0) {
-        activeGames.delete(channelId);
-        return message.channel.send('No one joined the trivia game. Game cancelled.');
+      // Wait before next round
+      if (currentRound < rounds) {
+        await sleep(5000);
       }
+    }
 
-      await startRound(client, message.channel, gameState);
-    }, 10000);
+    // Game finished - show leaderboard
+    await sleep(2000);
+
+    const sortedScores = Array.from(scores.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    let leaderboardText = '';
+
+    if (sortedScores.length === 0) {
+      leaderboardText = 'No one scored any points!';
+    } else {
+      const medals = ['🥇', '🥈', '🥉'];
+      sortedScores.forEach(([userId, points], index) => {
+        const place = index + 1;
+        const medal = medals[index] || `**${place}.**`;
+        leaderboardText += `${medal} <@${userId}> - ${points} point${points === 1 ? '' : 's'}\n`;
+      });
+    }
+
+    const finishEmbed = new EmbedBuilder()
+      .setColor('#00ff00')
+      .setTitle('FINISHED')
+      .setDescription(
+        `The trivia game has ended!\n\n` +
+        `**These are the winners from this game:**\n\n` +
+        leaderboardText
+      )
+      .setFooter({ text: `${rounds} rounds completed` });
+
+    await message.channel.send({ embeds: [finishEmbed] });
+
+    // Clean up
+    activeGames.delete(channelId);
   },
 };
-
-// Start a round
-async function startRound(client, channel, gameState) {
-  gameState.currentRound++;
-  gameState.answeredThisRound.clear();
-
-  const question = gameState.questions[gameState.currentRound - 1];
-
-  const questionEmbed = new EmbedBuilder()
-    .setColor('#3b82f6')
-    .setTitle(`Round ${gameState.currentRound} / ${gameState.totalRounds}`)
-    .setDescription(question.q)
-    .addFields(
-      { name: 'A', value: question.options[0], inline: true },
-      { name: 'B', value: question.options[1], inline: true },
-      { name: 'C', value: question.options[2], inline: true },
-      { name: 'D', value: question.options[3], inline: true }
-    )
-    .setFooter({ text: 'You have 15 seconds to answer' })
-    .setTimestamp();
-
-  await channel.send({ embeds: [questionEmbed] });
-
-  // Answer collector
-  const answerFilter = m => {
-    const content = m.content.toUpperCase();
-    return ['A', 'B', 'C', 'D'].includes(content) && 
-           gameState.players.has(m.author.id) && 
-           !gameState.answeredThisRound.has(m.author.id) &&
-           !m.author.bot;
-  };
-
-  const answerCollector = channel.createMessageCollector({ filter: answerFilter, time: 15000 });
-
-  answerCollector.on('collect', m => {
-    const userId = m.author.id;
-    const answer = m.content.toUpperCase();
-
-    gameState.answeredThisRound.add(userId);
-
-    const playerStats = gameState.scores.get(userId);
-    playerStats.total++;
-
-    if (answer === question.a) {
-      playerStats.points++;
-      playerStats.correct++;
-      m.react('✅').catch(() => {});
-    } else {
-      m.react('❌').catch(() => {});
-    }
-
-    gameState.scores.set(userId, playerStats);
-  });
-
-  // After 15 seconds, show results
-  setTimeout(async () => {
-    answerCollector.stop();
-
-    const correctPlayers = [];
-    for (const [userId, stats] of gameState.scores.entries()) {
-      if (gameState.answeredThisRound.has(userId)) {
-        const lastCorrect = stats.correct;
-        const currentCorrect = gameState.scores.get(userId).correct;
-        if (currentCorrect > lastCorrect || (gameState.currentRound === 1 && currentCorrect > 0)) {
-          correctPlayers.push(`<@${userId}>`);
-        }
-      }
-    }
-
-    // Calculate who answered correctly this round
-    const correctThisRound = [];
-    for (const userId of gameState.answeredThisRound) {
-      const stats = gameState.scores.get(userId);
-      // Check if they gained a point this round
-      if (stats.correct > 0 || stats.points > 0) {
-        // Simple check: if they answered and have points, they were correct
-        correctThisRound.push(`<@${userId}>`);
-      }
-    }
-
-    const resultEmbed = new EmbedBuilder()
-      .setColor('#22c55e')
-      .setTitle('Correct Answer')
-      .addFields(
-        { name: 'Answer', value: `${question.a}: ${question.options[question.a.charCodeAt(0) - 65]}`, inline: false },
-        { name: 'Correct Players', value: correctThisRound.length > 0 ? correctThisRound.join(', ') : 'No one answered correctly', inline: false }
-      )
-      .setFooter({ text: gameState.currentRound < gameState.totalRounds ? 'Next round starting soon' : 'Game ending' })
-      .setTimestamp();
-
-    await channel.send({ embeds: [resultEmbed] });
-
-    // Continue or end game
-    if (gameState.currentRound < gameState.totalRounds) {
-      setTimeout(() => startRound(client, channel, gameState), 3000);
-    } else {
-      setTimeout(() => endGame(channel, gameState), 2000);
-    }
-  }, 15000);
-}
-
-// End game and show results
-async function endGame(channel, gameState) {
-  // Sort players by score
-  const sortedPlayers = Array.from(gameState.scores.entries())
-    .sort((a, b) => b[1].points - a[1].points);
-
-  let resultsText = '';
-  
-  const topThree = sortedPlayers.slice(0, 3);
-  const medals = ['1st Place', '2nd Place', '3rd Place'];
-
-  for (let i = 0; i < topThree.length; i++) {
-    const [userId, stats] = topThree[i];
-    const accuracy = stats.total > 0 ? ((stats.correct / stats.total) * 100).toFixed(1) : '0.0';
-    resultsText += `**${medals[i]}:** <@${userId}>\nPoints: ${stats.points} | Accuracy: ${accuracy}%\n\n`;
-  }
-
-  if (resultsText === '') {
-    resultsText = 'No players scored any points.';
-  }
-
-  const finalEmbed = new EmbedBuilder()
-    .setColor('#3b82f6')
-    .setTitle('Trivia Results')
-    .setDescription(resultsText)
-    .addFields(
-      { name: 'Total Questions', value: `${gameState.totalRounds}`, inline: true },
-      { name: 'Total Players', value: `${gameState.players.size}`, inline: true }
-    )
-    .setFooter({ text: 'Thanks for playing' })
-    .setTimestamp();
-
-  await channel.send({ embeds: [finalEmbed] });
-
-  // Clean up
-  activeGames.delete(gameState.channelId);
-}
