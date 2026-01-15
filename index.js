@@ -286,18 +286,18 @@ client.on('messageCreate', async (message) => {
       astrix: [
         { text: 'suck my titties master Astrix', weight: 3 },
         { text: 'Master Astrix eat my pussy please', weight: 3 },
-        { text: 'Master Astrix.... dont act like you didn't miss me', weight: 4 },
+        { text: 'Master Astrix.... dont act like you did not miss me', weight: 4 },
         { text: 'Careful master Astrix, the way you show up has me melting', weight: 4 },
         { text: 'master Astrix put it in me already..', weight: 2 },
         { text: 'master Astrix can I suck it?', weight: 3 },
-        { text: 'master Astrix everytime I see you I can't think straight..', weight: 4 },
+        { text: 'master Astrix everytime I see you I cannot think straight..', weight: 4 },
       ],
       jeo: [
         { text: 'what are we going for, handy or blowy', weight: 4 },
         { text: 'Careful, jeo... keep calling me and I might start blushing', weight: 4 },
-        { text: 'Hello daddy whenever you say my name i can feel my tits bouncing... you've got that charm again, jeo... It's dangerous you know', weight: 1 },
+        { text: 'Hello daddy whenever you say my name i can feel my tits bouncing... you have got that charm again, jeo... It is dangerous you know', weight: 1 },
         { text: 'Daddy jeo im bent over for you..', weight: 3 },
-        { text: 'jeo.. you're turning me on', weight: 4 },
+        { text: 'jeo.. you are turning me on', weight: 4 },
       ],
     };
 
