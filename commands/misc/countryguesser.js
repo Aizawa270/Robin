@@ -221,7 +221,7 @@ module.exports = {
   name: 'countryguesser',
   description: 'Guess countries by their flags',
   category: 'misc',
-  usage: 'countryguesser <continent> [rounds:number]',
+  usage: 'countryguesser <continent> [rounds]',
   aliases: ['cg', 'flaggame', 'guessflag'],
   async execute(client, message, args) {
     if (!message.guild) return;
@@ -242,7 +242,7 @@ module.exports = {
         .setDescription(
           'Guess countries by their flags!\n\n' +
           '**Usage:**\n' +
-          '`countryguesser <continent> [rounds:number]`\n\n' +
+          '`countryguesser <continent> [rounds]`\n\n' +
           '**Continents:**\n' +
           '• `africa`\n' +
           '• `asia`\n' +
@@ -253,8 +253,8 @@ module.exports = {
           '• `all` (random from all continents)\n\n' +
           '**Examples:**\n' +
           '`countryguesser europe`\n' +
-          '`countryguesser asia rounds:20`\n' +
-          '`countryguesser all rounds:30`\n\n' +
+          '`countryguesser asia 20`\n' +
+          '`countryguesser all 30`\n\n' +
           '**Scoring:**\n' +
           '🥇 1st correct answer: **3 points**\n' +
           '🥈 2nd correct answer: **2 points**\n' +
@@ -277,11 +277,10 @@ module.exports = {
       return message.reply({ embeds: [embed] });
     }
 
-    // Parse rounds
+    // Parse rounds - now just a simple number as second argument
     let rounds = 10;
-    const roundsArg = args.find(arg => arg.startsWith('rounds:'));
-    if (roundsArg) {
-      const parsedRounds = parseInt(roundsArg.split(':')[1]);
+    if (args[1]) {
+      const parsedRounds = parseInt(args[1]);
       if (parsedRounds && parsedRounds >= 1 && parsedRounds <= 30) {
         rounds = parsedRounds;
       } else {
@@ -358,20 +357,17 @@ module.exports = {
       await new Promise((resolve) => {
         collector.on('collect', async (m) => {
           const guess = m.content.toLowerCase().trim();
-          
+
           if (correctAnswers.includes(guess)) {
             collectedUsers.add(m.author.id);
             winners.push({ user: m.author, message: m });
 
             // Award points
             if (winners.length === 1) {
-              await m.react('🥇');
               scores.set(m.author.id, (scores.get(m.author.id) || 0) + 3);
             } else if (winners.length === 2) {
-              await m.react('🥈');
               scores.set(m.author.id, (scores.get(m.author.id) || 0) + 2);
             } else if (winners.length === 3) {
-              await m.react('🥉');
               scores.set(m.author.id, (scores.get(m.author.id) || 0) + 1);
               collector.stop();
             }
@@ -385,7 +381,7 @@ module.exports = {
 
       // Show result
       let resultEmbed;
-      
+
       if (winners.length > 0) {
         const winnersText = winners.map((w, i) => {
           const medals = ['🥇', '🥈', '🥉'];
@@ -399,7 +395,7 @@ module.exports = {
           .setDescription(
             `This flag belongs to **${country.name}**.\n\n` +
             `**Points awarded:**\n${winnersText}\n\n` +
-            (currentRound < rounds ? `The game will move on in 5 seconds...` : '')
+            (currentRound < rounds ? `The game will move on in 5 seconds...` : 'This was the last round.')
           )
           .setFooter({ text: `Round ${currentRound}/${rounds}` });
       } else {
@@ -429,7 +425,7 @@ module.exports = {
       .slice(0, 10);
 
     let leaderboardText = '';
-    
+
     if (sortedScores.length === 0) {
       leaderboardText = 'No one scored any points!';
     } else {
