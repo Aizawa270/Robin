@@ -1,5 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
-const { getModStats, getTargetActions } = require('../../handlers/modstatsHelper');
+const { getModStats } = require('../../handlers/modstatsHelper');
 
 module.exports = {
   name: 'modstats',
@@ -34,7 +34,7 @@ module.exports = {
 
     try {
       console.log(`[ModStats] Fetching stats for ${moderatorId} in ${guildId}`);
-      
+
       // Check if database exists
       if (!client.automodDB) {
         return message.reply('❌ Modstats database not available. Please restart the bot.');
@@ -70,7 +70,7 @@ module.exports = {
       const rank = rankIndex !== -1 ? rankIndex + 1 : 'N/A';
       const totalModerators = allModerators.length;
 
-      // Create embed WITHOUT unmutes
+      // Create embed WITHOUT unmutes and WITHOUT recent actions
       const embed = new EmbedBuilder()
         .setTitle(`Moderation Statistics`)
         .setDescription(`**${targetUser.tag}**\nUser ID: ${moderatorId}`)
@@ -87,24 +87,6 @@ module.exports = {
           { name: 'Kicks', value: `${stats.kicks}`, inline: true },
           { name: 'Mutes', value: `${stats.mutes}`, inline: true }
         );
-
-      // Add recent actions if available
-      const recentActions = getTargetActions(client, guildId, moderatorId, 5);
-
-      if (recentActions.length > 0) {
-        let recentText = '';
-        for (const action of recentActions) {
-          const date = new Date(action.timestamp);
-          const timeAgo = `<t:${Math.floor(date.getTime() / 1000)}:R>`;
-          const shortReason = action.reason ? (action.reason.length > 50 ? action.reason.substring(0, 47) + '...' : action.reason) : 'No reason';
-          recentText += `**${action.action_type.toUpperCase()}** ${timeAgo}\n*${shortReason}*\n`;
-        }
-        embed.addFields({
-          name: 'Recent Actions',
-          value: recentText || 'No recent actions',
-          inline: false
-        });
-      }
 
       await message.reply({ embeds: [embed] });
 
