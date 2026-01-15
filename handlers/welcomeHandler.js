@@ -27,10 +27,14 @@ module.exports = (client) => {
       if (welcomeChannel) {
         const welcomeEmbed = new EmbedBuilder()
           .setColor('#9b59b6')
+          .setAuthor({
+            name: member.user.username,
+            iconURL: member.user.displayAvatarURL({ dynamic: true, size: 128 })
+          })
           .setTitle('「 ✦ 𝐕𝐘𝐍𝐎𝐑𝐀 ✦ 」')
           .setDescription(
             `**...................................................**\n` +
-            `ᶻᶻ   ﹒ welcome to Vynora! ${member}  ‹3\n` +
+            `ᶻᶻ   ﹒ welcome to the vynora ${member}  ‹3\n` +
             `    ♡  ﹕ <#${CHANNELS.roles}>   ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.chat}>    ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.rules}>     ﹕♡\n` +
