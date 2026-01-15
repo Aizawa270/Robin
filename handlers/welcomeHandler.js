@@ -34,7 +34,7 @@ module.exports = (client) => {
           .setTitle('「 ✦ 𝐕𝐘𝐍𝐎𝐑𝐀 ✦ 」')
           .setDescription(
             `**...................................................**\n` +
-            `ᶻᶻ   ﹒ welcome to the vynora ${member}  ‹3\n` +
+            `ᶻᶻ   ﹒ welcome to Vynora ${member}  ‹3\n` +
             `    ♡  ﹕ <#${CHANNELS.roles}>   ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.chat}>    ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.rules}>     ﹕♡\n` +
@@ -43,7 +43,7 @@ module.exports = (client) => {
             `**...................................................**`
           )
           .setImage(WELCOME_IMAGE)
-          .setFooter({ text: '✧˖ .gg/hanging ° |' })
+          .setFooter({ text: '✧˖ .gg/hanging ° ' })
           .setTimestamp();
 
         await welcomeChannel.send({ embeds: [welcomeEmbed] });
@@ -59,12 +59,12 @@ module.exports = (client) => {
             iconURL: member.user.displayAvatarURL({ dynamic: true, size: 128 })
           })
           .setDescription(
-            `ᶻᶻ   ﹒ welcome to the vynora ${member}  ‹3\n` +
+            `ᶻᶻ   ﹒ welcome to Vynora ${member}  ‹3\n` +
             `    ♡  ﹕ <#${CHANNELS.roles}>   ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.chat}>    ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.rules}>     ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.faq}>   ﹕♡\n\n` +
-            `𝒽𝑜𝓅𝑒 𝓎𝑜𝓊 𝑒𝓃𝒿𝑜𝓎 𝓎𝑜𝓊𝓇 𝓈𝓉𝒶𝓎!`
+            `**We hope you enjoy your stay here!**`
           )
           .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
           .setImage(ANNOUNCEMENT_IMAGE)
