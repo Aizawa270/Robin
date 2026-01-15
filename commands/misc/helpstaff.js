@@ -1,4 +1,3 @@
-// commands/utility/helpstaff.js
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -27,7 +26,7 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    // perms untouched
+    // ❌ DO NOT TOUCH PERMS
     if (
       !message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
       !message.member.permissions.has(PermissionFlagsBits.Administrator)
@@ -67,10 +66,10 @@ module.exports = {
 
       for (const [categoryName, cmds] of sortedCategoryEntries) {
         const sortedCmds = cmds.sort((a, b) => a.name.localeCompare(b.name));
-        
-        // Split into chunks of 25 (Discord's field limit)
+
+        // 25 commands per page (safe under field limits)
         const chunks = chunkArray(sortedCmds, 25);
-        
+
         for (let i = 0; i < chunks.length; i++) {
           const embed = createEmbed(client, message, {
             title: `${categoryName.toUpperCase()} Commands${chunks.length > 1 ? ` (${i + 1}/${chunks.length})` : ''}`,
@@ -91,8 +90,60 @@ module.exports = {
         }
       }
 
-      // send first page (no buttons needed to prove it works)
-      await message.reply({ embeds: [pages[0]] });
+      // ===== BUTTONS =====
+      let current = 0;
+
+      const navRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('prev_staff')
+          .setLabel('⬅️ Previous')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('next_staff')
+          .setLabel('➡️ Next')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('close_staff')
+          .setLabel('✕ Close')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      const helpMsg = await message.reply({
+        embeds: [pages[current]],
+        components: pages.length > 1 ? [navRow] : []
+      });
+
+      if (pages.length <= 1) return;
+
+      const collector = helpMsg.createMessageComponentCollector({
+        filter: i => i.user.id === message.author.id,
+        time: 180000
+      });
+
+      collector.on('collect', async interaction => {
+        if (interaction.customId === 'prev_staff') {
+          current = current > 0 ? current - 1 : pages.length - 1;
+        } 
+        else if (interaction.customId === 'next_staff') {
+          current = current < pages.length - 1 ? current + 1 : 0;
+        } 
+        else if (interaction.customId === 'close_staff') {
+          await interaction.update({ components: [] });
+          collector.stop();
+          return;
+        }
+
+        await interaction.update({
+          embeds: [pages[current]],
+          components: [navRow]
+        });
+      });
+
+      collector.on('end', async () => {
+        try {
+          await helpMsg.edit({ components: [] });
+        } catch {}
+      });
 
     } catch (err) {
       console.error('HelpStaff error:', err);
