@@ -30,7 +30,7 @@ module.exports = (client) => {
           .setTitle('「 ✦ 𝐕𝐘𝐍𝐎𝐑𝐀 ✦ 」')
           .setDescription(
             `**...................................................**\n` +
-            `ᶻᶻ   ﹒ welcome to the vynora ${member}  ‹3\n` +
+            `ᶻᶻ   ﹒ welcome to Vynora! ${member}  ‹3\n` +
             `    ♡  ﹕ <#${CHANNELS.roles}>   ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.chat}>    ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.rules}>     ﹕♡\n` +
