@@ -7,14 +7,22 @@ function getDb(client) {
 
 function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
   try {
-    if (!client) throw new Error('Client missing');
-    if (!guildId || !moderatorId || !targetId || !actionType) {
-      console.warn('[ModStats] missing parameters for logModAction');
+    if (!client) {
+      console.error('[ModStats] Client missing');
+      return false;
     }
+    
+    // ✅ FIX: Return false if required parameters are missing
+    if (!guildId || !moderatorId || !targetId || !actionType) {
+      console.warn('[ModStats] Missing required parameters:', { guildId, moderatorId, targetId, actionType });
+      return false;
+    }
+    
     if (String(actionType).toLowerCase() === 'unmute') {
       // If you purposely skip unmute logs, keep it skipped
       return false;
     }
+    
     const db = getDb(client);
     if (!db) {
       console.error('[ModStats] No DB available for logging');
@@ -26,8 +34,8 @@ function logModAction(client, guildId, moderatorId, targetId, actionType, reason
       'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     stmt.run(guildId, moderatorId, targetId, actionType, reason || 'No reason provided', duration, timestamp);
-    // console.log for debugging
-    // console.log(`[ModStats] Logged ${actionType} by ${moderatorId} on ${targetId}`);
+    
+    console.log(`[ModStats] ✅ Logged ${actionType} by ${moderatorId} on ${targetId}`);
     return true;
   } catch (error) {
     console.error('[ModStats] Failed to log action:', error);
