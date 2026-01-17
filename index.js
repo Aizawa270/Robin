@@ -61,7 +61,7 @@ prefixDB.pragma('journal_mode = WAL');
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
-// ===== AUTOMOD + MODSTATS =====
+// ===== AUTOMOD + MODSTATS + MODLOGS =====
 const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
 automodDB.pragma('journal_mode = WAL');
 automodDB.pragma('synchronous = NORMAL');
@@ -128,6 +128,13 @@ automodDB.prepare(`
     reason TEXT,
     duration TEXT,
     timestamp INTEGER
+  )
+`).run();
+
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS modlogs_channel (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL
   )
 `).run();
 
@@ -227,6 +234,14 @@ client.once('ready', async () => {
     console.log(`[Blacklist] Loaded for ${client.blacklistCache.size} guilds`);
   } catch (e) {
     console.error('[Blacklist] Cache failed:', e);
+  }
+
+  // 🔥 INIT MODLOGS SYSTEM
+  try {
+    const modlogs = require('./handlers/modlogsHandler');
+    if (modlogs?.initModlogs) modlogs.initModlogs(client);
+  } catch (e) {
+    console.error('Modlogs init failed:', e);
   }
 
   // Automod init
