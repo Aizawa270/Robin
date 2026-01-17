@@ -313,13 +313,13 @@ function initModlogs(client) {
     console.error('[Modlogs] Table creation failed:', err);
   }
 
-  // Auto-create channels on ready
-  client.once('ready', async () => {
-    console.log('[Modlogs] Auto-creating mod-logs channels...');
+  // Auto-create channels immediately (bot is already ready when this is called)
+  console.log('[Modlogs] Auto-creating mod-logs channels...');
+  (async () => {
     for (const guild of client.guilds.cache.values()) {
       await ensureModlogsChannel(client, guild);
     }
-  });
+  })();
 
   // Message delete
   client.on('messageDelete', async (message) => {
