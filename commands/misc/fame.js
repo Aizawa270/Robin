@@ -10,6 +10,7 @@ try {
   fameDB = new Database(path.join(DATA_DIR, 'fame.sqlite'));
   fameDB.pragma('journal_mode = WAL');
 
+  // User points table
   fameDB.prepare(`
     CREATE TABLE IF NOT EXISTS fame_points (
       user_id TEXT PRIMARY KEY,
@@ -20,6 +21,7 @@ try {
     )
   `).run();
 
+  // Logs table
   fameDB.prepare(`
     CREATE TABLE IF NOT EXISTS fame_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,13 +31,24 @@ try {
       timestamp INTEGER DEFAULT (strftime('%s','now')*1000)
     )
   `).run();
+
+  // GLOBAL COOLDOWNS TABLE - One cooldown per point type per user
+  fameDB.prepare(`
+    CREATE TABLE IF NOT EXISTS fame_cooldowns (
+      giver_id TEXT NOT NULL,
+      point_type TEXT NOT NULL,
+      last_given INTEGER NOT NULL,
+      PRIMARY KEY (giver_id, point_type)
+    )
+  `).run();
+
+  console.log('[Fame] Database initialized successfully');
 } catch (err) {
   console.error('[Fame] DB init failed:', err);
 }
 
 const DARK_GRAY = '#2b2d31'; // Discord-style dark gray
 const COOLDOWN_TIME = 43200000; // 12 hours in milliseconds
-const cooldowns = new Map();
 const ADMIN_ID = '852839588689870879';
 
 // Helper to create embed that bypasses universal helper
@@ -81,19 +94,36 @@ function logFameAction(giverId, receiverId, pointType) {
   `).run(giverId, receiverId, pointType, Date.now());
 }
 
-function checkCooldown(userId, targetId, pointType) {
-  const key = `${userId}-${targetId}-${pointType}`;
-  const now = Date.now();
-  const lastUsed = cooldowns.get(key);
+// GLOBAL COOLDOWN CHECK - One cooldown per point type (not per target user)
+function checkCooldown(giverId, pointType) {
+  if (!fameDB) return { onCooldown: false };
 
-  if (lastUsed && (now - lastUsed) < COOLDOWN_TIME) {
-    const timeLeft = COOLDOWN_TIME - (now - lastUsed);
-    const hoursLeft = Math.floor(timeLeft / 3600000);
-    const minutesLeft = Math.ceil((timeLeft % 3600000) / 60000);
-    return { onCooldown: true, timeString: `${hoursLeft}h ${minutesLeft}m` };
+  const now = Date.now();
+  
+  // Check database for existing cooldown for this point type
+  const row = fameDB.prepare(`
+    SELECT last_given FROM fame_cooldowns
+    WHERE giver_id = ? AND point_type = ?
+  `).get(giverId, pointType);
+
+  if (row) {
+    const timeLeft = COOLDOWN_TIME - (now - row.last_given);
+    
+    if (timeLeft > 0) {
+      const hoursLeft = Math.floor(timeLeft / 3600000);
+      const minutesLeft = Math.ceil((timeLeft % 3600000) / 60000);
+      return { onCooldown: true, timeString: `${hoursLeft}h ${minutesLeft}m` };
+    }
   }
 
-  cooldowns.set(key, now);
+  // Update cooldown in database
+  fameDB.prepare(`
+    INSERT INTO fame_cooldowns (giver_id, point_type, last_given)
+    VALUES (?, ?, ?)
+    ON CONFLICT(giver_id, point_type) DO UPDATE SET
+      last_given = ?
+  `).run(giverId, pointType, now, now);
+
   return { onCooldown: false };
 }
 
@@ -110,6 +140,11 @@ module.exports = {
     }
 
     const subcommand = args[0]?.toLowerCase();
+
+    // NO SUBCOMMAND - DO NOTHING (don't show help)
+    if (!subcommand) {
+      return;
+    }
 
     // HELP COMMAND
     if (subcommand === 'help') {
@@ -131,7 +166,7 @@ module.exports = {
           },
           { 
             name: '⏱️ Cooldown', 
-            value: '12 hours per point type per user' 
+            value: '12 hours per point type (global - affects all users)' 
           },
           { 
             name: '💡 Tip', 
@@ -144,7 +179,7 @@ module.exports = {
     }
 
     // LEADERBOARD
-    if (!subcommand || subcommand === 'lb' || subcommand === 'leaderboard' || message.content.toLowerCase().startsWith(`${client.getPrefix(message.guild.id)}famelb`)) {
+    if (subcommand === 'lb' || subcommand === 'leaderboard' || message.content.toLowerCase().startsWith(`${client.getPrefix(message.guild.id)}famelb`)) {
       const topUsers = fameDB.prepare(`
         SELECT user_id, reputation, stupidity, black
         FROM fame_points
@@ -244,11 +279,11 @@ module.exports = {
           });
         }
 
-        // Check cooldown
-        const cooldown = checkCooldown(authorId, targetId, pointType);
+        // Check GLOBAL cooldown (not per-user)
+        const cooldown = checkCooldown(authorId, pointType);
         if (cooldown.onCooldown) {
           return interaction.reply({ 
-            content: `You can give ${pointType} to this user again in ${cooldown.timeString}.`, 
+            content: `You can give ${pointType} points again in ${cooldown.timeString}.`, 
             ephemeral: true 
           });
         }
@@ -307,9 +342,10 @@ module.exports = {
         return message.reply('You cannot give reputation points to bots!');
       }
 
-      const cooldown = checkCooldown(message.author.id, target.id, 'reputation');
+      // Check GLOBAL cooldown
+      const cooldown = checkCooldown(message.author.id, 'reputation');
       if (cooldown.onCooldown) {
-        return message.reply(`You can give reputation to this user again in ${cooldown.timeString}.`);
+        return message.reply(`You can give reputation points again in ${cooldown.timeString}.`);
       }
 
       addPoint(target.id, 'reputation');
@@ -341,9 +377,10 @@ module.exports = {
         return message.reply('You cannot give stupidity points to bots!');
       }
 
-      const cooldown = checkCooldown(message.author.id, target.id, 'stupidity');
+      // Check GLOBAL cooldown
+      const cooldown = checkCooldown(message.author.id, 'stupidity');
       if (cooldown.onCooldown) {
-        return message.reply(`You can give stupidity to this user again in ${cooldown.timeString}.`);
+        return message.reply(`You can give stupidity points again in ${cooldown.timeString}.`);
       }
 
       addPoint(target.id, 'stupidity');
@@ -375,9 +412,10 @@ module.exports = {
         return message.reply('You cannot give black points to bots!');
       }
 
-      const cooldown = checkCooldown(message.author.id, target.id, 'black');
+      // Check GLOBAL cooldown
+      const cooldown = checkCooldown(message.author.id, 'black');
       if (cooldown.onCooldown) {
-        return message.reply(`You can give black points to this user again in ${cooldown.timeString}.`);
+        return message.reply(`You can give black points again in ${cooldown.timeString}.`);
       }
 
       addPoint(target.id, 'black');
@@ -474,7 +512,7 @@ module.exports = {
 
         fameDB.prepare('DELETE FROM fame_points').run();
         fameDB.prepare('DELETE FROM fame_logs').run();
-        cooldowns.clear();
+        fameDB.prepare('DELETE FROM fame_cooldowns').run();
 
         const embed = createFameEmbed()
           .setTitle('✅ Fame System Reset')
@@ -484,22 +522,5 @@ module.exports = {
         return message.reply({ embeds: [embed] });
       }
     }
-
-    // DEFAULT HELP
-    const embed = createFameEmbed()
-      .setTitle('Fame System')
-      .setDescription(
-        'Give reputation, stupidity, or black points to other users!\n\n' +
-        '**Quick Commands:**\n' +
-        '• `fame rep @user` - Give reputation\n' +
-        '• `fame stupidity @user` - Give stupidity\n' +
-        '• `fame black @user` - Give black point\n' +
-        '• `fame profile [@user]` - View profile\n' +
-        '• `fame lb` - View leaderboard\n\n' +
-        'Use `fame help` for full command list!'
-      )
-      .setFooter({ text: `Vynora • ${getCurrentTime()}` });
-
-    return message.reply({ embeds: [embed] });
   }
 };
