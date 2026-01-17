@@ -340,7 +340,7 @@ module.exports = {
         .setTitle(`Question ${currentRound} of ${rounds}`)
         .setDescription('To which country does this flag belong?')
         .setImage(`https://flagcdn.com/w640/${country.code}.png`)
-        .setFooter({ text: 'You have 15 seconds to answer' });
+        .setFooter({ text: 'You have 10 seconds to answer' });
 
       const questionMsg = await message.channel.send({ embeds: [questionEmbed] });
 
@@ -348,10 +348,11 @@ module.exports = {
       const correctAnswers = [country.name.toLowerCase(), ...country.aliases];
       const winners = [];
       const collectedUsers = new Set();
+      let resultMessage = null;
 
       const collector = message.channel.createMessageCollector({
         filter: m => !m.author.bot && !collectedUsers.has(m.author.id),
-        time: 15000
+        time: 10000
       });
 
       await new Promise((resolve) => {
@@ -363,12 +364,44 @@ module.exports = {
             winners.push({ user: m.author, message: m });
 
             // Award points
+            let pointsAwarded = 0;
             if (winners.length === 1) {
+              pointsAwarded = 3;
               scores.set(m.author.id, (scores.get(m.author.id) || 0) + 3);
             } else if (winners.length === 2) {
+              pointsAwarded = 2;
               scores.set(m.author.id, (scores.get(m.author.id) || 0) + 2);
             } else if (winners.length === 3) {
+              pointsAwarded = 1;
               scores.set(m.author.id, (scores.get(m.author.id) || 0) + 1);
+            }
+
+            // Send/update instant result embed
+            const medals = ['🥇', '🥈', '🥉'];
+            const winnersText = winners.map((w, i) => {
+              const points = [3, 2, 1];
+              return `${medals[i]} ${w.user} - **${points[i]} point${points[i] === 1 ? '' : 's'}**`;
+            }).join('\n');
+
+            const instantEmbed = new EmbedBuilder()
+              .setColor('#00ff00')
+              .setTitle(`${winners[0].user.username} got it right!`)
+              .setDescription(
+                `This flag belongs to **${country.name}**.\n\n` +
+                `**Points awarded:**\n${winnersText}\n\n` +
+                (currentRound < rounds ? `The game will move on in 5 seconds...` : 'This was the last round.')
+              )
+              .setFooter({ text: `Round ${currentRound}/${rounds}` });
+
+            // Edit existing result message or send new one
+            if (resultMessage) {
+              await resultMessage.edit({ embeds: [instantEmbed] }).catch(() => {});
+            } else {
+              resultMessage = await message.channel.send({ embeds: [instantEmbed] });
+            }
+
+            // Stop after 3 winners
+            if (winners.length === 3) {
               collector.stop();
             }
           }
@@ -379,27 +412,9 @@ module.exports = {
         });
       });
 
-      // Show result
-      let resultEmbed;
-
-      if (winners.length > 0) {
-        const winnersText = winners.map((w, i) => {
-          const medals = ['🥇', '🥈', '🥉'];
-          const points = [3, 2, 1];
-          return `${medals[i]} ${w.user} - **${points[i]} point${points[i] === 1 ? '' : 's'}**`;
-        }).join('\n');
-
-        resultEmbed = new EmbedBuilder()
-          .setColor('#00ff00')
-          .setTitle(`${winners[0].user.username} got it right!`)
-          .setDescription(
-            `This flag belongs to **${country.name}**.\n\n` +
-            `**Points awarded:**\n${winnersText}\n\n` +
-            (currentRound < rounds ? `The game will move on in 5 seconds...` : 'This was the last round.')
-          )
-          .setFooter({ text: `Round ${currentRound}/${rounds}` });
-      } else {
-        resultEmbed = new EmbedBuilder()
+      // If no one got it right, send the "no one got it right" embed
+      if (winners.length === 0) {
+        const resultEmbed = new EmbedBuilder()
           .setColor('#ff0000')
           .setTitle('No one got it right!')
           .setDescription(
@@ -407,9 +422,9 @@ module.exports = {
             (currentRound < rounds ? `The game will move on in 5 seconds...` : 'This was the last round.')
           )
           .setFooter({ text: `Round ${currentRound}/${rounds}` });
-      }
 
-      await message.channel.send({ embeds: [resultEmbed] });
+        await message.channel.send({ embeds: [resultEmbed] });
+      }
 
       // Wait 5 seconds before next round
       if (currentRound < rounds) {
