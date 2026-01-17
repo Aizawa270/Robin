@@ -33,10 +33,25 @@ try {
   console.error('[Fame] DB init failed:', err);
 }
 
-const LIGHT_PINK = '#FF69B4';
+const DARK_GRAY = '#2b2d31'; // Discord-style dark gray
 const COOLDOWN_TIME = 43200000; // 12 hours in milliseconds
 const cooldowns = new Map();
 const ADMIN_ID = '852839588689870879';
+
+// Helper to create embed that bypasses universal helper
+function createFameEmbed() {
+  const embed = new EmbedBuilder();
+  embed.setColor(DARK_GRAY);
+  // Add a flag to prevent universal helper from changing color
+  embed._bypassUniversalHelper = true;
+  return embed;
+}
+
+// Helper to get current time string
+function getCurrentTime() {
+  const now = new Date();
+  return now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+}
 
 function getUserPoints(userId) {
   if (!fameDB) return { reputation: 0, stupidity: 0, black: 0 };
@@ -98,10 +113,9 @@ module.exports = {
 
     // HELP COMMAND
     if (subcommand === 'help') {
-      const embed = new EmbedBuilder()
+      const embed = createFameEmbed()
         .setTitle('Fame System - Commands')
         .setDescription('Give reputation, stupidity, or black points to other users!')
-        .setColor(LIGHT_PINK)
         .addFields(
           { 
             name: '📊 Viewing Commands', 
@@ -124,7 +138,7 @@ module.exports = {
             value: 'Use `fame profile @user` to quickly give points using buttons!' 
           }
         )
-        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -139,11 +153,10 @@ module.exports = {
       `).all();
 
       if (topUsers.length === 0) {
-        const embed = new EmbedBuilder()
+        const embed = createFameEmbed()
           .setTitle('Reputation Leaderboard')
           .setDescription('No fame points have been given yet!')
-          .setColor(LIGHT_PINK)
-          .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+          .setFooter({ text: `Vynora • ${getCurrentTime()}` });
         return message.reply({ embeds: [embed] });
       }
 
@@ -160,11 +173,10 @@ module.exports = {
         }
       }
 
-      const embed = new EmbedBuilder()
+      const embed = createFameEmbed()
         .setTitle('Reputation Leaderboard')
         .setDescription(leaderboardText.trim())
-        .setColor(LIGHT_PINK)
-        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -177,16 +189,15 @@ module.exports = {
 
       const points = getUserPoints(target.id);
 
-      const embed = new EmbedBuilder()
+      const embed = createFameEmbed()
         .setTitle(`${target.username}'s Fame Points`)
         .setThumbnail(target.displayAvatarURL({ size: 128 }))
-        .setColor(LIGHT_PINK)
         .addFields(
           { name: 'Reputation Points', value: points.reputation.toString() },
           { name: 'Stupidity Points', value: points.stupidity.toString() },
           { name: 'Black Points', value: points.black.toString() }
         )
-        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}` });
+        .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
       // Don't show buttons if target is a bot
       if (target.bot) {
@@ -251,16 +262,15 @@ module.exports = {
         const targetUser = await client.users.fetch(targetId);
 
         // Update embed
-        const updatedEmbed = new EmbedBuilder()
+        const updatedEmbed = createFameEmbed()
           .setTitle(`${targetUser.username}'s Fame Points`)
           .setThumbnail(targetUser.displayAvatarURL({ size: 128 }))
-          .setColor(LIGHT_PINK)
           .addFields(
             { name: 'Reputation Points', value: updatedPoints.reputation.toString() },
             { name: 'Stupidity Points', value: updatedPoints.stupidity.toString() },
             { name: 'Black Points', value: updatedPoints.black.toString() }
           )
-          .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}` });
+          .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
         await reply.edit({ embeds: [updatedEmbed], components: [row1, row2] });
 
@@ -268,6 +278,7 @@ module.exports = {
         const responseEmbed = new EmbedBuilder()
           .setDescription(`Successfully gave ${targetUser.username} a ${pointType} point!`)
           .setColor(colors[pointType]);
+        responseEmbed._bypassUniversalHelper = true;
 
         await interaction.reply({ embeds: [responseEmbed], ephemeral: true });
       });
@@ -304,12 +315,11 @@ module.exports = {
       addPoint(target.id, 'reputation');
       logFameAction(message.author.id, target.id, 'reputation');
 
-      const embed = new EmbedBuilder()
+      const embed = createFameEmbed()
         .setTitle('Reputation Point Given')
         .setDescription(`${message.author.username} gave ${target.username} a reputation point.`)
         .setThumbnail(target.displayAvatarURL({ size: 128 }))
-        .setColor('#00ff00')
-        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -339,12 +349,11 @@ module.exports = {
       addPoint(target.id, 'stupidity');
       logFameAction(message.author.id, target.id, 'stupidity');
 
-      const embed = new EmbedBuilder()
+      const embed = createFameEmbed()
         .setTitle('Stupidity Point Given')
         .setDescription(`${message.author.username} gave ${target.username} a stupidity point.`)
         .setThumbnail(target.displayAvatarURL({ size: 128 }))
-        .setColor('#ff6b6b')
-        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -374,12 +383,11 @@ module.exports = {
       addPoint(target.id, 'black');
       logFameAction(message.author.id, target.id, 'black');
 
-      const embed = new EmbedBuilder()
+      const embed = createFameEmbed()
         .setTitle('Black Point Given')
         .setDescription(`${message.author.username} gave ${target.username} a black point.`)
         .setThumbnail(target.displayAvatarURL({ size: 128 }))
-        .setColor('#2b2d31')
-        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -407,10 +415,9 @@ module.exports = {
           addPoint(target.id, normalizedType);
         }
 
-        const embed = new EmbedBuilder()
+        const embed = createFameEmbed()
           .setTitle('✅ Points Added')
           .setDescription(`Added **${amount}** ${normalizedType} point(s) to ${target.username}`)
-          .setColor('#00ff00')
           .setFooter({ text: 'Admin Action' });
 
         return message.reply({ embeds: [embed] });
@@ -441,10 +448,9 @@ module.exports = {
           WHERE user_id = ?
         `).run(newAmount, target.id);
 
-        const embed = new EmbedBuilder()
+        const embed = createFameEmbed()
           .setTitle('✅ Points Removed')
           .setDescription(`Removed **${amount}** ${normalizedType} point(s) from ${target.username}\nNew total: **${newAmount}**`)
-          .setColor('#ff6b6b')
           .setFooter({ text: 'Admin Action' });
 
         return message.reply({ embeds: [embed] });
@@ -455,13 +461,12 @@ module.exports = {
         const confirmation = args[1]?.toLowerCase();
 
         if (confirmation !== 'confirm') {
-          const embed = new EmbedBuilder()
+          const embed = createFameEmbed()
             .setTitle('⚠️ Reset All Fame Points')
             .setDescription(
               'This will reset **ALL** fame points for **EVERY** user!\n\n' +
               'To confirm, use: `fame reset confirm`'
             )
-            .setColor('#ff0000')
             .setFooter({ text: 'This action cannot be undone!' });
 
           return message.reply({ embeds: [embed] });
@@ -471,10 +476,9 @@ module.exports = {
         fameDB.prepare('DELETE FROM fame_logs').run();
         cooldowns.clear();
 
-        const embed = new EmbedBuilder()
+        const embed = createFameEmbed()
           .setTitle('✅ Fame System Reset')
           .setDescription('All fame points have been reset for all users.')
-          .setColor('#00ff00')
           .setFooter({ text: 'Admin Action' });
 
         return message.reply({ embeds: [embed] });
@@ -482,7 +486,7 @@ module.exports = {
     }
 
     // DEFAULT HELP
-    const embed = new EmbedBuilder()
+    const embed = createFameEmbed()
       .setTitle('Fame System')
       .setDescription(
         'Give reputation, stupidity, or black points to other users!\n\n' +
@@ -494,8 +498,7 @@ module.exports = {
         '• `fame lb` - View leaderboard\n\n' +
         'Use `fame help` for full command list!'
       )
-      .setColor(LIGHT_PINK)
-      .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+      .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
     return message.reply({ embeds: [embed] });
   }
