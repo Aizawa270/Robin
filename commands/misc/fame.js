@@ -1,5 +1,5 @@
 // commands/misc/fame.js
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
 
@@ -9,7 +9,7 @@ try {
   const DATA_DIR = path.join(__dirname, '..', '..', 'data');
   fameDB = new Database(path.join(DATA_DIR, 'fame.sqlite'));
   fameDB.pragma('journal_mode = WAL');
-  
+
   fameDB.prepare(`
     CREATE TABLE IF NOT EXISTS fame_points (
       user_id TEXT PRIMARY KEY,
@@ -46,7 +46,7 @@ function getUserPoints(userId) {
 
 function addPoint(userId, pointType) {
   if (!fameDB) return false;
-  
+
   fameDB.prepare(`
     INSERT INTO fame_points (user_id, ${pointType}, last_updated)
     VALUES (?, 1, ?)
@@ -54,7 +54,7 @@ function addPoint(userId, pointType) {
       ${pointType} = ${pointType} + 1,
       last_updated = ?
   `).run(userId, Date.now(), Date.now());
-  
+
   return true;
 }
 
@@ -70,14 +70,14 @@ function checkCooldown(userId, targetId, pointType) {
   const key = `${userId}-${targetId}-${pointType}`;
   const now = Date.now();
   const lastUsed = cooldowns.get(key);
-  
+
   if (lastUsed && (now - lastUsed) < COOLDOWN_TIME) {
     const timeLeft = COOLDOWN_TIME - (now - lastUsed);
     const hoursLeft = Math.floor(timeLeft / 3600000);
     const minutesLeft = Math.ceil((timeLeft % 3600000) / 60000);
     return { onCooldown: true, timeString: `${hoursLeft}h ${minutesLeft}m` };
   }
-  
+
   cooldowns.set(key, now);
   return { onCooldown: false };
 }
@@ -86,7 +86,7 @@ module.exports = {
   name: 'fame',
   description: 'Fame point system - reputation, stupidity, and black points',
   category: 'misc',
-  usage: 'fame <rep/stupidity/black/profile/lb> [user]',
+  usage: 'fame <rep/stupidity/black/profile/lb/help> [user]',
   aliases: ['famelb'],
   async execute(client, message, args) {
     if (!message.guild) return;
@@ -95,6 +95,39 @@ module.exports = {
     }
 
     const subcommand = args[0]?.toLowerCase();
+
+    // HELP COMMAND
+    if (subcommand === 'help') {
+      const embed = new EmbedBuilder()
+        .setTitle('Fame System - Commands')
+        .setDescription('Give reputation, stupidity, or black points to other users!')
+        .setColor(LIGHT_PINK)
+        .addFields(
+          { 
+            name: '📊 Viewing Commands', 
+            value: '• `fame lb` or `famelb` - View leaderboard\n• `fame profile [@user]` - View fame profile (with buttons!)' 
+          },
+          { 
+            name: '⭐ Giving Points', 
+            value: '• `fame rep @user` - Give reputation point\n• `fame stupidity @user` - Give stupidity point\n• `fame black @user` - Give black point' 
+          },
+          { 
+            name: '⚙️ Admin Commands', 
+            value: '• `fame add <type> @user [amount]` - Add points (Admin only)\n• `fame remove <type> @user [amount]` - Remove points (Admin only)\n• `fame reset confirm` - Reset all points (Admin only)' 
+          },
+          { 
+            name: '⏱️ Cooldown', 
+            value: '12 hours per point type per user' 
+          },
+          { 
+            name: '💡 Tip', 
+            value: 'Use `fame profile @user` to quickly give points using buttons!' 
+          }
+        )
+        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+
+      return message.reply({ embeds: [embed] });
+    }
 
     // LEADERBOARD
     if (!subcommand || subcommand === 'lb' || subcommand === 'leaderboard' || message.content.toLowerCase().startsWith(`${client.getPrefix(message.guild.id)}famelb`)) {
@@ -110,12 +143,12 @@ module.exports = {
           .setTitle('Reputation Leaderboard')
           .setDescription('No fame points have been given yet!')
           .setColor(LIGHT_PINK)
-          .setFooter({ text: `ChillZone | Chill • Social • Gaming` });
+          .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
         return message.reply({ embeds: [embed] });
       }
 
       let leaderboardText = 'Top users by reputation points:\n\n';
-      
+
       for (let i = 0; i < topUsers.length; i++) {
         const user = topUsers[i];
         try {
@@ -131,7 +164,7 @@ module.exports = {
         .setTitle('Reputation Leaderboard')
         .setDescription(leaderboardText.trim())
         .setColor(LIGHT_PINK)
-        .setFooter({ text: `ChillZone | Chill • Social • Gaming • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -153,14 +186,12 @@ module.exports = {
           { name: 'Stupidity Points', value: points.stupidity.toString() },
           { name: 'Black Points', value: points.black.toString() }
         )
-        .setFooter({ text: `ChillZone | Chill • Social • Gaming • ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}` });
+        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}` });
 
       // Don't show buttons if target is a bot
       if (target.bot) {
         return message.reply({ embeds: [embed] });
       }
-
-      const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
       const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -229,7 +260,7 @@ module.exports = {
             { name: 'Stupidity Points', value: updatedPoints.stupidity.toString() },
             { name: 'Black Points', value: updatedPoints.black.toString() }
           )
-          .setFooter({ text: `ChillZone | Chill • Social • Gaming • ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}` });
+          .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}` });
 
         await reply.edit({ embeds: [updatedEmbed], components: [row1, row2] });
 
@@ -278,7 +309,7 @@ module.exports = {
         .setDescription(`${message.author.username} gave ${target.username} a reputation point.`)
         .setThumbnail(target.displayAvatarURL({ size: 128 }))
         .setColor('#00ff00')
-        .setFooter({ text: `ChillZone | Chill • Social • Gaming • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -313,7 +344,7 @@ module.exports = {
         .setDescription(`${message.author.username} gave ${target.username} a stupidity point.`)
         .setThumbnail(target.displayAvatarURL({ size: 128 }))
         .setColor('#ff6b6b')
-        .setFooter({ text: `ChillZone | Chill • Social • Gaming • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -348,7 +379,7 @@ module.exports = {
         .setDescription(`${message.author.username} gave ${target.username} a black point.`)
         .setThumbnail(target.displayAvatarURL({ size: 128 }))
         .setColor('#2b2d31')
-        .setFooter({ text: `ChillZone | Chill • Social • Gaming • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
+        .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
 
       return message.reply({ embeds: [embed] });
     }
@@ -357,7 +388,7 @@ module.exports = {
     if (message.author.id === ADMIN_ID) {
       // ADD POINTS
       if (subcommand === 'add') {
-        const pointType = args[1]?.toLowerCase(); // rep, stupidity, black
+        const pointType = args[1]?.toLowerCase();
         const target = message.mentions.users.first() || 
                        (args[2] ? await client.users.fetch(args[2]).catch(() => null) : null);
         const amount = parseInt(args[3]) || 1;
@@ -372,7 +403,6 @@ module.exports = {
 
         const normalizedType = pointType === 'rep' ? 'reputation' : pointType;
 
-        // Add points
         for (let i = 0; i < amount; i++) {
           addPoint(target.id, normalizedType);
         }
@@ -402,8 +432,6 @@ module.exports = {
         }
 
         const normalizedType = pointType === 'rep' ? 'reputation' : pointType;
-
-        // Remove points
         const current = getUserPoints(target.id)[normalizedType];
         const newAmount = Math.max(0, current - amount);
 
@@ -439,7 +467,6 @@ module.exports = {
           return message.reply({ embeds: [embed] });
         }
 
-        // Reset everything
         fameDB.prepare('DELETE FROM fame_points').run();
         fameDB.prepare('DELETE FROM fame_logs').run();
         cooldowns.clear();
@@ -454,21 +481,21 @@ module.exports = {
       }
     }
 
-    // HELP
+    // DEFAULT HELP
     const embed = new EmbedBuilder()
       .setTitle('Fame System')
       .setDescription(
         'Give reputation, stupidity, or black points to other users!\n\n' +
-        '**Commands:**\n' +
-        '• `fame rep <user>` - Give reputation point\n' +
-        '• `fame stupidity <user>` - Give stupidity point\n' +
-        '• `fame black <user>` - Give black point\n' +
-        '• `fame profile [user]` - View fame profile\n' +
-        '• `fame lb` or `famelb` - View leaderboard\n\n' +
-        '**Cooldown:** 12 hours per point type per user'
+        '**Quick Commands:**\n' +
+        '• `fame rep @user` - Give reputation\n' +
+        '• `fame stupidity @user` - Give stupidity\n' +
+        '• `fame black @user` - Give black point\n' +
+        '• `fame profile [@user]` - View profile\n' +
+        '• `fame lb` - View leaderboard\n\n' +
+        'Use `fame help` for full command list!'
       )
       .setColor(LIGHT_PINK)
-      .setFooter({ text: 'ChillZone | Chill • Social • Gaming' });
+      .setFooter({ text: `Vynora • ${new Date().toLocaleDateString('en-US', { weekday: 'long' })}` });
 
     return message.reply({ embeds: [embed] });
   }
