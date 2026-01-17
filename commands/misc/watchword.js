@@ -38,13 +38,6 @@ module.exports = {
 
     const subcommand = args[0]?.toLowerCase();
 
-    // Delete user's command message for privacy
-    try {
-      await message.delete();
-    } catch (e) {
-      // Ignore if can't delete
-    }
-
     if (!subcommand || !['add', 'remove', 'list'].includes(subcommand)) {
       const embed = new EmbedBuilder()
         .setColor('#ec4899')
@@ -59,7 +52,7 @@ module.exports = {
           '`!watchword add Alex`\n' +
           '`!watchword remove Alex`\n\n' +
           '**Privacy:**\n' +
-          'All commands are anonymous - your message will be deleted immediately.'
+          'Add/remove commands are deleted automatically for privacy.'
         )
         .setFooter({ text: 'Only you can see this • Max 10 words per server' });
 
@@ -70,6 +63,13 @@ module.exports = {
 
     // ADD WATCHWORD
     if (subcommand === 'add') {
+      // Delete user's command message for privacy
+      try {
+        await message.delete();
+      } catch (e) {
+        // Ignore if can't delete
+      }
+
       const word = args.slice(1).join(' ').toLowerCase().trim();
 
       if (!word) {
@@ -146,6 +146,13 @@ module.exports = {
 
     // REMOVE WATCHWORD
     if (subcommand === 'remove') {
+      // Delete user's command message for privacy
+      try {
+        await message.delete();
+      } catch (e) {
+        // Ignore if can't delete
+      }
+
       const word = args.slice(1).join(' ').toLowerCase().trim();
 
       if (!word) {
@@ -201,8 +208,7 @@ module.exports = {
           )
           .setFooter({ text: 'Only you can see this' });
 
-        const reply = await message.channel.send({ embeds: [embed] });
-        setTimeout(() => reply.delete().catch(() => {}), 15000);
+        await message.channel.send({ embeds: [embed] });
         return;
       }
 
@@ -219,8 +225,7 @@ module.exports = {
         )
         .setFooter({ text: `Only you can see this • ${words.length}/10 watchwords used` });
 
-      const reply = await message.channel.send({ embeds: [embed] });
-      setTimeout(() => reply.delete().catch(() => {}), 20000);
+      await message.channel.send({ embeds: [embed] });
       return;
     }
   }
