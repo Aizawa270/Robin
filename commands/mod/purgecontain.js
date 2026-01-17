@@ -35,7 +35,7 @@ module.exports = {
           },
           {
             name: '⚠️ Notes',
-            value: '• Only matches whole words\n• Maximum 200 messages\n• Messages older than 14 days delete slower\n• Requires Administrator permission',
+            value: '• Only matches whole words\n• Maximum 200 messages\n• Deletes the most recent messages first\n• Requires Administrator permission',
             inline: false
           }
         )
@@ -66,23 +66,41 @@ module.exports = {
     await message.delete().catch(() => {});
 
     try {
-      // Fetch messages (fetch more than needed to find enough matches)
-      const fetchLimit = Math.min(amount * 10, 1000);
-      const messages = await message.channel.messages.fetch({ limit: fetchLimit });
-
-      // Build regex for whole word matching
+      let allMatchingMessages = [];
+      let lastMessageId = null;
       const wordRegex = new RegExp(`\\b${escapeRegex(word)}\\b`, 'i');
 
-      // Filter messages that contain the word as a whole word
-      const toDelete = messages.filter(msg => {
-        if (!msg.content) return false;
-        return wordRegex.test(msg.content);
-      });
+      // Keep fetching messages until we have enough matches or run out of messages
+      while (allMatchingMessages.length < amount) {
+        const fetchOptions = { limit: 100 };
+        if (lastMessageId) {
+          fetchOptions.before = lastMessageId;
+        }
 
-      // Limit to the requested amount
-      const limitedDelete = Array.from(toDelete.values()).slice(0, amount);
+        const messages = await message.channel.messages.fetch(fetchOptions);
+        
+        if (messages.size === 0) break; // No more messages to fetch
 
-      if (limitedDelete.length === 0) {
+        // Filter messages that contain the word
+        const matches = messages.filter(msg => {
+          if (!msg.content) return false;
+          return wordRegex.test(msg.content);
+        });
+
+        // Add matches to our collection
+        allMatchingMessages.push(...matches.values());
+
+        // Update the last message ID for pagination
+        lastMessageId = messages.last().id;
+
+        // If we got less than 100 messages, we've hit the end
+        if (messages.size < 100) break;
+
+        // Safety check: don't fetch more than 1000 messages total
+        if (messages.size >= 1000) break;
+      }
+
+      if (allMatchingMessages.length === 0) {
         const embed = new EmbedBuilder()
           .setColor('#ff0000')
           .setDescription(`❌ No messages found containing the word **"${word}"**`);
@@ -92,12 +110,16 @@ module.exports = {
         return;
       }
 
+      // Sort by timestamp (newest first) and limit to requested amount
+      allMatchingMessages.sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+      const toDelete = allMatchingMessages.slice(0, amount);
+
       // Split into messages newer than 14 days and older
       const now = Date.now();
       const twoWeeks = 14 * 24 * 60 * 60 * 1000;
 
-      const bulkDeletable = limitedDelete.filter(msg => (now - msg.createdTimestamp) < twoWeeks);
-      const manualDelete = limitedDelete.filter(msg => (now - msg.createdTimestamp) >= twoWeeks);
+      const bulkDeletable = toDelete.filter(msg => (now - msg.createdTimestamp) < twoWeeks);
+      const manualDelete = toDelete.filter(msg => (now - msg.createdTimestamp) >= twoWeeks);
 
       let deletedCount = 0;
 
