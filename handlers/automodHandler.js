@@ -293,13 +293,16 @@ async function checkMessage(client, message) {
       }
     }
 
-    // INVITE LINKS
+    // INVITE LINKS (allow if user has Create Invite permission)
     const inviteRegex = /(discord\.gg|discordapp\.com\/invite|discord\.com\/invite)\/[A-Za-z0-9]+/i;
     if (inviteRegex.test(message.content)) {
-      await message.delete().catch(() => {});
-      try { logModAction(client, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'delete', 'discord invite link'); } catch {}
-      await sendAutomodAlert(client, message.guild, message.author, 'Discord Invite Link', message.channel.id, message.content);
-      return;
+      // Check if user has Create Invite permission
+      if (!message.member.permissions.has(PermissionFlagsBits.CreateInstantInvite)) {
+        await message.delete().catch(() => {});
+        try { logModAction(client, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'delete', 'discord invite link'); } catch {}
+        await sendAutomodAlert(client, message.guild, message.author, 'Discord Invite Link', message.channel.id, message.content);
+        return;
+      }
     }
 
   } catch (err) {
