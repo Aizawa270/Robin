@@ -1,11 +1,11 @@
 const { PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 
 module.exports = {
-  name: 'contain',
+  name: 'purgecontain',
   description: 'Delete messages containing a specific word',
   category: 'mod',
-  usage: 'purge contain <word> <amount>',
-  aliases: [],
+  usage: 'purgecontain <word> <amount>',
+  aliases: ['contain-purge', 'purge-contain'],
   async execute(client, message, args) {
     // Check permissions
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -20,17 +20,17 @@ module.exports = {
     if (args.length === 0) {
       const embed = new EmbedBuilder()
         .setColor('#ec4899')
-        .setTitle('Purge Contain Command')
+        .setTitle('📋 Purge Contain Command')
         .setDescription('Delete messages containing a specific word.')
         .addFields(
           {
             name: '📝 Usage',
-            value: '`purge contain <word> <amount>`',
+            value: '`purgecontain <word> <amount>`\n`contain-purge <word> <amount>`',
             inline: false
           },
           {
             name: '📋 Examples',
-            value: '`purge contain jeo 200`\n`purge contain kiss 5`',
+            value: '`purgecontain jeo 200`\n`contain-purge kiss 5`',
             inline: false
           },
           {
@@ -51,14 +51,14 @@ module.exports = {
     if (!word) {
       const embed = new EmbedBuilder()
         .setColor('#ff0000')
-        .setDescription('❌ Please provide a word to search for.\n\n**Usage:** `purge contain <word> <amount>`');
+        .setDescription('❌ Please provide a word to search for.\n\n**Usage:** `purgecontain <word> <amount>`');
       return message.reply({ embeds: [embed] });
     }
 
     if (!amount || amount < 1 || amount > 200) {
       const embed = new EmbedBuilder()
         .setColor('#ff0000')
-        .setDescription('❌ Please provide a valid amount between 1-200.\n\n**Usage:** `purge contain <word> <amount>`');
+        .setDescription('❌ Please provide a valid amount between 1-200.\n\n**Usage:** `purgecontain <word> <amount>`');
       return message.reply({ embeds: [embed] });
     }
 
