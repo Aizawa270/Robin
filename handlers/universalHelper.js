@@ -7,7 +7,7 @@ const ROLES_INFO_COLOR = '#FF69B4'; // Also same color
 function createEmbed(client, message, options = {}) {
     // Get current prefix for this guild
     const prefix = client.getPrefix(message.guild?.id) || '!';
-    
+
     const embed = new EmbedBuilder()
         .setColor(DEFAULT_COLOR); // Hot pink
 
@@ -59,16 +59,16 @@ function createEmbed(client, message, options = {}) {
 // Patch reply method for auto-fixing embeds AND text
 function patchMessageReply(message) {
     if (!message || message._replyPatched) return;
-    
+
     const originalReply = message.reply.bind(message);
     const prefix = message.prefix || '!';
-    
+
     // Helper to fix prefixes in any text
     const fixText = (text) => {
         if (typeof text !== 'string') return text;
         return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
     };
-    
+
     message.reply = async function(content, options) {
         // If content is a string (plain text), fix prefixes
         if (typeof content === 'string') {
@@ -78,16 +78,21 @@ function patchMessageReply(message) {
         else if (content && typeof content === 'object' && content.content) {
             content.content = fixText(content.content);
         }
-        
+
         // Fix embeds in content
         if (content && content.embeds) {
             content.embeds = content.embeds.map(embed => {
+                // CHECK FOR BYPASS FLAG - if present, don't modify the embed
+                if (embed._bypassUniversalHelper) {
+                    return embed;
+                }
+
                 if (embed.data) {
                     const fixedEmbed = new EmbedBuilder(embed.data);
-                    
+
                     // Set hot pink color
                     fixedEmbed.setColor(DEFAULT_COLOR);
-                    
+
                     // Fix prefixes in text fields
                     if (embed.data.title) fixedEmbed.setTitle(fixText(embed.data.title));
                     if (embed.data.description) fixedEmbed.setDescription(fixText(embed.data.description));
@@ -106,16 +111,16 @@ function patchMessageReply(message) {
                             iconURL: embed.data.footer.iconURL
                         });
                     }
-                    
+
                     return fixedEmbed;
                 }
                 return embed;
             });
         }
-        
+
         return originalReply(content, options);
     };
-    
+
     message._replyPatched = true;
 }
 
