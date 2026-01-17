@@ -299,6 +299,16 @@ client.on('messageCreate', async (message) => {
     console.error('Automod error:', e);
   }
 
+  // ===== WATCHWORD SYSTEM =====
+  try {
+    const watchwordCommand = require('./commands/misc/watchword');
+    if (watchwordCommand?.checkWatchwords) {
+      await watchwordCommand.checkWatchwords(client, message);
+    }
+  } catch (e) {
+    // Watchword system is optional
+  }
+
   // ===== VANESSA RNG / FLIRTY REPLIES =====
   const VANESSA_USERS = {
     '852839588689870879': 'astrix',
