@@ -239,9 +239,17 @@ client.once('ready', async () => {
   // 🔥 INIT MODLOGS SYSTEM
   try {
     const modlogs = require('./handlers/modlogsHandler');
-    if (modlogs?.initModlogs) modlogs.initModlogs(client);
+    if (modlogs?.initModlogs) {
+      modlogs.initModlogs(client);
+    } else {
+      console.log('[Modlogs] Handler found but initModlogs function missing');
+    }
   } catch (e) {
-    console.error('Modlogs init failed:', e);
+    if (e.code === 'MODULE_NOT_FOUND') {
+      console.log('[Modlogs] Handler not found - skipping (place modlogsHandler.js in handlers/ folder)');
+    } else {
+      console.error('[Modlogs] Init failed:', e);
+    }
   }
 
   // Automod init
@@ -254,17 +262,24 @@ client.once('ready', async () => {
 
   // Restore giveaways
   try {
+    const startGiveaway = require('./commands/startgiveaway');
     const all = giveawayDB.prepare('SELECT * FROM giveaways').all();
     for (const g of all) {
       const delay = g.end_timestamp - Date.now();
       if (delay <= 0) {
-        require('./commands/startgiveaway').endGiveaway(client, g.message_id);
+        if (startGiveaway?.endGiveaway) startGiveaway.endGiveaway(client, g.message_id);
       } else {
-        setTimeout(() => require('./commands/startgiveaway').endGiveaway(client, g.message_id), delay);
+        setTimeout(() => {
+          if (startGiveaway?.endGiveaway) startGiveaway.endGiveaway(client, g.message_id);
+        }, delay);
       }
     }
   } catch (e) {
-    console.error('Giveaway restore failed:', e);
+    if (e.code === 'MODULE_NOT_FOUND') {
+      console.log('[Giveaway] startgiveaway command not found - skipping restore');
+    } else {
+      console.error('[Giveaway] Restore failed:', e);
+    }
   }
 
   console.log('🚀 Bot fully operational');
