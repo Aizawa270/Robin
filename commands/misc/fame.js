@@ -52,7 +52,7 @@ function checkCooldown(client, giverId, pointType) {
   if (!client.fameDB) return { onCooldown: false };
 
   const now = Date.now();
-  
+
   const row = client.fameDB.prepare(`
     SELECT last_given FROM fame_cooldowns
     WHERE giver_id = ? AND point_type = ?
@@ -60,7 +60,7 @@ function checkCooldown(client, giverId, pointType) {
 
   if (row) {
     const timeLeft = COOLDOWN_TIME - (now - row.last_given);
-    
+
     if (timeLeft > 0) {
       const hoursLeft = Math.floor(timeLeft / 3600000);
       const minutesLeft = Math.ceil((timeLeft % 3600000) / 60000);
@@ -248,10 +248,11 @@ module.exports = {
 
         await reply.edit({ embeds: [updatedEmbed], components: [row1, row2] });
 
-        const colors = { reputation: '#00ff00', stupidity: '#ff6b6b', black: '#2b2d31' };
+        // FIX: Added 'rep' key and fallback to prevent undefined colors
+        const colors = { rep: '#00ff00', reputation: '#00ff00', stupidity: '#ff6b6b', black: '#2b2d31' };
         const responseEmbed = new EmbedBuilder()
           .setDescription(`Successfully gave ${targetUser.username} a ${pointType} point!`)
-          .setColor(colors[pointType]);
+          .setColor(colors[pointType] || DARK_GRAY);
         responseEmbed._bypassUniversalHelper = true;
 
         await interaction.reply({ embeds: [responseEmbed], ephemeral: true });
