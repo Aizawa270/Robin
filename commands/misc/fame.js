@@ -1,51 +1,5 @@
 // commands/misc/fame.js
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const Database = require('better-sqlite3');
-const path = require('path');
-
-// Initialize database
-let fameDB;
-try {
-  const DATA_DIR = path.join(__dirname, '..', '..', 'data');
-  fameDB = new Database(path.join(DATA_DIR, 'fame.sqlite'));
-  fameDB.pragma('journal_mode = WAL');
-
-  // User points table
-  fameDB.prepare(`
-    CREATE TABLE IF NOT EXISTS fame_points (
-      user_id TEXT PRIMARY KEY,
-      reputation INTEGER DEFAULT 0,
-      stupidity INTEGER DEFAULT 0,
-      black INTEGER DEFAULT 0,
-      last_updated INTEGER DEFAULT (strftime('%s','now')*1000)
-    )
-  `).run();
-
-  // Logs table
-  fameDB.prepare(`
-    CREATE TABLE IF NOT EXISTS fame_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      giver_id TEXT NOT NULL,
-      receiver_id TEXT NOT NULL,
-      point_type TEXT NOT NULL,
-      timestamp INTEGER DEFAULT (strftime('%s','now')*1000)
-    )
-  `).run();
-
-  // GLOBAL COOLDOWNS TABLE - One cooldown per point type per user
-  fameDB.prepare(`
-    CREATE TABLE IF NOT EXISTS fame_cooldowns (
-      giver_id TEXT NOT NULL,
-      point_type TEXT NOT NULL,
-      last_given INTEGER NOT NULL,
-      PRIMARY KEY (giver_id, point_type)
-    )
-  `).run();
-
-  console.log('[Fame] Database initialized successfully');
-} catch (err) {
-  console.error('[Fame] DB init failed:', err);
-}
 
 const DARK_GRAY = '#2b2d31';
 const COOLDOWN_TIME = 43200000; // 12 hours
@@ -63,16 +17,16 @@ function getCurrentTime() {
   return now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
-function getUserPoints(userId) {
-  if (!fameDB) return { reputation: 0, stupidity: 0, black: 0 };
-  const row = fameDB.prepare('SELECT reputation, stupidity, black FROM fame_points WHERE user_id = ?').get(userId);
+function getUserPoints(client, userId) {
+  if (!client.fameDB) return { reputation: 0, stupidity: 0, black: 0 };
+  const row = client.fameDB.prepare('SELECT reputation, stupidity, black FROM fame_points WHERE user_id = ?').get(userId);
   return row || { reputation: 0, stupidity: 0, black: 0 };
 }
 
-function addPoint(userId, pointType) {
-  if (!fameDB) return false;
+function addPoint(client, userId, pointType) {
+  if (!client.fameDB) return false;
 
-  fameDB.prepare(`
+  client.fameDB.prepare(`
     INSERT INTO fame_points (user_id, ${pointType}, last_updated)
     VALUES (?, 1, ?)
     ON CONFLICT(user_id) DO UPDATE SET
@@ -83,20 +37,20 @@ function addPoint(userId, pointType) {
   return true;
 }
 
-function logFameAction(giverId, receiverId, pointType) {
-  if (!fameDB) return;
-  fameDB.prepare(`
+function logFameAction(client, giverId, receiverId, pointType) {
+  if (!client.fameDB) return;
+  client.fameDB.prepare(`
     INSERT INTO fame_logs (giver_id, receiver_id, point_type, timestamp)
     VALUES (?, ?, ?, ?)
   `).run(giverId, receiverId, pointType, Date.now());
 }
 
-function checkCooldown(giverId, pointType) {
-  if (!fameDB) return { onCooldown: false };
+function checkCooldown(client, giverId, pointType) {
+  if (!client.fameDB) return { onCooldown: false };
 
   const now = Date.now();
   
-  const row = fameDB.prepare(`
+  const row = client.fameDB.prepare(`
     SELECT last_given FROM fame_cooldowns
     WHERE giver_id = ? AND point_type = ?
   `).get(giverId, pointType);
@@ -111,7 +65,7 @@ function checkCooldown(giverId, pointType) {
     }
   }
 
-  fameDB.prepare(`
+  client.fameDB.prepare(`
     INSERT INTO fame_cooldowns (giver_id, point_type, last_given)
     VALUES (?, ?, ?)
     ON CONFLICT(giver_id, point_type) DO UPDATE SET
@@ -129,7 +83,7 @@ module.exports = {
   aliases: ['famelb'],
   async execute(client, message, args) {
     if (!message.guild) return;
-    if (!fameDB) {
+    if (!client.fameDB) {
       return message.reply('Fame system is unavailable.');
     }
 
@@ -173,7 +127,7 @@ module.exports = {
 
     // LEADERBOARD
     if (subcommand === 'lb' || subcommand === 'leaderboard' || message.content.toLowerCase().startsWith(`${client.getPrefix(message.guild.id)}famelb`)) {
-      const topUsers = fameDB.prepare(`
+      const topUsers = client.fameDB.prepare(`
         SELECT user_id, reputation, stupidity, black
         FROM fame_points
         ORDER BY reputation DESC
@@ -215,7 +169,7 @@ module.exports = {
                      (args[1] ? await client.users.fetch(args[1]).catch(() => null) : null) ||
                      message.author;
 
-      const points = getUserPoints(target.id);
+      const points = getUserPoints(client, target.id);
 
       const embed = createFameEmbed()
         .setTitle(`${target.username}'s Fame Points`)
@@ -251,7 +205,6 @@ module.exports = {
 
       const reply = await message.reply({ embeds: [embed], components: [row1, row2] });
 
-      // FIXED: Removed filter that restricted clicks to original author
       const collector = reply.createMessageComponentCollector({ time: 300000 });
 
       collector.on('collect', async (interaction) => {
@@ -259,7 +212,6 @@ module.exports = {
         const pointType = action.replace('fame_', '');
         const giverId = interaction.user.id;
 
-        // Check if trying to give points to self
         if (targetId === giverId) {
           return interaction.reply({ 
             content: `You cannot give yourself ${pointType} points!`, 
@@ -267,8 +219,7 @@ module.exports = {
           });
         }
 
-        // Check cooldown
-        const cooldown = checkCooldown(giverId, pointType);
+        const cooldown = checkCooldown(client, giverId, pointType);
         if (cooldown.onCooldown) {
           return interaction.reply({ 
             content: `You can give ${pointType} points again in ${cooldown.timeString}.`, 
@@ -276,15 +227,12 @@ module.exports = {
           });
         }
 
-        // Add point
-        addPoint(targetId, pointType);
-        logFameAction(giverId, targetId, pointType);
+        addPoint(client, targetId, pointType);
+        logFameAction(client, giverId, targetId, pointType);
 
-        // Fetch updated points
-        const updatedPoints = getUserPoints(targetId);
+        const updatedPoints = getUserPoints(client, targetId);
         const targetUser = await client.users.fetch(targetId);
 
-        // Update embed
         const updatedEmbed = createFameEmbed()
           .setTitle(`${targetUser.username}'s Fame Points`)
           .setThumbnail(targetUser.displayAvatarURL({ size: 128 }))
@@ -318,25 +266,17 @@ module.exports = {
       const target = message.mentions.users.first() || 
                      (args[1] ? await client.users.fetch(args[1]).catch(() => null) : null);
 
-      if (!target) {
-        return message.reply('Please mention a user or provide a user ID.');
-      }
+      if (!target) return message.reply('Please mention a user or provide a user ID.');
+      if (target.id === message.author.id) return message.reply('You cannot give yourself reputation points!');
+      if (target.bot) return message.reply('You cannot give reputation points to bots!');
 
-      if (target.id === message.author.id) {
-        return message.reply('You cannot give yourself reputation points!');
-      }
-
-      if (target.bot) {
-        return message.reply('You cannot give reputation points to bots!');
-      }
-
-      const cooldown = checkCooldown(message.author.id, 'reputation');
+      const cooldown = checkCooldown(client, message.author.id, 'reputation');
       if (cooldown.onCooldown) {
         return message.reply(`You can give reputation points again in ${cooldown.timeString}.`);
       }
 
-      addPoint(target.id, 'reputation');
-      logFameAction(message.author.id, target.id, 'reputation');
+      addPoint(client, target.id, 'reputation');
+      logFameAction(client, message.author.id, target.id, 'reputation');
 
       const embed = createFameEmbed()
         .setTitle('Reputation Point Given')
@@ -352,25 +292,17 @@ module.exports = {
       const target = message.mentions.users.first() || 
                      (args[1] ? await client.users.fetch(args[1]).catch(() => null) : null);
 
-      if (!target) {
-        return message.reply('Please mention a user or provide a user ID.');
-      }
+      if (!target) return message.reply('Please mention a user or provide a user ID.');
+      if (target.id === message.author.id) return message.reply('You cannot give yourself stupidity points!');
+      if (target.bot) return message.reply('You cannot give stupidity points to bots!');
 
-      if (target.id === message.author.id) {
-        return message.reply('You cannot give yourself stupidity points!');
-      }
-
-      if (target.bot) {
-        return message.reply('You cannot give stupidity points to bots!');
-      }
-
-      const cooldown = checkCooldown(message.author.id, 'stupidity');
+      const cooldown = checkCooldown(client, message.author.id, 'stupidity');
       if (cooldown.onCooldown) {
         return message.reply(`You can give stupidity points again in ${cooldown.timeString}.`);
       }
 
-      addPoint(target.id, 'stupidity');
-      logFameAction(message.author.id, target.id, 'stupidity');
+      addPoint(client, target.id, 'stupidity');
+      logFameAction(client, message.author.id, target.id, 'stupidity');
 
       const embed = createFameEmbed()
         .setTitle('Stupidity Point Given')
@@ -386,25 +318,17 @@ module.exports = {
       const target = message.mentions.users.first() || 
                      (args[1] ? await client.users.fetch(args[1]).catch(() => null) : null);
 
-      if (!target) {
-        return message.reply('Please mention a user or provide a user ID.');
-      }
+      if (!target) return message.reply('Please mention a user or provide a user ID.');
+      if (target.id === message.author.id) return message.reply('You cannot give yourself black points!');
+      if (target.bot) return message.reply('You cannot give black points to bots!');
 
-      if (target.id === message.author.id) {
-        return message.reply('You cannot give yourself black points!');
-      }
-
-      if (target.bot) {
-        return message.reply('You cannot give black points to bots!');
-      }
-
-      const cooldown = checkCooldown(message.author.id, 'black');
+      const cooldown = checkCooldown(client, message.author.id, 'black');
       if (cooldown.onCooldown) {
         return message.reply(`You can give black points again in ${cooldown.timeString}.`);
       }
 
-      addPoint(target.id, 'black');
-      logFameAction(message.author.id, target.id, 'black');
+      addPoint(client, target.id, 'black');
+      logFameAction(client, message.author.id, target.id, 'black');
 
       const embed = createFameEmbed()
         .setTitle('Black Point Given')
@@ -427,14 +351,12 @@ module.exports = {
           return message.reply('Invalid point type! Use: `rep`, `stupidity`, or `black`');
         }
 
-        if (!target) {
-          return message.reply('Please mention a user or provide a user ID.');
-        }
+        if (!target) return message.reply('Please mention a user or provide a user ID.');
 
         const normalizedType = pointType === 'rep' ? 'reputation' : pointType;
 
         for (let i = 0; i < amount; i++) {
-          addPoint(target.id, normalizedType);
+          addPoint(client, target.id, normalizedType);
         }
 
         const embed = createFameEmbed()
@@ -455,15 +377,13 @@ module.exports = {
           return message.reply('Invalid point type! Use: `rep`, `stupidity`, or `black`');
         }
 
-        if (!target) {
-          return message.reply('Please mention a user or provide a user ID.');
-        }
+        if (!target) return message.reply('Please mention a user or provide a user ID.');
 
         const normalizedType = pointType === 'rep' ? 'reputation' : pointType;
-        const current = getUserPoints(target.id)[normalizedType];
+        const current = getUserPoints(client, target.id)[normalizedType];
         const newAmount = Math.max(0, current - amount);
 
-        fameDB.prepare(`
+        client.fameDB.prepare(`
           UPDATE fame_points
           SET ${normalizedType} = ?
           WHERE user_id = ?
@@ -492,9 +412,9 @@ module.exports = {
           return message.reply({ embeds: [embed] });
         }
 
-        fameDB.prepare('DELETE FROM fame_points').run();
-        fameDB.prepare('DELETE FROM fame_logs').run();
-        fameDB.prepare('DELETE FROM fame_cooldowns').run();
+        client.fameDB.prepare('DELETE FROM fame_points').run();
+        client.fameDB.prepare('DELETE FROM fame_logs').run();
+        client.fameDB.prepare('DELETE FROM fame_cooldowns').run();
 
         const embed = createFameEmbed()
           .setTitle('✅ Fame System Reset')
