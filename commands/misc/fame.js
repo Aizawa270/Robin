@@ -26,11 +26,14 @@ function getUserPoints(client, userId) {
 function addPoint(client, userId, pointType) {
   if (!client.fameDB) return false;
 
+  // Normalize point type
+  const columnName = pointType === 'rep' ? 'reputation' : pointType;
+
   client.fameDB.prepare(`
-    INSERT INTO fame_points (user_id, ${pointType}, last_updated)
+    INSERT INTO fame_points (user_id, ${columnName}, last_updated)
     VALUES (?, 1, ?)
     ON CONFLICT(user_id) DO UPDATE SET
-      ${pointType} = ${pointType} + 1,
+      ${columnName} = ${columnName} + 1,
       last_updated = ?
   `).run(userId, Date.now(), Date.now());
 
