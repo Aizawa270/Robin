@@ -1,5 +1,5 @@
 // commands/misc/wordle.js
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 
 // ============================================================================
 // CONFIGURATION
@@ -9,32 +9,42 @@ const GAME_MODES = {
   classic: {
     name: 'Classic',
     description: 'Standard Wordle rules',
+    emoji: '🎯',
     wordLength: 5,
-    attempts: 6
+    attempts: 6,
+    color: '#3498db'
   },
   hard: {
     name: 'Hard Mode',
-    description: 'Revealed letters must be used in future guesses',
+    description: 'Revealed letters must be used',
+    emoji: '🔥',
     wordLength: 5,
-    attempts: 6
+    attempts: 6,
+    color: '#e74c3c'
   },
   speed: {
     name: 'Speed Mode',
-    description: 'Fewer attempts and time pressure',
+    description: 'Fast-paced challenge',
+    emoji: '⚡',
     wordLength: 5,
-    attempts: 4
+    attempts: 4,
+    color: '#f39c12'
   },
   blind: {
     name: 'Blind Mode',
-    description: 'Only see how many letters are correct',
+    description: 'Only see correct count',
+    emoji: '🔮',
     wordLength: 5,
-    attempts: 6
+    attempts: 6,
+    color: '#9b59b6'
   },
   chaos: {
     name: 'Chaos Mode',
-    description: 'The target word may change mid-game',
+    description: 'Word changes mid-game',
+    emoji: '🌀',
     wordLength: 5,
-    attempts: 6
+    attempts: 6,
+    color: '#e67e22'
   }
 };
 
@@ -91,16 +101,49 @@ const WORD_LIST = [
   'union', 'unity', 'until', 'upper', 'upset', 'urban', 'usage', 'usual', 'valid', 'value',
   'video', 'virus', 'visit', 'vital', 'vocal', 'voice', 'waste', 'watch', 'water', 'wheel',
   'where', 'which', 'while', 'white', 'whole', 'whose', 'woman', 'women', 'world', 'worry',
-  'worse', 'worst', 'worth', 'would', 'wound', 'write', 'wrong', 'wrote', 'young', 'youth'
+  'worse', 'worst', 'worth', 'would', 'wound', 'write', 'wrong', 'wrote', 'young', 'youth',
+  // Extra words
+  'beach', 'bench', 'berry', 'blend', 'blink', 'bonus', 'brake', 'brick', 'bride', 'brush',
+  'burst', 'cabin', 'camel', 'canal', 'comet', 'coral', 'couch', 'coupon', 'crane', 'crate',
+  'creek', 'crisp', 'cuddle', 'daisy', 'delta', 'demon', 'denim', 'diary', 'disco', 'diver',
+  'dragon', 'dwarf', 'eagle', 'eclipse', 'ember', 'evoke', 'exile', 'fable', 'fairy', 'fancy',
+  'feast', 'fence', 'fever', 'flame', 'flask', 'flock', 'flour', 'flute', 'forge', 'fossil',
+  'frost', 'gamer', 'gauge', 'gecko', 'ghost', 'giant', 'glide', 'glove', 'gnome', 'goose',
+  'gorge', 'grape', 'grasp', 'greed', 'grief', 'grill', 'grind', 'groan', 'grove', 'growl',
+  'grunt', 'guild', 'hazel', 'helix', 'hinge', 'hoist', 'honey', 'hover', 'hyena', 'hyper',
+  'inlet', 'ivory', 'jewel', 'joker', 'jolly', 'joust', 'karma', 'kayak', 'knife', 'koala',
+  'label', 'lance', 'laser', 'latch', 'latte', 'ledge', 'leech', 'lemon', 'lilac', 'linen',
+  'lotus', 'lunar', 'mango', 'manor', 'maple', 'marble', 'marsh', 'melon', 'merge', 'metro',
+  'mixer', 'mocha', 'moist', 'molar', 'moose', 'mosaic', 'motto', 'mummy', 'mural', 'nacho',
+  'nanny', 'niche', 'ninja', 'noble', 'nomad', 'notch', 'nudge', 'nylon', 'oasis', 'obese',
+  'ocean', 'olive', 'onion', 'orbit', 'otter', 'oxide', 'panda', 'panic', 'paste', 'patch',
+  'peach', 'pearl', 'pedal', 'penny', 'perch', 'piano', 'plaza', 'plumb', 'plume', 'poker',
+  'polar', 'porch', 'pouch', 'prawn', 'proxy', 'prune', 'pulse', 'pupil', 'quake', 'quart',
+  'quilt', 'quota', 'radar', 'ranch', 'raven', 'razor', 'rebel', 'recon', 'reign', 'relay',
+  'remix', 'retro', 'rhino', 'ridge', 'rival', 'roast', 'robot', 'rocky', 'rogue', 'rouge',
+  'rupee', 'rusty', 'saber', 'salad', 'salon', 'salsa', 'sandy', 'satin', 'sauce', 'sauna',
+  'scarf', 'scoop', 'scout', 'scrap', 'serum', 'shade', 'shale', 'shank', 'shard', 'shark',
+  'shawl', 'shear', 'shine', 'shiny', 'shire', 'shore', 'shred', 'shrub', 'siege', 'sigma',
+  'siren', 'skate', 'skull', 'slash', 'slate', 'sleet', 'slime', 'sloth', 'smash', 'snack',
+  'snake', 'snare', 'sneak', 'sniff', 'snore', 'snout', 'solar', 'sonic', 'soothe', 'spark',
+  'spawn', 'spear', 'spice', 'spike', 'spine', 'spiral', 'spite', 'splat', 'split', 'spook',
+  'spoon', 'spray', 'squad', 'squid', 'stair', 'stale', 'stall', 'stamp', 'stash', 'steak',
+  'sting', 'stink', 'stomp', 'stool', 'stray', 'strip', 'stunt', 'swamp', 'swear', 'sweat',
+  'sweep', 'swift', 'swine', 'swing', 'swirl', 'sword', 'syrup', 'talon', 'tango', 'tarot',
+  'taunt', 'tempo', 'thorn', 'thumb', 'tiger', 'tilde', 'tithe', 'toast', 'token', 'tonic',
+  'torch', 'totem', 'toxic', 'trace', 'tract', 'trait', 'trash', 'tread', 'treat', 'trek',
+  'trench', 'tribe', 'troll', 'truce', 'trunk', 'tulip', 'tumor', 'tunic', 'turbo', 'tutor',
+  'tweak', 'tweet', 'twerp', 'twist', 'ultra', 'umbra', 'uncle', 'unity', 'usher', 'vault',
+  'vegan', 'venom', 'venue', 'verse', 'vigor', 'villa', 'vinyl', 'viper', 'viral', 'vista',
+  'vibes', 'vodka', 'vogue', 'volley', 'voter', 'vowel', 'vroom', 'wafer', 'wager', 'wagon',
+  'waltz', 'wheat', 'whiff', 'whine', 'whisk', 'widow', 'wield', 'witch', 'woken', 'wrath',
+  'wreck', 'wrist', 'yacht', 'yeast', 'yield', 'zebra', 'zesty', 'zones'
 ];
 
-const GUESS_COOLDOWN = 2000; // 2 seconds
 const INACTIVITY_TIMEOUT = 300000; // 5 minutes
 
 // Active sessions
 const activeSessions = new Map();
-const inputCollectors = new Map();
-const lastGuessTime = new Map();
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -114,11 +157,11 @@ function validateGuess(guess, session) {
   const { modeConfig } = session;
 
   if (guess.length !== modeConfig.wordLength) {
-    return { valid: false, reason: `Word must be exactly ${modeConfig.wordLength} letters long.` };
+    return { valid: false, reason: `Must be ${modeConfig.wordLength} letters` };
   }
 
   if (!WORD_LIST.includes(guess)) {
-    return { valid: false, reason: 'Not a valid word in the dictionary.' };
+    return { valid: false, reason: 'Not in word list' };
   }
 
   // Hard mode validation
@@ -127,13 +170,13 @@ function validateGuess(guess, session) {
 
     for (const [pos, letter] of Object.entries(revealedConstraints.positions)) {
       if (guess[pos] !== letter) {
-        return { valid: false, reason: `Letter '${letter.toUpperCase()}' must be in position ${parseInt(pos) + 1}.` };
+        return { valid: false, reason: `${letter.toUpperCase()} must be in position ${parseInt(pos) + 1}` };
       }
     }
 
     for (const letter of revealedConstraints.present) {
       if (!guess.includes(letter)) {
-        return { valid: false, reason: `Guess must contain the letter '${letter.toUpperCase()}'.` };
+        return { valid: false, reason: `Must contain ${letter.toUpperCase()}` };
       }
     }
   }
@@ -157,7 +200,7 @@ function processGuess(guess, session) {
     if (guessLetters[i] === targetLetters[i]) {
       feedback[i] = 'correct';
       letterCounts[guessLetters[i]]--;
-      
+
       if (mode === 'hard') {
         session.revealedConstraints.correct.add(guessLetters[i]);
         session.revealedConstraints.positions[i] = guessLetters[i];
@@ -172,7 +215,7 @@ function processGuess(guess, session) {
     if (targetLetters.includes(guessLetters[i]) && letterCounts[guessLetters[i]] > 0) {
       feedback[i] = 'present';
       letterCounts[guessLetters[i]]--;
-      
+
       if (mode === 'hard') {
         session.revealedConstraints.present.add(guessLetters[i]);
       }
@@ -188,32 +231,20 @@ function processGuess(guess, session) {
   };
 }
 
-function getBlindFeedback(guess, targetWord) {
-  let correctCount = 0;
-  const targetLetters = targetWord.split('');
-  const guessLetters = guess.split('');
-
-  for (let i = 0; i < guessLetters.length; i++) {
-    if (targetLetters.includes(guessLetters[i])) {
-      correctCount++;
-    }
-  }
-
-  return correctCount;
-}
-
 function buildGrid(session) {
   const { guesses, modeConfig, mode, targetWord } = session;
-  const wordLength = modeConfig.wordLength;
   const maxAttempts = modeConfig.attempts;
 
-  let grid = '```\n';
+  let grid = '';
 
   if (mode === 'blind') {
     for (let i = 0; i < guesses.length; i++) {
       const guess = guesses[i];
-      const correctCount = getBlindFeedback(guess.word, targetWord);
-      grid += `${guess.word.toUpperCase()}  [${correctCount}/${wordLength} letters]\n`;
+      let correctCount = 0;
+      for (let j = 0; j < guess.word.length; j++) {
+        if (targetWord.includes(guess.word[j])) correctCount++;
+      }
+      grid += `\`${guess.word.toUpperCase()}\` — ${correctCount}/${modeConfig.wordLength} letters\n`;
     }
   } else {
     for (let i = 0; i < guesses.length; i++) {
@@ -225,26 +256,22 @@ function buildGrid(session) {
         const status = guess.feedback[j];
 
         if (status === 'correct') {
-          row += `■${letter}`;
+          row += `🟩`;
         } else if (status === 'present') {
-          row += `▪${letter}`;
+          row += `🟨`;
         } else {
-          row += `□${letter}`;
+          row += `⬛`;
         }
       }
+      row += ` \`${guess.word.toUpperCase()}\``;
       grid += row + '\n';
     }
   }
 
+  // Add empty rows
   const emptyRows = maxAttempts - guesses.length;
   for (let i = 0; i < emptyRows; i++) {
-    grid += '_'.repeat(wordLength * 2) + '\n';
-  }
-
-  grid += '```';
-
-  if (mode !== 'blind') {
-    grid += '\n`■ = Correct  ▪ = Present  □ = Absent`';
+    grid += '⬜⬜⬜⬜⬜\n';
   }
 
   return grid;
@@ -252,10 +279,11 @@ function buildGrid(session) {
 
 function createEmbed(session, statusText = '', gameEnded = false) {
   const { mode, modeConfig, attempts, guesses } = session;
-  
-  let color = '#3498db';
-  
-  if (!gameEnded) {
+  const modeData = GAME_MODES[mode];
+
+  let color = modeData.color;
+
+  if (!gameEnded && guesses.length > 0) {
     const progress = guesses.length / modeConfig.attempts;
     if (progress < 0.33) {
       color = '#2ecc71';
@@ -268,19 +296,26 @@ function createEmbed(session, statusText = '', gameEnded = false) {
 
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle(`Wordle - ${mode.charAt(0).toUpperCase() + mode.slice(1)} Mode`)
+    .setAuthor({ 
+      name: `${modeData.emoji} ${modeData.name}`,
+      iconURL: 'https://i.imgur.com/AfFp7pu.png'
+    })
+    .setTitle('🎮 Wordle Game')
     .setDescription(buildGrid(session))
     .addFields(
-      { name: 'Attempts Remaining', value: `${attempts}/${modeConfig.attempts}`, inline: true },
-      { name: 'Word Length', value: `${modeConfig.wordLength} letters`, inline: true }
+      { 
+        name: '📊 Progress', 
+        value: `${guesses.length}/${modeConfig.attempts} attempts used`, 
+        inline: true 
+      },
+      { 
+        name: '🎯 Status', 
+        value: statusText || 'Click button to guess!', 
+        inline: true 
+      }
     )
+    .setFooter({ text: `${modeConfig.wordLength} letter word • Wordle` })
     .setTimestamp();
-
-  if (statusText) {
-    embed.setFooter({ text: statusText });
-  } else {
-    embed.setFooter({ text: 'Click Submit Guess to continue' });
-  }
 
   return embed;
 }
@@ -304,7 +339,6 @@ async function startGame(client, message, userId, modeName) {
     startTime: Date.now(),
     lastActivity: Date.now(),
     gameMessage: null,
-    awaitingInput: false,
     chaosChanges: 0,
     revealedConstraints: { correct: new Set(), present: new Set(), positions: {} }
   };
@@ -315,6 +349,7 @@ async function startGame(client, message, userId, modeName) {
       .setCustomId(`wordle_guess:${userId}`)
       .setLabel('Submit Guess')
       .setStyle(ButtonStyle.Primary)
+      .setEmoji('✏️')
   );
 
   const gameMessage = await message.channel.send({ embeds: [embed], components: [row] });
@@ -332,7 +367,7 @@ async function startGame(client, message, userId, modeName) {
   });
 
   collector.on('collect', async (interaction) => {
-    await handleGuessButton(client, interaction, session);
+    await handleGuessModal(client, interaction, session);
   });
 
   collector.on('end', () => {
@@ -342,61 +377,55 @@ async function startGame(client, message, userId, modeName) {
   });
 }
 
-async function handleGuessButton(client, interaction, session) {
-  const userId = session.userId;
+async function handleGuessModal(client, interaction, session) {
+  const modal = new ModalBuilder()
+    .setCustomId(`wordle_modal:${session.userId}`)
+    .setTitle('Enter Your Guess');
 
-  const now = Date.now();
-  const lastGuess = lastGuessTime.get(userId) || 0;
-  if (now - lastGuess < GUESS_COOLDOWN) {
-    const timeLeft = Math.ceil((GUESS_COOLDOWN - (now - lastGuess)) / 1000);
-    return interaction.reply({ content: `Please wait ${timeLeft}s before submitting another guess.`, ephemeral: true });
+  const guessInput = new TextInputBuilder()
+    .setCustomId('guess_input')
+    .setLabel(`Enter a ${session.modeConfig.wordLength}-letter word`)
+    .setStyle(TextInputStyle.Short)
+    .setMinLength(session.modeConfig.wordLength)
+    .setMaxLength(session.modeConfig.wordLength)
+    .setPlaceholder('Type your guess here...')
+    .setRequired(true);
+
+  const row = new ActionRowBuilder().addComponents(guessInput);
+  modal.addComponents(row);
+
+  await interaction.showModal(modal);
+
+  // Wait for modal submission
+  const filter = (i) => i.customId === `wordle_modal:${session.userId}` && i.user.id === session.userId;
+  
+  try {
+    const modalSubmit = await interaction.awaitModalSubmit({ filter, time: 60000 });
+    const guess = modalSubmit.fields.getTextInputValue('guess_input').toLowerCase().trim();
+
+    await processGuessInput(client, session, guess, modalSubmit);
+  } catch (err) {
+    // Modal timeout or error
+    console.error('[Wordle] Modal error:', err);
   }
-
-  if (session.awaitingInput) {
-    return interaction.reply({ content: 'Already waiting for your guess! Type a word in chat.', ephemeral: true });
-  }
-
-  session.awaitingInput = true;
-  await interaction.reply({ content: `Type your ${session.modeConfig.wordLength}-letter guess now:`, ephemeral: true });
-
-  const filter = (m) => m.author.id === userId && m.channel.id === session.channelId;
-  const msgCollector = interaction.channel.createMessageCollector({ filter, max: 1, time: 30000 });
-
-  inputCollectors.set(userId, msgCollector);
-
-  msgCollector.on('collect', async (msg) => {
-    await processGuessInput(client, session, msg);
-  });
-
-  msgCollector.on('end', (collected) => {
-    session.awaitingInput = false;
-    inputCollectors.delete(userId);
-    
-    if (collected.size === 0) {
-      interaction.followUp({ content: 'Guess timeout. Click the button again to try.', ephemeral: true }).catch(() => {});
-    }
-  });
 }
 
-async function processGuessInput(client, session, msg) {
-  const userId = session.userId;
-  const guess = msg.content.toLowerCase().trim();
-
-  await msg.delete().catch(() => {});
-
+async function processGuessInput(client, session, guess, interaction) {
   const validation = validateGuess(guess, session);
-  
+
   if (!validation.valid) {
-    const embed = createEmbed(session, validation.reason);
-    await session.gameMessage.edit({ embeds: [embed] });
+    await interaction.reply({ 
+      content: `❌ ${validation.reason}`, 
+      ephemeral: true 
+    });
     return;
   }
 
-  lastGuessTime.set(userId, Date.now());
-
   if (session.guesses.some(g => g.word === guess)) {
-    const embed = createEmbed(session, 'You already guessed that word!');
-    await session.gameMessage.edit({ embeds: [embed] });
+    await interaction.reply({ 
+      content: '❌ Already guessed that word!', 
+      ephemeral: true 
+    });
     return;
   }
 
@@ -411,10 +440,12 @@ async function processGuessInput(client, session, msg) {
   }, INACTIVITY_TIMEOUT);
 
   if (result.correct) {
+    await interaction.deferUpdate();
     return endGame(client, session, 'win');
   }
 
   if (session.attempts <= 0) {
+    await interaction.deferUpdate();
     return endGame(client, session, 'loss');
   }
 
@@ -422,13 +453,13 @@ async function processGuessInput(client, session, msg) {
   if (session.mode === 'chaos' && session.guesses.length === 3 && session.chaosChanges === 0) {
     session.targetWord = selectWord();
     session.chaosChanges++;
-    const embed = createEmbed(session, '⚠️ CHAOS SHIFT! The word changed...');
-    await session.gameMessage.edit({ embeds: [embed] });
+    const embed = createEmbed(session, '🌀 CHAOS! Word changed');
+    await interaction.update({ embeds: [embed] });
     return;
   }
 
   const embed = createEmbed(session);
-  await session.gameMessage.edit({ embeds: [embed] });
+  await interaction.update({ embeds: [embed] });
 }
 
 async function endGame(client, session, endType) {
@@ -438,36 +469,36 @@ async function endGame(client, session, endType) {
     clearTimeout(session.timeoutId);
   }
 
-  const collector = inputCollectors.get(userId);
-  if (collector) {
-    collector.stop();
-    inputCollectors.delete(userId);
-  }
-
   let statusText = '';
   let color = '#95a5a6';
+  let emoji = '⏱️';
 
   if (endType === 'win') {
-    statusText = `Correct! The word was ${session.targetWord.toUpperCase()}\nGuessed in ${session.guesses.length}/${session.modeConfig.attempts} attempts`;
+    statusText = `✅ Correct! **${session.targetWord.toUpperCase()}**\n🎯 ${session.guesses.length}/${session.modeConfig.attempts} attempts`;
     color = '#2ecc71';
+    emoji = '🎉';
   } else if (endType === 'loss') {
-    statusText = `Game Over! The word was ${session.targetWord.toUpperCase()}`;
+    statusText = `❌ Game Over!\nThe word was **${session.targetWord.toUpperCase()}**`;
     color = '#e74c3c';
+    emoji = '💀';
   } else if (endType === 'timeout') {
-    statusText = `Game timed out. The word was ${session.targetWord.toUpperCase()}`;
+    statusText = `⏱️ Timed out\nWord was **${session.targetWord.toUpperCase()}**`;
     color = '#95a5a6';
+    emoji = '⏰';
   } else if (endType === 'forfeit') {
-    statusText = `Game forfeited. The word was ${session.targetWord.toUpperCase()}`;
+    statusText = `🏳️ Forfeited\nWord was **${session.targetWord.toUpperCase()}**`;
     color = '#95a5a6';
+    emoji = '🏳️';
   }
 
   const embed = createEmbed(session, statusText, true);
   embed.setColor(color);
+  embed.setTitle(`${emoji} Game Ended`);
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`wordle_guess:${userId}`)
-      .setLabel('Game Ended')
+      .setLabel('Game Over')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(true)
   );
@@ -487,7 +518,7 @@ module.exports = {
   category: 'misc',
   usage: 'wordle [mode] | wordle modes | wordle stop',
   aliases: ['wl'],
-  
+
   async execute(client, message, args) {
     const userId = message.author.id;
     const subcommand = args[0]?.toLowerCase();
@@ -496,16 +527,19 @@ module.exports = {
     if (subcommand === 'modes') {
       const embed = new EmbedBuilder()
         .setColor('#3498db')
-        .setTitle('Wordle Game Modes')
-        .setDescription('Available game modes:')
-        .addFields(
-          { name: 'Classic', value: 'Standard Wordle rules\n6 attempts, 5 letters', inline: true },
-          { name: 'Hard', value: 'Revealed letters must be used\n6 attempts, 5 letters', inline: true },
-          { name: 'Speed', value: 'Race against time!\n4 attempts, 5 letters', inline: true },
-          { name: 'Blind', value: 'Only see correct letter count\n6 attempts, 5 letters', inline: true },
-          { name: 'Chaos', value: 'Word changes mid-game!\n6 attempts, 5 letters', inline: true }
-        )
-        .setFooter({ text: 'Usage: wordle [mode]' });
+        .setTitle('🎮 Wordle Game Modes')
+        .setDescription('Choose your challenge!')
+        .setThumbnail('https://i.imgur.com/AfFp7pu.png');
+
+      for (const [key, mode] of Object.entries(GAME_MODES)) {
+        embed.addFields({
+          name: `${mode.emoji} ${mode.name}`,
+          value: `${mode.description}\n\`${mode.attempts}\` attempts • \`${mode.wordLength}\` letters`,
+          inline: true
+        });
+      }
+
+      embed.setFooter({ text: 'Usage: wordle [mode]' });
 
       return message.reply({ embeds: [embed] });
     }
@@ -513,25 +547,38 @@ module.exports = {
     // Stop game
     if (subcommand === 'stop') {
       const session = activeSessions.get(userId);
-      
+
       if (!session) {
-        return message.reply('You don\'t have an active Wordle game.');
+        const embed = new EmbedBuilder()
+          .setColor('#e74c3c')
+          .setDescription('❌ You don\'t have an active game');
+        return message.reply({ embeds: [embed] });
       }
 
       endGame(client, session, 'forfeit');
-      return message.reply('Game forfeited.');
+      
+      const embed = new EmbedBuilder()
+        .setColor('#95a5a6')
+        .setDescription('🏳️ Game forfeited');
+      return message.reply({ embeds: [embed] });
     }
 
     // Check if already playing
     if (activeSessions.has(userId)) {
-      return message.reply('You already have an active Wordle game! Use `wordle stop` to forfeit it.');
+      const embed = new EmbedBuilder()
+        .setColor('#f39c12')
+        .setDescription('⚠️ You already have an active game!\nUse `wordle stop` to forfeit it');
+      return message.reply({ embeds: [embed] });
     }
 
     // Start game
     const mode = subcommand || 'classic';
-    
+
     if (!GAME_MODES[mode]) {
-      return message.reply(`Invalid mode. Use \`wordle modes\` to see available modes.`);
+      const embed = new EmbedBuilder()
+        .setColor('#e74c3c')
+        .setDescription('❌ Invalid mode\nUse `wordle modes` to see available modes');
+      return message.reply({ embeds: [embed] });
     }
 
     await startGame(client, message, userId, mode);
