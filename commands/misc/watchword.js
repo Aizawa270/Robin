@@ -1,28 +1,5 @@
 // commands/misc/watchword.js
 const { EmbedBuilder } = require('discord.js');
-const Database = require('better-sqlite3');
-const path = require('path');
-
-// Initialize database
-let watchwordDB;
-try {
-  const DATA_DIR = path.join(__dirname, '..', '..', 'data');
-  watchwordDB = new Database(path.join(DATA_DIR, 'watchwords.sqlite'));
-  watchwordDB.pragma('journal_mode = WAL');
-  
-  watchwordDB.prepare(`
-    CREATE TABLE IF NOT EXISTS watchwords (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id TEXT NOT NULL,
-      guild_id TEXT NOT NULL,
-      word TEXT NOT NULL,
-      created_at INTEGER DEFAULT (strftime('%s','now')*1000),
-      UNIQUE(user_id, guild_id, word)
-    )
-  `).run();
-} catch (err) {
-  console.error('[Watchword] DB init failed:', err);
-}
 
 module.exports = {
   name: 'watchword',
@@ -32,7 +9,7 @@ module.exports = {
   aliases: ['ww', 'watch'],
   async execute(client, message, args) {
     if (!message.guild) return;
-    if (!watchwordDB) {
+    if (!client.watchwordDB) {
       return message.reply('Watchword system is unavailable.');
     }
 
@@ -63,12 +40,9 @@ module.exports = {
 
     // ADD WATCHWORD
     if (subcommand === 'add') {
-      // Delete user's command message for privacy
       try {
         await message.delete();
-      } catch (e) {
-        // Ignore if can't delete
-      }
+      } catch (e) {}
 
       const word = args.slice(1).join(' ').toLowerCase().trim();
 
@@ -94,8 +68,7 @@ module.exports = {
         return;
       }
 
-      // Check word limit (max 10 per user per server)
-      const count = watchwordDB.prepare(
+      const count = client.watchwordDB.prepare(
         'SELECT COUNT(*) as count FROM watchwords WHERE user_id = ? AND guild_id = ?'
       ).get(message.author.id, message.guild.id)?.count || 0;
 
@@ -110,9 +83,8 @@ module.exports = {
         return;
       }
 
-      // Add word
       try {
-        watchwordDB.prepare(
+        client.watchwordDB.prepare(
           'INSERT OR IGNORE INTO watchwords (user_id, guild_id, word) VALUES (?, ?, ?)'
         ).run(message.author.id, message.guild.id, word);
 
@@ -146,12 +118,9 @@ module.exports = {
 
     // REMOVE WATCHWORD
     if (subcommand === 'remove') {
-      // Delete user's command message for privacy
       try {
         await message.delete();
-      } catch (e) {
-        // Ignore if can't delete
-      }
+      } catch (e) {}
 
       const word = args.slice(1).join(' ').toLowerCase().trim();
 
@@ -166,7 +135,7 @@ module.exports = {
         return;
       }
 
-      const result = watchwordDB.prepare(
+      const result = client.watchwordDB.prepare(
         'DELETE FROM watchwords WHERE user_id = ? AND guild_id = ? AND word = ?'
       ).run(message.author.id, message.guild.id, word);
 
@@ -193,7 +162,7 @@ module.exports = {
 
     // LIST WATCHWORDS
     if (subcommand === 'list') {
-      const words = watchwordDB.prepare(
+      const words = client.watchwordDB.prepare(
         'SELECT word FROM watchwords WHERE user_id = ? AND guild_id = ? ORDER BY created_at DESC'
       ).all(message.author.id, message.guild.id);
 
@@ -228,28 +197,23 @@ module.exports = {
       await message.channel.send({ embeds: [embed] });
       return;
     }
-  }
-};
+  },
 
-// Message listener to check for watchwords
-if (watchwordDB) {
-  module.exports.checkWatchwords = async (client, message) => {
+  // Message listener to check for watchwords
+  checkWatchwords: async (client, message) => {
     if (!message.guild || message.author.bot) return;
-    if (!watchwordDB) return;
+    if (!client.watchwordDB) return;
 
     const content = message.content.toLowerCase();
     if (!content) return;
 
-    // Get all watchwords for this guild
-    const watchwords = watchwordDB.prepare(
+    const watchwords = client.watchwordDB.prepare(
       'SELECT user_id, word FROM watchwords WHERE guild_id = ?'
     ).all(message.guild.id);
 
     for (const { user_id, word } of watchwords) {
-      // Skip if it's the user's own message
       if (user_id === message.author.id) continue;
 
-      // Check if word appears in message (whole word match)
       const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
       if (regex.test(message.content)) {
         try {
@@ -272,13 +236,11 @@ if (watchwordDB) {
             .setTimestamp()
             .setFooter({ text: `Server: ${message.guild.name}` });
 
-          await user.send({ embeds: [embed] }).catch(() => {
-            // User has DMs disabled or blocked bot
-          });
+          await user.send({ embeds: [embed] }).catch(() => {});
         } catch (err) {
           console.error('[Watchword] DM send error:', err);
         }
       }
     }
-  };
-}
+  }
+};
