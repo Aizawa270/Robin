@@ -47,20 +47,17 @@ try {
   console.error('[Fame] DB init failed:', err);
 }
 
-const DARK_GRAY = '#2b2d31'; // Discord-style dark gray
-const COOLDOWN_TIME = 43200000; // 12 hours in milliseconds
+const DARK_GRAY = '#2b2d31';
+const COOLDOWN_TIME = 43200000; // 12 hours
 const ADMIN_ID = '852839588689870879';
 
-// Helper to create embed that bypasses universal helper
 function createFameEmbed() {
   const embed = new EmbedBuilder();
   embed.setColor(DARK_GRAY);
-  // Add a flag to prevent universal helper from changing color
   embed._bypassUniversalHelper = true;
   return embed;
 }
 
-// Helper to get current time string
 function getCurrentTime() {
   const now = new Date();
   return now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -94,13 +91,11 @@ function logFameAction(giverId, receiverId, pointType) {
   `).run(giverId, receiverId, pointType, Date.now());
 }
 
-// GLOBAL COOLDOWN CHECK - One cooldown per point type (not per target user)
 function checkCooldown(giverId, pointType) {
   if (!fameDB) return { onCooldown: false };
 
   const now = Date.now();
   
-  // Check database for existing cooldown for this point type
   const row = fameDB.prepare(`
     SELECT last_given FROM fame_cooldowns
     WHERE giver_id = ? AND point_type = ?
@@ -116,7 +111,6 @@ function checkCooldown(giverId, pointType) {
     }
   }
 
-  // Update cooldown in database
   fameDB.prepare(`
     INSERT INTO fame_cooldowns (giver_id, point_type, last_given)
     VALUES (?, ?, ?)
@@ -141,12 +135,11 @@ module.exports = {
 
     const subcommand = args[0]?.toLowerCase();
 
-    // NO SUBCOMMAND - DO NOTHING (don't show help)
     if (!subcommand) {
       return;
     }
 
-    // HELP COMMAND
+    // HELP
     if (subcommand === 'help') {
       const embed = createFameEmbed()
         .setTitle('Fame System - Commands')
@@ -234,53 +227,48 @@ module.exports = {
         )
         .setFooter({ text: `Vynora • ${getCurrentTime()}` });
 
-      // Don't show buttons if target is a bot
       if (target.bot) {
         return message.reply({ embeds: [embed] });
       }
 
       const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`fame_rep:${target.id}:${message.author.id}`)
+          .setCustomId(`fame_rep:${target.id}`)
           .setLabel('Give Reputation')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId(`fame_stupidity:${target.id}:${message.author.id}`)
+          .setCustomId(`fame_stupidity:${target.id}`)
           .setLabel('Give Stupidity')
           .setStyle(ButtonStyle.Danger)
       );
 
       const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`fame_black:${target.id}:${message.author.id}`)
+          .setCustomId(`fame_black:${target.id}`)
           .setLabel('Give Black Point')
           .setStyle(ButtonStyle.Secondary)
       );
 
       const reply = await message.reply({ embeds: [embed], components: [row1, row2] });
 
-      // Button collector
-      const collector = reply.createMessageComponentCollector({ time: 300000 }); // 5 minutes
+      // FIXED: Removed filter that restricted clicks to original author
+      const collector = reply.createMessageComponentCollector({ time: 300000 });
 
       collector.on('collect', async (interaction) => {
-        // Check if the person clicking is the original author
-        if (interaction.user.id !== message.author.id) {
-          return interaction.reply({ content: 'These buttons are not for you!', ephemeral: true });
-        }
-
-        const [action, targetId, authorId] = interaction.customId.split(':');
+        const [action, targetId] = interaction.customId.split(':');
         const pointType = action.replace('fame_', '');
+        const giverId = interaction.user.id;
 
         // Check if trying to give points to self
-        if (targetId === authorId) {
+        if (targetId === giverId) {
           return interaction.reply({ 
             content: `You cannot give yourself ${pointType} points!`, 
             ephemeral: true 
           });
         }
 
-        // Check GLOBAL cooldown (not per-user)
-        const cooldown = checkCooldown(authorId, pointType);
+        // Check cooldown
+        const cooldown = checkCooldown(giverId, pointType);
         if (cooldown.onCooldown) {
           return interaction.reply({ 
             content: `You can give ${pointType} points again in ${cooldown.timeString}.`, 
@@ -290,7 +278,7 @@ module.exports = {
 
         // Add point
         addPoint(targetId, pointType);
-        logFameAction(authorId, targetId, pointType);
+        logFameAction(giverId, targetId, pointType);
 
         // Fetch updated points
         const updatedPoints = getUserPoints(targetId);
@@ -342,7 +330,6 @@ module.exports = {
         return message.reply('You cannot give reputation points to bots!');
       }
 
-      // Check GLOBAL cooldown
       const cooldown = checkCooldown(message.author.id, 'reputation');
       if (cooldown.onCooldown) {
         return message.reply(`You can give reputation points again in ${cooldown.timeString}.`);
@@ -377,7 +364,6 @@ module.exports = {
         return message.reply('You cannot give stupidity points to bots!');
       }
 
-      // Check GLOBAL cooldown
       const cooldown = checkCooldown(message.author.id, 'stupidity');
       if (cooldown.onCooldown) {
         return message.reply(`You can give stupidity points again in ${cooldown.timeString}.`);
@@ -412,7 +398,6 @@ module.exports = {
         return message.reply('You cannot give black points to bots!');
       }
 
-      // Check GLOBAL cooldown
       const cooldown = checkCooldown(message.author.id, 'black');
       if (cooldown.onCooldown) {
         return message.reply(`You can give black points again in ${cooldown.timeString}.`);
@@ -432,7 +417,6 @@ module.exports = {
 
     // ADMIN COMMANDS
     if (message.author.id === ADMIN_ID) {
-      // ADD POINTS
       if (subcommand === 'add') {
         const pointType = args[1]?.toLowerCase();
         const target = message.mentions.users.first() || 
@@ -461,7 +445,6 @@ module.exports = {
         return message.reply({ embeds: [embed] });
       }
 
-      // REMOVE POINTS
       if (subcommand === 'remove') {
         const pointType = args[1]?.toLowerCase();
         const target = message.mentions.users.first() || 
@@ -494,7 +477,6 @@ module.exports = {
         return message.reply({ embeds: [embed] });
       }
 
-      // RESET ALL
       if (subcommand === 'reset') {
         const confirmation = args[1]?.toLowerCase();
 
