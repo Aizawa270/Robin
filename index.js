@@ -61,6 +61,58 @@ prefixDB.pragma('journal_mode = WAL');
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
+// ===== FAME DATABASE =====
+const fameDB = new Database(path.join(DATA_DIR, 'fame.sqlite'));
+fameDB.pragma('journal_mode = WAL');
+fameDB.prepare(`
+  CREATE TABLE IF NOT EXISTS fame_points (
+    user_id TEXT PRIMARY KEY,
+    reputation INTEGER DEFAULT 0,
+    stupidity INTEGER DEFAULT 0,
+    black INTEGER DEFAULT 0,
+    last_updated INTEGER DEFAULT (strftime('%s','now')*1000)
+  )
+`).run();
+
+fameDB.prepare(`
+  CREATE TABLE IF NOT EXISTS fame_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    giver_id TEXT NOT NULL,
+    receiver_id TEXT NOT NULL,
+    point_type TEXT NOT NULL,
+    timestamp INTEGER DEFAULT (strftime('%s','now')*1000)
+  )
+`).run();
+
+fameDB.prepare(`
+  CREATE TABLE IF NOT EXISTS fame_cooldowns (
+    giver_id TEXT NOT NULL,
+    point_type TEXT NOT NULL,
+    last_given INTEGER NOT NULL,
+    PRIMARY KEY (giver_id, point_type)
+  )
+`).run();
+
+client.fameDB = fameDB;
+console.log('[Fame] Database initialized');
+
+// ===== WATCHWORD DATABASE =====
+const watchwordDB = new Database(path.join(DATA_DIR, 'watchwords.sqlite'));
+watchwordDB.pragma('journal_mode = WAL');
+watchwordDB.prepare(`
+  CREATE TABLE IF NOT EXISTS watchwords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    word TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s','now')*1000),
+    UNIQUE(user_id, guild_id, word)
+  )
+`).run();
+
+client.watchwordDB = watchwordDB;
+console.log('[Watchword] Database initialized');
+
 // ===== AUTOMOD + MODSTATS + MODLOGS =====
 const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
 automodDB.pragma('journal_mode = WAL');
@@ -162,7 +214,6 @@ const spyDB = new Database(path.join(DATA_DIR, 'spy.sqlite'));
 spyDB.pragma('journal_mode = WAL');
 spyDB.pragma('synchronous = NORMAL');
 
-// tables (id autoinc)
 spyDB.prepare(`
   CREATE TABLE IF NOT EXISTS spy_lobbies (
     lobby_id INTEGER PRIMARY KEY AUTOINCREMENT,
