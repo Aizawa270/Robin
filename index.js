@@ -287,22 +287,6 @@ client.once('ready', async () => {
     console.error('[Blacklist] Cache failed:', e);
   }
 
-  // 🔥 INIT MODLOGS SYSTEM
-  try {
-    const modlogs = require('./handlers/modlogsHandler');
-    if (modlogs?.initModlogs) {
-      modlogs.initModlogs(client);
-    } else {
-      console.log('[Modlogs] Handler found but initModlogs function missing');
-    }
-  } catch (e) {
-    if (e.code === 'MODULE_NOT_FOUND') {
-      console.log('[Modlogs] Handler not found - skipping (place modlogsHandler.js in handlers/ folder)');
-    } else {
-      console.error('[Modlogs] Init failed:', e);
-    }
-  }
-
   // Automod init
   try {
     const automod = require('./handlers/automodHandler');
