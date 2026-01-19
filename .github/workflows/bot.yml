@@ -26,16 +26,18 @@ jobs:
           fetch-depth: 0
 
       # -----------------------
-      # RESTORE CACHE (DATA + NODE_MODULES)
+      # RESTORE DATA FROM GIT
       # -----------------------
-      - name: Restore data cache
-        uses: actions/cache@v4
-        with:
-          path: data
-          key: ${{ runner.os }}-discord-bot-data-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-discord-bot-data-
+      - name: Pull latest data from git
+        run: |
+          git pull origin main || git pull origin master || echo "No remote changes"
 
+      - name: Ensure data directory exists
+        run: mkdir -p data
+
+      # -----------------------
+      # NODE MODULES CACHE (separate from data)
+      # -----------------------
       - name: Restore node_modules cache
         uses: actions/cache@v4
         with:
@@ -83,15 +85,36 @@ jobs:
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
           REMOVEBG_API_KEY: ${{ secrets.REMOVEBG_API_KEY }}
 
-      - name: Persist databases
+      # -----------------------
+      # PERSIST DATA TO GIT
+      # -----------------------
+      - name: Persist databases to git
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # add all sqlite files inside data/ to be safe (automod.sqlite, giveaways.sqlite, prefixes.sqlite etc)
-          git add data/*.sqlite data/*.db || true
-          git add data || true
-          git commit -m "chore: persist sqlite DB" || echo "No DB changes to commit"
-          git push || echo "Push failed - check permissions"
+          
+          # Add all database files
+          git add data/*.sqlite data/*.db data/*.sqlite-wal data/*.sqlite-shm || true
+          git add data/ || true
+          
+          # Commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No database changes to commit"
+          else
+            git commit -m "chore: persist sqlite databases [skip ci]"
+            
+            # Retry push up to 3 times in case of conflicts
+            for i in 1 2 3; do
+              if git push; then
+                echo "Successfully pushed database changes"
+                break
+              else
+                echo "Push failed, attempt $i/3"
+                git pull --rebase origin main || git pull --rebase origin master || true
+                sleep 2
+              fi
+            done
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
