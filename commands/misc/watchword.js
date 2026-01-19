@@ -1,5 +1,14 @@
 // commands/misc/watchword.js
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+
+// Channels where watchwords won't trigger
+const EXCLUDED_CHANNELS = [
+  '1441369997527089174',
+  '1431709420819189760',
+  '1441476422857261199',
+  '1443923226341281793',
+  '1454173375139418284'
+];
 
 module.exports = {
   name: 'watchword',
@@ -14,6 +23,8 @@ module.exports = {
     }
 
     const subcommand = args[0]?.toLowerCase();
+    const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
+    const maxWords = isAdmin ? Infinity : 5;
 
     if (!subcommand || !['add', 'remove', 'list'].includes(subcommand)) {
       const embed = new EmbedBuilder()
@@ -31,7 +42,7 @@ module.exports = {
           '**Privacy:**\n' +
           'Add/remove commands are deleted automatically for privacy.'
         )
-        .setFooter({ text: 'Only you can see this • Max 10 words per server' });
+        .setFooter({ text: `Only you can see this • Max ${isAdmin ? 'unlimited' : '5'} words` });
 
       const reply = await message.channel.send({ embeds: [embed] });
       setTimeout(() => reply.delete().catch(() => {}), 15000);
@@ -72,10 +83,14 @@ module.exports = {
         'SELECT COUNT(*) as count FROM watchwords WHERE user_id = ? AND guild_id = ?'
       ).get(message.author.id, message.guild.id)?.count || 0;
 
-      if (count >= 10) {
+      if (count >= maxWords) {
         const embed = new EmbedBuilder()
           .setColor('#ff0000')
-          .setDescription('❌ You can only have up to **10 watchwords** per server!\n\nUse `!watchword list` to see your current words.')
+          .setDescription(
+            isAdmin 
+              ? '❌ An error occurred. Please try again.'
+              : `❌ You can only have up to **5 watchwords**!\n\nUse \`!watchword list\` to see your current words.`
+          )
           .setFooter({ text: 'Only you can see this' });
 
         const reply = await message.channel.send({ embeds: [embed] });
@@ -192,7 +207,11 @@ module.exports = {
           `• \`!watchword add <word>\` - Add a word\n` +
           `• \`!watchword remove <word>\` - Remove a word`
         )
-        .setFooter({ text: `Only you can see this • ${words.length}/10 watchwords used` });
+        .setFooter({ 
+          text: isAdmin 
+            ? `Only you can see this • ${words.length} watchwords used` 
+            : `Only you can see this • ${words.length}/5 watchwords used` 
+        });
 
       await message.channel.send({ embeds: [embed] });
       return;
@@ -203,6 +222,9 @@ module.exports = {
   checkWatchwords: async (client, message) => {
     if (!message.guild || message.author.bot) return;
     if (!client.watchwordDB) return;
+
+    // Skip excluded channels
+    if (EXCLUDED_CHANNELS.includes(message.channel.id)) return;
 
     const content = message.content.toLowerCase();
     if (!content) return;
