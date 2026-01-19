@@ -2,6 +2,25 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { logModAction } = require('../../handlers/modstatsHelper');
 
+// Role hierarchy configuration
+const ROLE_HIERARCHY = {
+  TRIAL_MOD: ['1431651114008318002', '1432014943900799097'],
+  MOD: ['1431650911784144967', '1432015132346810499'],
+  ADMIN: ['1431650662076256326', '1432015058959073291']
+};
+
+// For unban, we can't check target roles since they're not in the server
+// We'll allow unbans for all non-admins, but you can modify this if needed
+function canUnban(moderator) {
+  const modRoles = moderator.roles.cache;
+  
+  // Only admins can unban (optional - remove this if you want mods to unban too)
+  // const isAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => modRoles.has(roleId));
+  // if (!isAdmin) return false;
+  
+  return true; // Allow anyone with ban permissions to unban
+}
+
 module.exports = {
   name: 'unban',
   description: 'Unban a user by ID or mention.',
@@ -13,6 +32,11 @@ module.exports = {
     if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) {
       return message.reply('You need the **Ban Members** permission.');
     }
+
+    // 🔹 Optional: Restrict unbanning to specific roles
+    // if (!canUnban(message.member)) {
+    //   return message.reply('You do not have permission to unban users.');
+    // }
 
     const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
     if (!args.length) {
