@@ -1,5 +1,40 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
+// Role hierarchy configuration
+const ROLE_HIERARCHY = {
+  TRIAL_MOD: ['1431651114008318002', '1432014943900799097'],
+  MOD: ['1431650911784144967', '1432015132346810499'],
+  ADMIN: ['1431650662076256326', '1432015058959073291']
+};
+
+function canModerateTarget(moderator, target) {
+  if (!target) return false; // Can't unmute someone not in server
+
+  const modRoles = moderator.roles.cache;
+  const targetRoles = target.roles.cache;
+
+  // Check if moderator is trial mod
+  const isTrialMod = ROLE_HIERARCHY.TRIAL_MOD.some(roleId => modRoles.has(roleId));
+  
+  // Check if target is mod or admin
+  const targetIsMod = ROLE_HIERARCHY.MOD.some(roleId => targetRoles.has(roleId));
+  const targetIsAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => targetRoles.has(roleId));
+
+  if (isTrialMod && (targetIsMod || targetIsAdmin)) {
+    return false; // Trial mods can't moderate mods or admins
+  }
+
+  // Check if moderator is mod (but not admin)
+  const isMod = ROLE_HIERARCHY.MOD.some(roleId => modRoles.has(roleId));
+  const isAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => modRoles.has(roleId));
+
+  if (isMod && !isAdmin && targetIsAdmin) {
+    return false; // Mods can't moderate admins
+  }
+
+  return true;
+}
+
 module.exports = {
   name: 'unmute',
   description: 'Remove timeout from a user.',
@@ -39,6 +74,11 @@ module.exports = {
 
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) return message.reply('User not in this server.');
+
+    // 🔹 ROLE HIERARCHY CHECK
+    if (!canModerateTarget(message.member, member)) {
+      return message.reply('You cannot unmute this user due to role hierarchy restrictions.');
+    }
 
     if (member.permissions.has(PermissionFlagsBits.Administrator))
       return message.reply('Cannot unmute an administrator.');
