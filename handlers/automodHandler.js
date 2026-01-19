@@ -109,26 +109,30 @@ function getWarnCount(client, guildId, userId) {
   return client.automodDB.prepare(`SELECT count FROM automod_warn_counts WHERE guild_id = ? AND user_id = ?`).get(guildId, userId)?.count || 0;
 }
 
-// ---------- NEW: helper to build regex patterns that match only whole words/phrases ----------
+// ---------- FIXED: helper to build regex patterns that match only whole words/phrases ----------
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
  * Build a regex that matches the blacklisted phrase as a standalone word/phrase.
- * - Splits the phrase on whitespace and joins with \s+ so "child po" matches with any whitespace
- * - Uses lookarounds (?<!\w) and (?!\w) so it won't match inside other words (prevents "nger" matching "dangerous")
+ * - Uses \b word boundaries to ensure it's not part of a larger word
+ * - For multi-word phrases, splits on whitespace and joins with \s+ 
+ * - Example: "niger" won't match "nigeria" because of word boundaries
  * - Flags: i (case-insensitive)
  */
 function buildWholeWordRegex(phrase) {
-  const tokens = String(phrase).trim().toLowerCase().split(/\s+/).map(escapeRegex).join('\\s+');
-  // (?<!\w) and (?!\w) ensure not part of a larger word
-  try {
-    return new RegExp(`(?<!\\\\w)${tokens}(?!\\\\w)`, 'i'); // note: double-escape because we'll use string RegExp
-  } catch (e) {
-    // fallback to a safer pattern using boundaries if RegExp constructor fails
-    return new RegExp(`\\b${tokens}\\b`, 'i');
-  }
+  const trimmed = String(phrase).trim().toLowerCase();
+  
+  // Split on whitespace and escape each token
+  const tokens = trimmed.split(/\s+/).map(escapeRegex);
+  
+  // Join with \s+ to allow any whitespace between words
+  const pattern = tokens.join('\\s+');
+  
+  // Use word boundaries \b to ensure it's a complete word
+  // This prevents "niger" from matching inside "nigeria"
+  return new RegExp(`\\b${pattern}\\b`, 'i');
 }
 
 // build alert embed
