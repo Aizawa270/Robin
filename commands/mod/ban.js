@@ -1,6 +1,40 @@
-// commands/mod/ban.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { logModAction } = require('../../handlers/modstatsHelper');
+
+// Role hierarchy configuration
+const ROLE_HIERARCHY = {
+  TRIAL_MOD: ['1431651114008318002', '1432014943900799097'],
+  MOD: ['1431650911784144967', '1432015132346810499'],
+  ADMIN: ['1431650662076256326', '1432015058959073291']
+};
+
+function canModerateTarget(moderator, target) {
+  if (!target) return true; // User not in server, allow ban
+
+  const modRoles = moderator.roles.cache;
+  const targetRoles = target.roles.cache;
+
+  // Check if moderator is trial mod
+  const isTrialMod = ROLE_HIERARCHY.TRIAL_MOD.some(roleId => modRoles.has(roleId));
+  
+  // Check if target is mod or admin
+  const targetIsMod = ROLE_HIERARCHY.MOD.some(roleId => targetRoles.has(roleId));
+  const targetIsAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => targetRoles.has(roleId));
+
+  if (isTrialMod && (targetIsMod || targetIsAdmin)) {
+    return false; // Trial mods can't moderate mods or admins
+  }
+
+  // Check if moderator is mod (but not admin)
+  const isMod = ROLE_HIERARCHY.MOD.some(roleId => modRoles.has(roleId));
+  const isAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => modRoles.has(roleId));
+
+  if (isMod && !isAdmin && targetIsAdmin) {
+    return false; // Mods can't moderate admins
+  }
+
+  return true;
+}
 
 module.exports = {
   name: 'ban',
@@ -49,6 +83,11 @@ module.exports = {
 
     if (targetUser.id === client.user.id)
       return message.reply('I cannot ban myself.');
+
+    // 🔹 ROLE HIERARCHY CHECK
+    if (!canModerateTarget(message.member, targetMember)) {
+      return message.reply('You cannot ban this user due to role hierarchy restrictions.');
+    }
 
     if (targetMember && targetMember.roles.highest.position >= message.member.roles.highest.position) {
       return message.reply('You cannot ban someone with equal or higher role.');
