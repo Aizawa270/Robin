@@ -444,6 +444,51 @@ client.on('messageReactionAdd', (reaction, user) => {
 // ===== LOAD COMMANDS =====
 loadCommands(client);
 
+// ===== GRACEFUL SHUTDOWN =====
+process.on('SIGINT', () => {
+  console.log('[Shutdown] Closing databases...');
+  
+  try {
+    if (prefixlessDB) prefixlessDB.close();
+    if (quarantineDB) quarantineDB.close();
+    if (giveawayDB) giveawayDB.close();
+    if (prefixDB) prefixDB.close();
+    if (fameDB) fameDB.close();
+    if (watchwordDB) watchwordDB.close();
+    if (automodDB) automodDB.close();
+    if (battleDB) battleDB.close();
+    if (spyDB) spyDB.close();
+    
+    console.log('[Shutdown] Databases closed successfully');
+  } catch (err) {
+    console.error('[Shutdown] Error closing databases:', err);
+  }
+  
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('[Shutdown] Closing databases...');
+  
+  try {
+    if (prefixlessDB) prefixlessDB.close();
+    if (quarantineDB) quarantineDB.close();
+    if (giveawayDB) giveawayDB.close();
+    if (prefixDB) prefixDB.close();
+    if (fameDB) fameDB.close();
+    if (watchwordDB) watchwordDB.close();
+    if (automodDB) automodDB.close();
+    if (battleDB) battleDB.close();
+    if (spyDB) spyDB.close();
+    
+    console.log('[Shutdown] Databases closed successfully');
+  } catch (err) {
+    console.error('[Shutdown] Error closing databases:', err);
+  }
+  
+  process.exit(0);
+});
+
 // ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
 
