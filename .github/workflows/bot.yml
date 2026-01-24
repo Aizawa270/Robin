@@ -3,7 +3,6 @@ name: Discord Bot
 on:
   workflow_dispatch:
   schedule:
-    # Every 6 hours at minute 0
     - cron: '0 */6 * * *'
 
 permissions:
@@ -11,7 +10,7 @@ permissions:
 
 concurrency:
   group: discord-bot
-  cancel-in-progress: false  # we handle stopping manually
+  cancel-in-progress: false
 
 jobs:
   run-bot:
@@ -25,9 +24,6 @@ jobs:
           persist-credentials: true
           fetch-depth: 0
 
-      # -----------------------
-      # RESTORE DATA FROM GIT
-      # -----------------------
       - name: Pull latest data from git
         run: |
           git pull origin main || git pull origin master || echo "No remote changes"
@@ -35,9 +31,6 @@ jobs:
       - name: Ensure data directory exists
         run: mkdir -p data
 
-      # -----------------------
-      # NODE MODULES CACHE (separate from data)
-      # -----------------------
       - name: Restore node_modules cache
         uses: actions/cache@v4
         with:
@@ -51,7 +44,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install system dependencies (for native builds)
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 g++ make libsqlite3-dev pkg-config
@@ -77,44 +70,77 @@ jobs:
           echo "WEATHERAPI_KEY=${{ secrets.WEATHERAPI_KEY }}" >> .env
           echo "REMOVEBG_API_KEY=${{ secrets.REMOVEBG_API_KEY }}" >> .env
 
-      - name: Start bot
-        run: node index.js
+      - name: Start bot with periodic database backup
+        timeout-minutes: 355
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          node index.js &
+          BOT_PID=$!
+          echo "Bot started with PID: $BOT_PID"
+          
+          save_databases() {
+            echo "Saving databases..."
+            git add data/*.sqlite data/*.db data/*.sqlite-wal data/*.sqlite-shm 2>/dev/null || true
+            git add data/ 2>/dev/null || true
+            
+            if ! git diff --staged --quiet 2>/dev/null; then
+              git commit -m "chore: auto-save databases [skip ci]" 2>/dev/null || true
+              
+              for i in 1 2 3; do
+                if git push 2>/dev/null; then
+                  echo "Databases saved successfully"
+                  break
+                else
+                  echo "Push failed, retrying ($i/3)..."
+                  git pull --rebase origin main 2>/dev/null || git pull --rebase origin master 2>/dev/null || true
+                  sleep 2
+                fi
+              done
+            else
+              echo "No database changes to save"
+            fi
+          }
+          
+          COUNTER=0
+          while kill -0 $BOT_PID 2>/dev/null; do
+            sleep 300
+            COUNTER=$((COUNTER + 1))
+            
+            if [ $((COUNTER % 6)) -eq 0 ]; then
+              save_databases
+            fi
+            
+            if [ $COUNTER -ge 70 ]; then
+              echo "Approaching timeout, saving and stopping bot..."
+              save_databases
+              kill $BOT_PID
+              break
+            fi
+          done
+          
+          echo "Bot stopped, performing final save..."
+          save_databases
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
           REMOVEBG_API_KEY: ${{ secrets.REMOVEBG_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # -----------------------
-      # PERSIST DATA TO GIT
-      # -----------------------
-      - name: Persist databases to git
+      - name: Final database backup
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Add all database files
           git add data/*.sqlite data/*.db data/*.sqlite-wal data/*.sqlite-shm || true
           git add data/ || true
           
-          # Commit if there are changes
-          if git diff --staged --quiet; then
-            echo "No database changes to commit"
-          else
-            git commit -m "chore: persist sqlite databases [skip ci]"
-            
-            # Retry push up to 3 times in case of conflicts
-            for i in 1 2 3; do
-              if git push; then
-                echo "Successfully pushed database changes"
-                break
-              else
-                echo "Push failed, attempt $i/3"
-                git pull --rebase origin main || git pull --rebase origin master || true
-                sleep 2
-              fi
-            done
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: final database backup [skip ci]" || true
+            git push || echo "Final push failed, but periodic saves should have worked"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
