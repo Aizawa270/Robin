@@ -4,6 +4,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('
 const DARK_GRAY = '#2b2d31';
 const COOLDOWN_TIME = 43200000; // 12 hours
 const ADMIN_ID = '852839588689870879';
+const AUTHORIZED_ROLES = ['1447894643277561856', '1431646610752012420'];
 
 function createFameEmbed() {
   const embed = new EmbedBuilder();
@@ -76,6 +77,10 @@ function checkCooldown(client, giverId, pointType) {
   `).run(giverId, pointType, now, now);
 
   return { onCooldown: false };
+}
+
+function hasAuthorizedRole(member) {
+  return AUTHORIZED_ROLES.some(roleId => member.roles.cache.has(roleId));
 }
 
 module.exports = {
@@ -248,7 +253,6 @@ module.exports = {
 
         await reply.edit({ embeds: [updatedEmbed], components: [row1, row2] });
 
-        // FIX: Added 'rep' key and fallback to prevent undefined colors
         const colors = { rep: '#00ff00', reputation: '#00ff00', stupidity: '#ff6b6b', black: '#2b2d31' };
         const responseEmbed = new EmbedBuilder()
           .setDescription(`Successfully gave ${targetUser.username} a ${pointType} point!`)
@@ -343,8 +347,8 @@ module.exports = {
       return message.reply({ embeds: [embed] });
     }
 
-    // ADMIN COMMANDS
-    if (message.author.id === ADMIN_ID) {
+    // ADMIN COMMANDS (ADD/REMOVE)
+    if (message.author.id === ADMIN_ID || hasAuthorizedRole(message.member)) {
       if (subcommand === 'add') {
         const pointType = args[1]?.toLowerCase();
         const target = message.mentions.users.first() || 
@@ -400,7 +404,10 @@ module.exports = {
 
         return message.reply({ embeds: [embed] });
       }
+    }
 
+    // RESET COMMAND (ADMIN ONLY - NOT FOR AUTHORIZED ROLES)
+    if (message.author.id === ADMIN_ID) {
       if (subcommand === 'reset') {
         const confirmation = args[1]?.toLowerCase();
 
