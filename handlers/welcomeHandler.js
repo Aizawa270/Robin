@@ -17,10 +17,21 @@ const CHANNELS = {
 const WELCOME_IMAGE = 'https://cdn.discordapp.com/attachments/1441397646462812182/1449707001830445218/1219b96e46828c443fe606b661d065d7.png';
 const ANNOUNCEMENT_IMAGE = 'https://cdn.discordapp.com/attachments/1441397646462812182/1449719860501155912/20251214_170753.jpg';
 
+function getOrdinalSuffix(num) {
+  const j = num % 10;
+  const k = num % 100;
+  if (j === 1 && k !== 11) return num + 'st';
+  if (j === 2 && k !== 12) return num + 'nd';
+  if (j === 3 && k !== 13) return num + 'rd';
+  return num + 'th';
+}
+
 module.exports = (client) => {
   client.on('guildMemberAdd', async (member) => {
     try {
       const guild = member.guild;
+      const memberCount = guild.memberCount;
+      const memberPosition = getOrdinalSuffix(memberCount);
 
       // Main welcome embed (sent to welcome channel)
       const welcomeChannel = guild.channels.cache.get(WELCOME_CHANNEL_ID);
@@ -38,7 +49,8 @@ module.exports = (client) => {
             `    ♡  ﹕ <#${CHANNELS.roles}>   ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.chat}>    ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.rules}>     ﹕♡\n` +
-            `    ♡  ﹕ <#${CHANNELS.faq}>   ﹕♡\n` +
+            `    ♡  ﹕ <#${CHANNELS.faq}>   ﹕♡\n\n` +
+            `  You're the **${memberPosition}** member of the server!\n` +
             `  >﹏﹐please enjoy your stay.~!\n` +
             `**...................................................**`
           )
@@ -64,6 +76,7 @@ module.exports = (client) => {
             `    ♡  ﹕ <#${CHANNELS.chat}>    ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.rules}>     ﹕♡\n` +
             `    ♡  ﹕ <#${CHANNELS.faq}>   ﹕♡\n\n` +
+            `You're the **${memberPosition}** member of the server!\n\n` +
             `**We hope you enjoy your stay here!**`
           )
           .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
@@ -73,7 +86,7 @@ module.exports = (client) => {
         await chatChannel.send({ embeds: [announcementEmbed] });
       }
 
-      console.log(`✅ Welcome message sent for ${member.user.tag}`);
+      console.log(`✅ Welcome message sent for ${member.user.tag} (Member #${memberCount})`);
     } catch (error) {
       console.error('Welcome system error:', error);
     }
