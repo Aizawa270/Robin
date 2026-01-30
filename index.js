@@ -2,7 +2,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActivityType } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const Database = require('better-sqlite3');
 
@@ -261,6 +261,13 @@ client.getPrefix = (guildId) => {
 // ===== READY EVENT =====
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+
+  // Set bot status
+  client.user.setPresence({
+    activities: [{ name: '.gg/hanging', type: ActivityType.Playing }],
+    status: 'dnd'
+  });
+  console.log('[Status] Set to: .gg/hanging');
 
   // 🔥 INIT BIRTHDAY SYSTEM
   birthdayService(client);
