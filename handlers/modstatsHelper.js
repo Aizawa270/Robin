@@ -1,8 +1,52 @@
-// handlers/modstatsHelper.js
 const SYSTEM_EXCLUDE_IDS = ['AUTOMOD-SYSTEM', 'AUTO-BAN-SYSTEM'];
 
 function getDb(client) {
   return client.modstatsDB || client.automodDB || null;
+}
+
+/**
+ * Check if a user or any of their roles are frozen from modstats tracking
+ */
+function isModstatsFrozen(client, guildId, moderatorId) {
+  try {
+    const db = getDb(client);
+    if (!db) return false;
+
+    // Check if user is frozen
+    const userFrozen = db.prepare(`
+      SELECT 1 FROM modstats_frozen 
+      WHERE guild_id = ? AND target_type = 'user' AND target_id = ?
+    `).get(guildId, moderatorId);
+
+    if (userFrozen) {
+      console.log(`[ModStats] User ${moderatorId} is frozen`);
+      return true;
+    }
+
+    // Check if any of user's roles are frozen
+    const guild = client.guilds.cache.get(guildId);
+    if (guild) {
+      const member = guild.members.cache.get(moderatorId);
+      if (member) {
+        for (const roleId of member.roles.cache.keys()) {
+          const roleFrozen = db.prepare(`
+            SELECT 1 FROM modstats_frozen 
+            WHERE guild_id = ? AND target_type = 'role' AND target_id = ?
+          `).get(guildId, roleId);
+
+          if (roleFrozen) {
+            console.log(`[ModStats] User ${moderatorId} has frozen role ${roleId}`);
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  } catch (error) {
+    console.error('[ModStats] Freeze check error:', error);
+    return false;
+  }
 }
 
 function logModAction(client, guildId, moderatorId, targetId, actionType, reason, duration = null) {
@@ -11,21 +55,27 @@ function logModAction(client, guildId, moderatorId, targetId, actionType, reason
       console.error('[ModStats] Client missing');
       return false;
     }
-    
-    // ✅ FIX: Return false if required parameters are missing
+
+    // Return false if required parameters are missing
     if (!guildId || !moderatorId || !targetId || !actionType) {
       console.warn('[ModStats] Missing required parameters:', { guildId, moderatorId, targetId, actionType });
       return false;
     }
-    
+
+    // Skip unmute logs
     if (String(actionType).toLowerCase() === 'unmute') {
-      // If you purposely skip unmute logs, keep it skipped
       return false;
     }
-    
+
     const db = getDb(client);
     if (!db) {
       console.error('[ModStats] No DB available for logging');
+      return false;
+    }
+
+    // Check if moderator is frozen
+    if (isModstatsFrozen(client, guildId, moderatorId)) {
+      console.log(`[ModStats] Skipped logging - moderator ${moderatorId} is frozen`);
       return false;
     }
 
@@ -34,7 +84,7 @@ function logModAction(client, guildId, moderatorId, targetId, actionType, reason
       'INSERT INTO modstats (guild_id, moderator_id, target_id, action_type, reason, duration, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     stmt.run(guildId, moderatorId, targetId, actionType, reason || 'No reason provided', duration, timestamp);
-    
+
     console.log(`[ModStats] ✅ Logged ${actionType} by ${moderatorId} on ${targetId}`);
     return true;
   } catch (error) {
@@ -156,5 +206,6 @@ module.exports = {
   getModStats,
   getModLeaderboard,
   getTotalModerators,
-  getTargetActions
+  getTargetActions,
+  isModstatsFrozen
 };
