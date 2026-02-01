@@ -5,12 +5,39 @@ module.exports = {
   name: 'userinfo',
   description: 'Shows information about a user.',
   category: 'info',
-  usage: '$userinfo [@user]',
+  usage: '$userinfo [@user|username|userID]',
+  aliases: ['ui'],
   async execute(client, message, args) {
-    const user =
-      message.mentions.users.first() ||
-      (args[0] && await client.users.fetch(args[0]).catch(() => null)) ||
-      message.author;
+    let user;
+
+    if (args[0]) {
+      // Try mention first
+      user = message.mentions.users.first();
+
+      // Try by ID
+      if (!user) {
+        user = await client.users.fetch(args[0]).catch(() => null);
+      }
+
+      // Try by username (search in guild)
+      if (!user && message.guild) {
+        const searchTerm = args.join(' ').toLowerCase();
+        const member = message.guild.members.cache.find(m => 
+          m.user.username.toLowerCase() === searchTerm ||
+          m.user.tag.toLowerCase() === searchTerm ||
+          m.displayName.toLowerCase() === searchTerm
+        );
+        if (member) user = member.user;
+      }
+
+      // If still not found, return error
+      if (!user) {
+        return message.reply('User not found. Try mentioning them, using their ID, or their exact username.');
+      }
+    } else {
+      // Default to message author
+      user = message.author;
+    }
 
     const member = message.guild?.members.cache.get(user.id);
 
