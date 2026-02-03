@@ -2,7 +2,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const Database = require('better-sqlite3');
 
@@ -18,6 +18,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildPresences,
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
@@ -61,59 +62,7 @@ prefixDB.pragma('journal_mode = WAL');
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
-// ===== FAME DATABASE =====
-const fameDB = new Database(path.join(DATA_DIR, 'fame.sqlite'));
-fameDB.pragma('journal_mode = WAL');
-fameDB.prepare(`
-  CREATE TABLE IF NOT EXISTS fame_points (
-    user_id TEXT PRIMARY KEY,
-    reputation INTEGER DEFAULT 0,
-    stupidity INTEGER DEFAULT 0,
-    black INTEGER DEFAULT 0,
-    last_updated INTEGER DEFAULT (strftime('%s','now')*1000)
-  )
-`).run();
-
-fameDB.prepare(`
-  CREATE TABLE IF NOT EXISTS fame_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    giver_id TEXT NOT NULL,
-    receiver_id TEXT NOT NULL,
-    point_type TEXT NOT NULL,
-    timestamp INTEGER DEFAULT (strftime('%s','now')*1000)
-  )
-`).run();
-
-fameDB.prepare(`
-  CREATE TABLE IF NOT EXISTS fame_cooldowns (
-    giver_id TEXT NOT NULL,
-    point_type TEXT NOT NULL,
-    last_given INTEGER NOT NULL,
-    PRIMARY KEY (giver_id, point_type)
-  )
-`).run();
-
-client.fameDB = fameDB;
-console.log('[Fame] Database initialized');
-
-// ===== WATCHWORD DATABASE =====
-const watchwordDB = new Database(path.join(DATA_DIR, 'watchwords.sqlite'));
-watchwordDB.pragma('journal_mode = WAL');
-watchwordDB.prepare(`
-  CREATE TABLE IF NOT EXISTS watchwords (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    guild_id TEXT NOT NULL,
-    word TEXT NOT NULL,
-    created_at INTEGER DEFAULT (strftime('%s','now')*1000),
-    UNIQUE(user_id, guild_id, word)
-  )
-`).run();
-
-client.watchwordDB = watchwordDB;
-console.log('[Watchword] Database initialized');
-
-// ===== AUTOMOD + MODSTATS + MODLOGS =====
+// ===== AUTOMOD + MODSTATS =====
 const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
 automodDB.pragma('journal_mode = WAL');
 automodDB.pragma('synchronous = NORMAL');
@@ -183,13 +132,6 @@ automodDB.prepare(`
   )
 `).run();
 
-automodDB.prepare(`
-  CREATE TABLE IF NOT EXISTS modlogs_channel (
-    guild_id TEXT PRIMARY KEY,
-    channel_id TEXT NOT NULL
-  )
-`).run();
-
 client.automodDB = automodDB;
 client.modstatsDB = automodDB;
 
@@ -214,6 +156,7 @@ const spyDB = new Database(path.join(DATA_DIR, 'spy.sqlite'));
 spyDB.pragma('journal_mode = WAL');
 spyDB.pragma('synchronous = NORMAL');
 
+// tables (id autoinc)
 spyDB.prepare(`
   CREATE TABLE IF NOT EXISTS spy_lobbies (
     lobby_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,13 +205,6 @@ client.getPrefix = (guildId) => {
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // Set bot status
-  client.user.setPresence({
-    activities: [{ name: '.gg/hanging', type: ActivityType.Playing }],
-    status: 'dnd'
-  });
-  console.log('[Status] Set to: .gg/hanging');
-
   // 🔥 INIT BIRTHDAY SYSTEM
   birthdayService(client);
 
@@ -304,24 +240,17 @@ client.once('ready', async () => {
 
   // Restore giveaways
   try {
-    const startGiveaway = require('./commands/startgiveaway');
     const all = giveawayDB.prepare('SELECT * FROM giveaways').all();
     for (const g of all) {
       const delay = g.end_timestamp - Date.now();
       if (delay <= 0) {
-        if (startGiveaway?.endGiveaway) startGiveaway.endGiveaway(client, g.message_id);
+        require('./commands/startgiveaway').endGiveaway(client, g.message_id);
       } else {
-        setTimeout(() => {
-          if (startGiveaway?.endGiveaway) startGiveaway.endGiveaway(client, g.message_id);
-        }, delay);
+        setTimeout(() => require('./commands/startgiveaway').endGiveaway(client, g.message_id), delay);
       }
     }
   } catch (e) {
-    if (e.code === 'MODULE_NOT_FOUND') {
-      console.log('[Giveaway] startgiveaway command not found - skipping restore');
-    } else {
-      console.error('[Giveaway] Restore failed:', e);
-    }
+    console.error('Giveaway restore failed:', e);
   }
 
   console.log('🚀 Bot fully operational');
@@ -339,16 +268,6 @@ client.on('messageCreate', async (message) => {
     }
   } catch (e) {
     console.error('Automod error:', e);
-  }
-
-  // ===== WATCHWORD SYSTEM =====
-  try {
-    const watchwordCommand = require('./commands/misc/watchword');
-    if (watchwordCommand?.checkWatchwords) {
-      await watchwordCommand.checkWatchwords(client, message);
-    }
-  } catch (e) {
-    // Watchword system is optional
   }
 
   // ===== VANESSA RNG / FLIRTY REPLIES =====
@@ -450,51 +369,6 @@ client.on('messageReactionAdd', (reaction, user) => {
 
 // ===== LOAD COMMANDS =====
 loadCommands(client);
-
-// ===== GRACEFUL SHUTDOWN =====
-process.on('SIGINT', () => {
-  console.log('[Shutdown] Closing databases...');
-  
-  try {
-    if (prefixlessDB) prefixlessDB.close();
-    if (quarantineDB) quarantineDB.close();
-    if (giveawayDB) giveawayDB.close();
-    if (prefixDB) prefixDB.close();
-    if (fameDB) fameDB.close();
-    if (watchwordDB) watchwordDB.close();
-    if (automodDB) automodDB.close();
-    if (battleDB) battleDB.close();
-    if (spyDB) spyDB.close();
-    
-    console.log('[Shutdown] Databases closed successfully');
-  } catch (err) {
-    console.error('[Shutdown] Error closing databases:', err);
-  }
-  
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('[Shutdown] Closing databases...');
-  
-  try {
-    if (prefixlessDB) prefixlessDB.close();
-    if (quarantineDB) quarantineDB.close();
-    if (giveawayDB) giveawayDB.close();
-    if (prefixDB) prefixDB.close();
-    if (fameDB) fameDB.close();
-    if (watchwordDB) watchwordDB.close();
-    if (automodDB) automodDB.close();
-    if (battleDB) battleDB.close();
-    if (spyDB) spyDB.close();
-    
-    console.log('[Shutdown] Databases closed successfully');
-  } catch (err) {
-    console.error('[Shutdown] Error closing databases:', err);
-  }
-  
-  process.exit(0);
-});
 
 // ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
