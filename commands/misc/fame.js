@@ -361,6 +361,10 @@ module.exports = {
 
         if (!target) return message.reply('Please mention a user or provide a user ID.');
 
+        if (amount > 100) {
+          return message.reply('You cannot add more than 100 points at once!');
+        }
+
         const normalizedType = pointType === 'rep' ? 'reputation' : pointType;
 
         for (let i = 0; i < amount; i++) {
