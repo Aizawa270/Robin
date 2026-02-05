@@ -1,3 +1,4 @@
+
 // index.js
 require('dotenv').config();
 const fs = require('fs');
@@ -9,6 +10,7 @@ const Database = require('better-sqlite3');
 // 🔥 SERVICES
 const birthdayService = require('./handlers/birthdayService');
 const welcomeHandler = require('./handlers/welcomeHandler');
+const inviteTracker = require('./handlers/inviteTracker');
 
 // ===== CLIENT =====
 const client = new Client({
@@ -18,6 +20,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildInvites,
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
@@ -274,6 +277,9 @@ client.once('ready', async () => {
 
   // 🎉 INIT WELCOME SYSTEM
   welcomeHandler(client);
+
+  // 🎯 INIT INVITE TRACKER
+  inviteTracker(client);
 
   // Hydrate blacklist cache
   try {
