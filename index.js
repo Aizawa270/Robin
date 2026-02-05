@@ -193,6 +193,25 @@ automodDB.prepare(`
   )
 `).run();
 
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS invite_tracker (
+    guild_id TEXT NOT NULL,
+    inviter_id TEXT NOT NULL,
+    invited_id TEXT NOT NULL,
+    joined_at INTEGER DEFAULT (strftime('%s','now')*1000),
+    PRIMARY KEY (guild_id, invited_id)
+  )
+`).run();
+
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS invite_stats (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    invite_count INTEGER DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+  )
+`).run();
+
 client.automodDB = automodDB;
 client.modstatsDB = automodDB;
 
@@ -460,7 +479,7 @@ loadCommands(client);
 // ===== GRACEFUL SHUTDOWN =====
 process.on('SIGINT', () => {
   console.log('[Shutdown] Closing databases...');
-  
+
   try {
     if (prefixlessDB) prefixlessDB.close();
     if (quarantineDB) quarantineDB.close();
@@ -471,18 +490,18 @@ process.on('SIGINT', () => {
     if (automodDB) automodDB.close();
     if (battleDB) battleDB.close();
     if (spyDB) spyDB.close();
-    
+
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
   }
-  
+
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('[Shutdown] Closing databases...');
-  
+
   try {
     if (prefixlessDB) prefixlessDB.close();
     if (quarantineDB) quarantineDB.close();
@@ -493,12 +512,12 @@ process.on('SIGTERM', () => {
     if (automodDB) automodDB.close();
     if (battleDB) battleDB.close();
     if (spyDB) spyDB.close();
-    
+
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
   }
-  
+
   process.exit(0);
 });
 
