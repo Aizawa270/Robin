@@ -2,7 +2,7 @@ const { PermissionsBitField } = require('discord.js');
 
 module.exports = {
   name: 'delit',
-  aliases: ['del'], // ✅ alias added
+  aliases: ['del'],
   description: 'Deletes the replied message and the command message.',
   category: 'mod',
   usage: '!delit (reply to a message)',
@@ -15,10 +15,11 @@ module.exports = {
     const ALLOWED_ROLES = [
       '1447894643277561856',
       '1431646610752012420',
+      '1431651904269848667', // director
     ];
 
     const ALLOWED_USERS = [
-      '821734525247815741', // new user added
+      '821734525247815741',
     ];
 
     // permission check
