@@ -1,5 +1,11 @@
 const { PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 
+const AUTHORIZED_ROLES = [
+  '1432015058959073291', // admins invis
+  '1432015105045954651', // manager invis
+  '1431651904269848667'  // director
+];
+
 module.exports = {
   name: 'purge',
   description: 'Instantly deletes messages (up to 500).',
@@ -11,8 +17,12 @@ module.exports = {
 
     if (!message.guild) return;
 
-    // Admin only
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+    // Check if user has Administrator OR one of the authorized roles
+    const hasAuthorizedRole = AUTHORIZED_ROLES.some(roleId => 
+      message.member.roles.cache.has(roleId)
+    );
+
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator) && !hasAuthorizedRole) {
       const embed = new EmbedBuilder()
         .setColor('#ef4444')
         .setTitle('Permission Denied')
