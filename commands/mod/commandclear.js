@@ -1,5 +1,9 @@
-// commands/mod/commandclear.js
 const { PermissionFlagsBits } = require('discord.js');
+
+const AUTHORIZED_ROLES = [
+  '1432015105045954651', // manager invis
+  '1431651904269848667'  // director
+];
 
 module.exports = {
   name: 'commandclear',
@@ -7,8 +11,13 @@ module.exports = {
   category: 'mod',
   usage: 'commandclear <amount>',
   async execute(client, message, args) {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Administrator permission required.');
+    // Check for Administrator OR authorized role
+    const hasAuthorizedRole = AUTHORIZED_ROLES.some(roleId => 
+      message.member.roles.cache.has(roleId)
+    );
+
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator) && !hasAuthorizedRole) {
+      return message.reply('You do not have permission to use this command.');
     }
 
     if (!message.guild.members.me.permissions.has(PermissionFlagsBits.ManageMessages)) {
