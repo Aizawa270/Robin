@@ -9,9 +9,10 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    // Admin only
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Admins only. Sit down.');
+    // Check for Administrator OR Manage Roles permission
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator) && 
+        !message.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+      return message.reply('You need Administrator or Manage Roles permission to use this.');
     }
 
     if (!args.length) {
