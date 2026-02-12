@@ -1,6 +1,11 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
 const QUARANTINE_ROLE_ID = '1432363678430396436';
+const AUTHORIZED_ROLES = [
+  '1432015058959073291', // admins invis
+  '1432015105045954651', // manager invis
+  '1431651904269848667'  // director
+];
 
 module.exports = {
   name: 'quarantine',
@@ -12,8 +17,13 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Only administrators can use this command.');
+    // Check if user has Administrator OR one of the authorized roles
+    const hasAuthorizedRole = AUTHORIZED_ROLES.some(roleId => 
+      message.member.roles.cache.has(roleId)
+    );
+
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator) && !hasAuthorizedRole) {
+      return message.reply('You do not have permission to use this command.');
     }
 
     const targetUser =
