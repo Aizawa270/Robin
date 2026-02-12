@@ -1,5 +1,7 @@
 const { PermissionFlagsBits, ChannelType } = require('discord.js');
 
+const AUTHORIZED_ROLES = ['1431651904269848667']; // director
+
 function parseDuration(input) {
   if (!input) return null;
   const match = input.match(/^(\d+)(s|m|h)$/);
@@ -24,8 +26,13 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('❌ Admins only.');
+    // Check for Administrator OR authorized role
+    const hasAuthorizedRole = AUTHORIZED_ROLES.some(roleId => 
+      message.member.roles.cache.has(roleId)
+    );
+
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator) && !hasAuthorizedRole) {
+      return message.reply('❌ You do not have permission to use this command.');
     }
 
     let channel =
