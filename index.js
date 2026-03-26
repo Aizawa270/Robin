@@ -1,9 +1,9 @@
-// index.js
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActivityType } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
+const { handleButtonInteraction: handle1v1Button } = require('./commands/1v1');
 const Database = require('better-sqlite3');
 
 // 🔥 SERVICES
@@ -446,6 +446,25 @@ client.on('messageReactionAdd', (reaction, user) => {
   arr.unshift({ emoji: reaction.emoji.toString(), user, createdAt: new Date() });
 
   if (arr.length > 15) arr.pop();
+});
+
+// ===== BUTTON INTERACTIONS =====
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  if (
+    interaction.customId.startsWith('1v1_accept_') ||
+    interaction.customId.startsWith('1v1_deny_')
+  ) {
+    try {
+      await handle1v1Button(interaction);
+    } catch (err) {
+      console.error('[1v1 Button]', err);
+      if (!interaction.replied && !interaction.deferred) {
+        interaction.reply({ content: 'Something went wrong.', ephemeral: true }).catch(() => {});
+      }
+    }
+  }
 });
 
 // ===== LOAD COMMANDS =====
