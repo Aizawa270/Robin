@@ -44,62 +44,76 @@ module.exports = {
     // Map members to pings
     const memberPings = members.map((m) => `<@${m.id}>`);
 
-    // Build embeds with proper size limits
+    // Split mentions into chunks of max 1024 chars per field
+    const fields = [];
+    let currentValue = '';
+    let fieldNum = 0;
+
+    for (const mention of memberPings) {
+      const testValue = currentValue ? currentValue + '\n' + mention : mention;
+
+      if (testValue.length > 1024) {
+        // Field is full, save it
+        if (currentValue.length > 0) {
+          fields.push({
+            name: fieldNum === 0 ? 'Members' : `Members (cont. ${fieldNum})`,
+            value: currentValue,
+            inline: false,
+          });
+          fieldNum++;
+        }
+        currentValue = mention;
+      } else {
+        currentValue = testValue;
+      }
+    }
+
+    // Add the last field
+    if (currentValue.length > 0) {
+      fields.push({
+        name: fieldNum === 0 ? 'Members' : `Members (cont. ${fieldNum})`,
+        value: currentValue,
+        inline: false,
+      });
+    }
+
+    // Now split fields into embeds (max 6000 chars per embed, max 25 fields per embed)
     const embeds = [];
     let currentEmbed = new EmbedBuilder()
       .setColor(colors.listinrole || '#3498db')
       .setTitle(`Members in role: ${role.name}`)
-      .setThumbnail(role.iconURL({ dynamic: true }));
+      .setThumbnail(role.iconURL({ dynamic: true }))
+      .addFields(
+        { name: 'Role ID', value: role.id, inline: true },
+        { name: 'Member Count', value: `${memberCount}`, inline: true },
+      );
 
-    // Add role info to first embed only
-    currentEmbed.addFields(
-      { name: 'Role ID', value: role.id, inline: true },
-      { name: 'Member Count', value: `${memberCount}`, inline: true },
-    );
+    let currentEmbedSize = 300;
+    let fieldsInCurrentEmbed = 2; // Already added Role ID and Member Count
 
-    let currentFieldValue = '';
-    let fieldCount = 0;
-    let estimatedEmbedSize = 200; // Base embed size (title, thumbnail, etc.)
+    for (const field of fields) {
+      const fieldSize = field.name.length + field.value.length + 50;
 
-    for (const mention of memberPings) {
-      const mentionLength = mention.length + 1; // +1 for newline
-      const fieldNameLength = (fieldCount === 0 ? 'Members' : `Members (${fieldCount + 1})`).length;
-      
-      // Discord embed field format: name + value + some overhead
-      const estimatedNewSize = estimatedEmbedSize + currentFieldValue.length + mentionLength + fieldNameLength + 50;
-
-      if (estimatedNewSize > 5500) {
-        // Save current field and start a new embed
-        const fieldName = fieldCount === 0 ? 'Members' : `Members (${fieldCount + 1})`;
-        currentEmbed.addFields({
-          name: fieldName,
-          value: currentFieldValue.trim(),
-          inline: false,
-        });
-
+      // Check if adding this field would exceed limits
+      if (fieldsInCurrentEmbed >= 25 || currentEmbedSize + fieldSize > 5500) {
+        // Save current embed and create a new one
         embeds.push(currentEmbed);
 
-        // Create new embed
         currentEmbed = new EmbedBuilder()
           .setColor(colors.listinrole || '#3498db')
           .setFooter({ text: `Page ${embeds.length + 1}` });
 
-        currentFieldValue = mention + '\n';
-        estimatedEmbedSize = 150;
-        fieldCount = 0;
-      } else {
-        currentFieldValue += mention + '\n';
+        currentEmbedSize = 100;
+        fieldsInCurrentEmbed = 0;
       }
+
+      currentEmbed.addFields(field);
+      currentEmbedSize += fieldSize;
+      fieldsInCurrentEmbed++;
     }
 
-    // Add the last field and embed
-    if (currentFieldValue.trim()) {
-      const fieldName = fieldCount === 0 ? 'Members' : `Members (${fieldCount + 1})`;
-      currentEmbed.addFields({
-        name: fieldName,
-        value: currentFieldValue.trim(),
-        inline: false,
-      });
+    // Add the last embed
+    if (fieldsInCurrentEmbed > 0) {
       embeds.push(currentEmbed);
     }
 
