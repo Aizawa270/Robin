@@ -1,6 +1,3 @@
-In my 1v1.js i dont want it to send the help.embed if i type 1v1 i only want it to send when i type 1v1 help. And 1v1pack doesnt work add a space to the cmd and make it 1v1 pack and make it work like
-
-1v1 pack [amount of packs u wanna open 1-5]
 
 // commands/1v1.js
 // Plugs into the existing commandHandler pattern
