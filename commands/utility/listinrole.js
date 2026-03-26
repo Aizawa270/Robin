@@ -1,6 +1,11 @@
 const { EmbedBuilder } = require('discord.js');
 const { colors } = require('../../config');
 
+// Helper to calculate embed JSON size
+function getEmbedSize(embed) {
+  return JSON.stringify(embed.toJSON()).length;
+}
+
 module.exports = {
   name: 'listinrole',
   description: 'Lists all members in a given role by ID or mention.',
@@ -44,19 +49,19 @@ module.exports = {
     // Map members to pings
     const memberPings = members.map((m) => `<@${m.id}>`);
 
-    // Split mentions into chunks of max 1024 chars per field
+    // Split mentions into chunks of max 1020 chars per field (leave 4 char buffer)
     const fields = [];
     let currentValue = '';
-    let fieldNum = 0;
+    let fieldNum = 1;
 
     for (const mention of memberPings) {
       const testValue = currentValue ? currentValue + '\n' + mention : mention;
 
-      if (testValue.length > 1024) {
+      if (testValue.length > 1020) {
         // Field is full, save it
         if (currentValue.length > 0) {
           fields.push({
-            name: fieldNum === 0 ? 'Members' : `Members (cont. ${fieldNum})`,
+            name: fieldNum === 1 ? 'Members' : `Members (${fieldNum})`,
             value: currentValue,
             inline: false,
           });
@@ -71,13 +76,13 @@ module.exports = {
     // Add the last field
     if (currentValue.length > 0) {
       fields.push({
-        name: fieldNum === 0 ? 'Members' : `Members (cont. ${fieldNum})`,
+        name: fieldNum === 1 ? 'Members' : `Members (${fieldNum})`,
         value: currentValue,
         inline: false,
       });
     }
 
-    // Now split fields into embeds (max 6000 chars per embed, max 25 fields per embed)
+    // Split fields into embeds using actual size calculation
     const embeds = [];
     let currentEmbed = new EmbedBuilder()
       .setColor(colors.listinrole || '#3498db')
@@ -88,32 +93,32 @@ module.exports = {
         { name: 'Member Count', value: `${memberCount}`, inline: true },
       );
 
-    let currentEmbedSize = 300;
-    let fieldsInCurrentEmbed = 2; // Already added Role ID and Member Count
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
 
-    for (const field of fields) {
-      const fieldSize = field.name.length + field.value.length + 50;
+      // Try adding the field
+      currentEmbed.addFields(field);
 
-      // Check if adding this field would exceed limits
-      if (fieldsInCurrentEmbed >= 25 || currentEmbedSize + fieldSize > 5500) {
-        // Save current embed and create a new one
+      // Check if embed is too large
+      if (getEmbedSize(currentEmbed) > 5500) {
+        // Remove the field we just added
+        const embedData = currentEmbed.toJSON();
+        embedData.fields.pop();
+        currentEmbed = EmbedBuilder.from(embedData);
+
+        // Save current embed
         embeds.push(currentEmbed);
 
+        // Create new embed with the field that didn't fit
         currentEmbed = new EmbedBuilder()
           .setColor(colors.listinrole || '#3498db')
-          .setFooter({ text: `Page ${embeds.length + 1}` });
-
-        currentEmbedSize = 100;
-        fieldsInCurrentEmbed = 0;
+          .setFooter({ text: `Page ${embeds.length + 1}` })
+          .addFields(field);
       }
-
-      currentEmbed.addFields(field);
-      currentEmbedSize += fieldSize;
-      fieldsInCurrentEmbed++;
     }
 
     // Add the last embed
-    if (fieldsInCurrentEmbed > 0) {
+    if (currentEmbed.data.fields && currentEmbed.data.fields.length > 0) {
       embeds.push(currentEmbed);
     }
 
