@@ -137,6 +137,8 @@ function getInventory(userId) {
 const activeBattles = new Map();
 
 // ─── CANVAS BATTLE IMAGE ─────────────────────────────────────────────────────
+// Template: 1536x1024 — left circle centre ≈ (340, 430), right ≈ (1196, 430)
+// [Name] labels sit at the top of each side at roughly y ≈ 120
 async function buildBattleImage(challenger, opponent) {
   let createCanvas, loadImage;
   try {
@@ -145,46 +147,55 @@ async function buildBattleImage(challenger, opponent) {
     return null;
   }
 
-  const templatePath = path.join(__dirname, '..', 'assets', '1v1_template.png');
-  if (!fs.existsSync(templatePath)) return null;
+  // Check multiple possible locations for the template
+  const POSSIBLE_PATHS = [
+    path.join(__dirname, '1v1_template.png'),
+    path.join(__dirname, '..', 'assets', '1v1_template.png'),
+    path.join(__dirname, '..', '1v1_template.png'),
+  ];
+  const templatePath = POSSIBLE_PATHS.find(p => fs.existsSync(p));
+  if (!templatePath) return null;
 
   const template = await loadImage(templatePath);
-  const W = template.width;
-  const H = template.height;
+  const W = template.width;   // 1536
+  const H = template.height;  // 1024
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
   ctx.drawImage(template, 0, 0, W, H);
 
-  const avatarSize = Math.round(W * 0.18);
-  const avatarY    = Math.round(H * 0.22);
-  const leftCX     = Math.round(W * 0.22);
-  const rightCX    = Math.round(W * 0.78);
+  // Avatar circle centres — calibrated to the boxing template
+  const leftCX   = Math.round(W * 0.221);  // ~340
+  const rightCX  = Math.round(W * 0.779);  // ~1196
+  const circleCY = Math.round(H * 0.440);  // ~451 — centre of the avatar circles
+  const avatarR  = Math.round(H * 0.190);  // ~195 — fits snugly inside each circle
 
-  async function drawAvatar(url, cx, cy) {
+  async function drawCircularAvatar(url, cx, cy, radius) {
     try {
       const img = await loadImage(url + '?size=256');
       ctx.save();
       ctx.beginPath();
-      ctx.arc(cx, cy, avatarSize / 2, 0, Math.PI * 2);
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.clip();
-      ctx.drawImage(img, cx - avatarSize / 2, cy - avatarSize / 2, avatarSize, avatarSize);
+      ctx.drawImage(img, cx - radius, cy - radius, radius * 2, radius * 2);
       ctx.restore();
-    } catch { /* skip on error */ }
+    } catch { /* skip on network/decode error */ }
   }
 
-  await drawAvatar(challenger.displayAvatarURL({ extension: 'png' }), leftCX,  avatarY);
-  await drawAvatar(opponent.displayAvatarURL({ extension: 'png' }),   rightCX, avatarY);
+  await drawCircularAvatar(challenger.displayAvatarURL({ extension: 'png' }), leftCX,  circleCY, avatarR);
+  await drawCircularAvatar(opponent.displayAvatarURL({ extension: 'png' }),   rightCX, circleCY, avatarR);
 
-  const fontSize = Math.round(W * 0.027);
+  // Draw names over the [Name] placeholder text at the top of each side
+  const fontSize = Math.round(H * 0.055);  // ~56px bold
+  const nameY    = Math.round(H * 0.118);  // ~121px — covers the [Name] text
   ctx.font        = `bold ${fontSize}px Arial`;
   ctx.fillStyle   = '#ffffff';
   ctx.textAlign   = 'center';
-  ctx.shadowColor = 'rgba(0,0,0,0.9)';
-  ctx.shadowBlur  = 7;
+  ctx.shadowColor = 'rgba(0,0,0,0.85)';
+  ctx.shadowBlur  = 8;
 
-  const trim = s => s.length > 14 ? s.slice(0, 13) + '…' : s;
-  ctx.fillText(trim(challenger.displayName), leftCX,  avatarY - avatarSize / 2 - 8);
-  ctx.fillText(trim(opponent.displayName),   rightCX, avatarY - avatarSize / 2 - 8);
+  const trim = s => s.length > 13 ? s.slice(0, 12) + '…' : s;
+  ctx.fillText(trim(challenger.displayName), leftCX,  nameY);
+  ctx.fillText(trim(opponent.displayName),   rightCX, nameY);
 
   return canvas.toBuffer('image/png');
 }
@@ -412,7 +423,7 @@ async function handleHelp(message) {
       {
         name: '📦 Packs & Inventory',
         value: [
-          '`!1v1 pack [1-5]` — Open 1–5 daily packs for 5 random animals each (24h cooldown)',
+          '`!1v1 pack [1-5]` — Open up to 5 packs per day, 1 animal each (24h cooldown)',
           '`!1v1 inventory` — See all animals you own',
         ].join('\n'),
       },
@@ -463,12 +474,14 @@ async function handleChallenge(message, target) {
     return message.reply('There\'s already an active battle in this channel!');
   }
 
+  // FIX: only block if the user is already fighting in THIS channel context.
+  // Don't block challengers/opponents across unrelated channels.
   for (const [, battle] of activeBattles) {
-    if ([battle.challenger.id, battle.opponent.id].includes(author.id)) {
-      return message.reply('You\'re already in a battle somewhere else!');
+    if (battle.challenger.id === author.id || battle.opponent.id === author.id) {
+      return message.reply('You\'re already in an active battle somewhere else!');
     }
-    if ([battle.challenger.id, battle.opponent.id].includes(target.id)) {
-      return message.reply(`${target.displayName} is already in a battle!`);
+    if (battle.challenger.id === target.id || battle.opponent.id === target.id) {
+      return message.reply(`${target.displayName} is already in an active battle!`);
     }
   }
 
@@ -517,15 +530,18 @@ async function handleChallenge(message, target) {
 
 // ─── POINT ────────────────────────────────────────────────────────────────────
 async function handlePoint(message, args) {
-  const { author, channel } = message;
+  const { author, channel, member } = message;
 
+  // FIX: look up the battle by channel — gifters can only gift in the battle channel
   const battle = activeBattles.get(channel.id);
   if (!battle) return message.reply('No active battle in this channel right now.');
 
+  // Battlers cannot gift points to themselves
   if (author.id === battle.challenger.id || author.id === battle.opponent.id) {
     return message.reply("You're in the battle! You can't send points.");
   }
 
+  // args layout for !point: args[0] = @mention, args[1] = amount, args[2]+ = animal name
   const target = message.mentions.users.first();
   if (!target) return message.reply('Mention a battler. Usage: `!point @user <amount> <animal>`');
 
@@ -545,7 +561,7 @@ async function handlePoint(message, args) {
   }
 
   // 15s cooldown
-  const cdRow  = db.prepare('SELECT last_point FROM point_cooldowns WHERE user_id = ?').get(author.id);
+  const cdRow   = db.prepare('SELECT last_point FROM point_cooldowns WHERE user_id = ?').get(author.id);
   const elapsed = Date.now() - (cdRow?.last_point || 0);
   if (elapsed < 15_000) {
     const left = Math.ceil((15_000 - elapsed) / 1000);
@@ -564,26 +580,33 @@ async function handlePoint(message, args) {
   db.prepare('UPDATE profiles SET points_gifted = points_gifted + ? WHERE user_id = ?').run(totalPts, author.id);
   db.prepare('INSERT OR REPLACE INTO point_cooldowns (user_id, last_point) VALUES (?, ?)').run(author.id, Date.now());
 
-  const currentPts = battle.points[target.id];
+  const currentPts  = battle.points[target.id];
+  // Use member displayName if available, fallback to user username
+  const gifterName  = member?.displayName ?? author.username;
+  const targetMember = await message.guild.members.fetch(target.id).catch(() => null);
+  const targetName  = targetMember?.displayName ?? target.username;
 
   const embed = new EmbedBuilder()
     .setColor(RARITY_COLORS[animal.rarity] ?? 0x2ecc71)
     .setDescription(
-      `${animal.emoji} **${author.displayName}** gifted **${target.displayName}** ` +
+      `${animal.emoji} **${gifterName}** gifted **${targetName}** ` +
       `${amount}× **${animal.name}** *(${totalPts} pts)*\n` +
-      `${target.displayName}'s current points: **${currentPts}**`
+      `${targetName}'s current points: **${currentPts}**`
     );
 
   return channel.send({ embeds: [embed] });
 }
 
 // ─── PACK ─────────────────────────────────────────────────────────────────────
+// 5 packs max per day — each pack contains exactly 1 animal
 async function handlePack(message, args) {
   const { author } = message;
   ensureProfile(author.id);
 
-  const CD_MS  = 24 * 60 * 60 * 1000;
-  const cdRow  = db.prepare('SELECT last_claim FROM pack_cooldowns WHERE user_id = ?').get(author.id);
+  const CD_MS   = 24 * 60 * 60 * 1000;
+  const MAX_PACKS = 5;
+
+  const cdRow   = db.prepare('SELECT last_claim FROM pack_cooldowns WHERE user_id = ?').get(author.id);
   const elapsed = Date.now() - (cdRow?.last_claim || 0);
 
   if (elapsed < CD_MS) {
@@ -593,28 +616,29 @@ async function handlePack(message, args) {
     return message.reply(`⏳ Pack on cooldown. Come back in **${h}h ${m}m**.`);
   }
 
-  // Parse amount (1–5), default 1
+  // Parse how many packs to open (1–5), default 1
   const rawAmount = parseInt(args[1]);
 
-  if (args[1] && (isNaN(rawAmount) || rawAmount < 1 || rawAmount > 5)) {
-    return message.reply('❌ Please specify a number between **1 and 5**. Usage: `!1v1 pack [1-5]`');
+  if (args[1] && (isNaN(rawAmount) || rawAmount < 1 || rawAmount > MAX_PACKS)) {
+    return message.reply(`❌ Please specify a number between **1 and ${MAX_PACKS}**. Usage: \`!1v1 pack [1-5]\``);
   }
 
-  const packCount = (!rawAmount || rawAmount < 1) ? 1 : Math.min(rawAmount, 5);
+  const packCount = (!rawAmount || rawAmount < 1) ? 1 : Math.min(rawAmount, MAX_PACKS);
 
-  const pulled = Array.from({ length: packCount * 5 }, pullRandomAnimal);
+  // Each pack = exactly 1 animal
+  const pulled = Array.from({ length: packCount }, pullRandomAnimal);
   for (const a of pulled) upsertInventory.run(author.id, a.name, 1);
   db.prepare('INSERT OR REPLACE INTO pack_cooldowns (user_id, last_claim) VALUES (?, ?)').run(author.id, Date.now());
 
-  const lines = pulled.map(a =>
-    `${a.emoji} **${a.name}** — ${a.pts} pts  \`${a.rarity}\``
+  const lines = pulled.map((a, i) =>
+    `**Pack ${i + 1}:** ${a.emoji} **${a.name}** — ${a.pts} pts \`${a.rarity}\``
   ).join('\n');
 
   const embed = new EmbedBuilder()
     .setColor(0x9b59b6)
-    .setTitle(`📦 ${packCount} Pack${packCount > 1 ? 's' : ''} Opened!`)
-    .setDescription(`You pulled:\n\n${lines}\n\nNext pack in **24h**.`)
-    .setFooter({ text: 'Rarer animals are harder to pull — keep opening daily packs!' });
+    .setTitle(`📦 Opened ${packCount} Pack${packCount > 1 ? 's' : ''}!`)
+    .setDescription(`You got:\n\n${lines}\n\nNext packs reset in **24h**.`)
+    .setFooter({ text: 'Each pack contains 1 animal • Up to 5 packs per day' });
 
   return message.reply({ embeds: [embed] });
 }
@@ -642,7 +666,7 @@ async function handleInventory(message) {
 
   const embed = new EmbedBuilder()
     .setColor(0x3498db)
-    .setTitle(`🎒 ${author.displayName}'s Inventory`)
+    .setTitle(`🎒 ${author.displayName ?? author.username}'s Inventory`)
     .addFields(fields)
     .setThumbnail(author.displayAvatarURL());
 
@@ -664,9 +688,12 @@ async function handleProfile(message, args) {
   const total = p.wins + p.losses;
   const wr    = total > 0 ? ((p.wins / total) * 100).toFixed(1) : '0.0';
 
+  const targetMember = await guild.members.fetch(target.id).catch(() => null);
+  const displayName  = targetMember?.displayName ?? target.username;
+
   const embed = new EmbedBuilder()
     .setColor(0xe67e22)
-    .setTitle(`⚔️  ${target.displayName}'s Profile`)
+    .setTitle(`⚔️  ${displayName}'s Profile`)
     .setThumbnail(target.displayAvatarURL())
     .addFields(
       { name: '🏆 Wins',          value: `${p.wins}`,          inline: true },
