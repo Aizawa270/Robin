@@ -1,9 +1,37 @@
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const { colors } = require('../../config');
 
-// Helper to calculate embed JSON size
-function getEmbedSize(embed) {
-  return JSON.stringify(embed.toJSON()).length;
+// How many member mentions to show per page
+const MEMBERS_PER_PAGE = 30;
+
+// Build a single page embed
+function buildEmbed(role, memberCount, pageMembers, page, totalPages) {
+  return new EmbedBuilder()
+    .setColor(colors.listinrole || '#3498db')
+    .setTitle(`Members in role: ${role.name}`)
+    .setThumbnail(role.iconURL({ dynamic: true }))
+    .addFields(
+      { name: 'Role ID', value: role.id, inline: true },
+      { name: 'Member Count', value: `${memberCount}`, inline: true },
+      { name: 'Members', value: pageMembers.join('\n') || 'No members.', inline: false },
+    )
+    .setFooter({ text: `Page ${page} of ${totalPages}` });
+}
+
+// Build the prev/next button row
+function buildButtons(page, totalPages) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('prev')
+      .setLabel('◀ Prev')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page === 1),
+    new ButtonBuilder()
+      .setCustomId('next')
+      .setLabel('Next ▶')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page === totalPages),
+  );
 }
 
 module.exports = {
@@ -39,94 +67,69 @@ module.exports = {
         .setThumbnail(role.iconURL({ dynamic: true }))
         .addFields(
           { name: 'Role ID', value: role.id, inline: true },
-          { name: 'Member Count', value: `${memberCount}`, inline: true },
+          { name: 'Member Count', value: '0', inline: true },
           { name: 'Members', value: 'No members in this role.', inline: false },
         );
 
-      return await message.reply({ embeds: [embed] });
+      return message.reply({ embeds: [embed] });
     }
 
-    // Map members to pings
+    // Split all member pings into pages of MEMBERS_PER_PAGE
     const memberPings = members.map((m) => `<@${m.id}>`);
+    const pages = [];
+    for (let i = 0; i < memberPings.length; i += MEMBERS_PER_PAGE) {
+      pages.push(memberPings.slice(i, i + MEMBERS_PER_PAGE));
+    }
 
-    // Split mentions into chunks of max 1020 chars per field (leave 4 char buffer)
-    const fields = [];
-    let currentValue = '';
-    let fieldNum = 1;
+    const totalPages = pages.length;
+    let currentPage = 1;
 
-    for (const mention of memberPings) {
-      const testValue = currentValue ? currentValue + '\n' + mention : mention;
+    const embed = buildEmbed(role, memberCount, pages[0], 1, totalPages);
 
-      if (testValue.length > 1020) {
-        // Field is full, save it
-        if (currentValue.length > 0) {
-          fields.push({
-            name: fieldNum === 1 ? 'Members' : `Members (${fieldNum})`,
-            value: currentValue,
-            inline: false,
-          });
-          fieldNum++;
-        }
-        currentValue = mention;
-      } else {
-        currentValue = testValue;
+    // If only one page, no buttons needed
+    if (totalPages === 1) {
+      return message.reply({ embeds: [embed] });
+    }
+
+    const row = buildButtons(1, totalPages);
+    const reply = await message.reply({ embeds: [embed], components: [row] });
+
+    // Collect button interactions — only from the original command author
+    const collector = reply.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      filter: (i) => i.user.id === message.author.id,
+      time: 5 * 60 * 1000, // 5 minutes
+    });
+
+    collector.on('collect', async (interaction) => {
+      if (interaction.customId === 'prev') {
+        currentPage = Math.max(1, currentPage - 1);
+      } else if (interaction.customId === 'next') {
+        currentPage = Math.min(totalPages, currentPage + 1);
       }
-    }
 
-    // Add the last field
-    if (currentValue.length > 0) {
-      fields.push({
-        name: fieldNum === 1 ? 'Members' : `Members (${fieldNum})`,
-        value: currentValue,
-        inline: false,
-      });
-    }
+      const newEmbed = buildEmbed(role, memberCount, pages[currentPage - 1], currentPage, totalPages);
+      const newRow = buildButtons(currentPage, totalPages);
 
-    // Split fields into embeds using actual size calculation
-    const embeds = [];
-    let currentEmbed = new EmbedBuilder()
-      .setColor(colors.listinrole || '#3498db')
-      .setTitle(`Members in role: ${role.name}`)
-      .setThumbnail(role.iconURL({ dynamic: true }))
-      .addFields(
-        { name: 'Role ID', value: role.id, inline: true },
-        { name: 'Member Count', value: `${memberCount}`, inline: true },
+      await interaction.update({ embeds: [newEmbed], components: [newRow] });
+    });
+
+    collector.on('end', async () => {
+      // Disable buttons when collector expires
+      const disabledRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('prev')
+          .setLabel('◀ Prev')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId('next')
+          .setLabel('Next ▶')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
       );
 
-    for (let i = 0; i < fields.length; i++) {
-      const field = fields[i];
-
-      // Try adding the field
-      currentEmbed.addFields(field);
-
-      // Check if embed is too large
-      if (getEmbedSize(currentEmbed) > 5500) {
-        // Remove the field we just added
-        const embedData = currentEmbed.toJSON();
-        embedData.fields.pop();
-        currentEmbed = EmbedBuilder.from(embedData);
-
-        // Save current embed
-        embeds.push(currentEmbed);
-
-        // Create new embed with the field that didn't fit
-        currentEmbed = new EmbedBuilder()
-          .setColor(colors.listinrole || '#3498db')
-          .setFooter({ text: `Page ${embeds.length + 1}` })
-          .addFields(field);
-      }
-    }
-
-    // Add the last embed
-    if (currentEmbed.data.fields && currentEmbed.data.fields.length > 0) {
-      embeds.push(currentEmbed);
-    }
-
-    try {
-      await message.reply({ embeds });
-    } catch (err) {
-      console.error('ListInRole error:', err);
-      return message.reply('Failed to display members. Role may be too large.');
-    }
+      await reply.edit({ components: [disabledRow] }).catch(() => null);
+    });
   },
 };
