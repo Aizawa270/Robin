@@ -28,17 +28,48 @@ module.exports = {
     const memberCount = members.size;
 
     // Map members to pings
-    const memberPings = members
-      .map((m) => `<@${m.id}>`)
-      .slice(0, 50); // limit to avoid embed overflow
+    const memberPings = members.map((m) => `<@${m.id}>`);
 
-    const value =
-      memberPings.length > 0
-        ? memberPings.join('\n') +
-          (memberCount > memberPings.length
-            ? `\n...and **${memberCount - memberPings.length}** more`
-            : '')
-        : 'No members in this role.';
+    // Chunk mentions into fields (max 1024 chars per field)
+    const fields = [];
+    let currentValue = '';
+    let fieldCount = 0;
+
+    for (let i = 0; i < memberPings.length; i++) {
+      const mention = memberPings[i];
+      const testValue = currentValue ? currentValue + '\n' + mention : mention;
+
+      if (testValue.length > 1024) {
+        // Save current field and start a new one
+        fields.push({
+          name: fieldCount === 0 ? 'Members' : `Members (continued)`,
+          value: currentValue || 'No members',
+          inline: false,
+        });
+        currentValue = mention;
+        fieldCount++;
+      } else {
+        currentValue = testValue;
+      }
+    }
+
+    // Add the last chunk
+    if (currentValue) {
+      fields.push({
+        name: fieldCount === 0 ? 'Members' : `Members (continued)`,
+        value: currentValue,
+        inline: false,
+      });
+    }
+
+    // If no members, add a single field
+    if (fields.length === 0) {
+      fields.push({
+        name: 'Members',
+        value: 'No members in this role.',
+        inline: false,
+      });
+    }
 
     const embed = new EmbedBuilder()
       .setColor(colors.listinrole || '#3498db') // fallback blue
@@ -47,8 +78,8 @@ module.exports = {
       .addFields(
         { name: 'Role ID', value: role.id, inline: true },
         { name: 'Member Count', value: `${memberCount}`, inline: true },
-        { name: 'Members', value, inline: false },
-      );
+      )
+      .addFields(fields);
 
     await message.reply({ embeds: [embed] });
   },
