@@ -27,60 +27,87 @@ module.exports = {
     const members = role.members;
     const memberCount = members.size;
 
+    if (memberCount === 0) {
+      const embed = new EmbedBuilder()
+        .setColor(colors.listinrole || '#3498db')
+        .setTitle(`Members in role: ${role.name}`)
+        .setThumbnail(role.iconURL({ dynamic: true }))
+        .addFields(
+          { name: 'Role ID', value: role.id, inline: true },
+          { name: 'Member Count', value: `${memberCount}`, inline: true },
+          { name: 'Members', value: 'No members in this role.', inline: false },
+        );
+
+      return await message.reply({ embeds: [embed] });
+    }
+
     // Map members to pings
     const memberPings = members.map((m) => `<@${m.id}>`);
 
-    // Chunk mentions into fields (max 1024 chars per field)
-    const fields = [];
-    let currentValue = '';
+    // Build embeds with proper size limits
+    const embeds = [];
+    let currentEmbed = new EmbedBuilder()
+      .setColor(colors.listinrole || '#3498db')
+      .setTitle(`Members in role: ${role.name}`)
+      .setThumbnail(role.iconURL({ dynamic: true }));
+
+    // Add role info to first embed only
+    currentEmbed.addFields(
+      { name: 'Role ID', value: role.id, inline: true },
+      { name: 'Member Count', value: `${memberCount}`, inline: true },
+    );
+
+    let currentFieldValue = '';
     let fieldCount = 0;
+    let estimatedEmbedSize = 200; // Base embed size (title, thumbnail, etc.)
 
-    for (let i = 0; i < memberPings.length; i++) {
-      const mention = memberPings[i];
-      const testValue = currentValue ? currentValue + '\n' + mention : mention;
+    for (const mention of memberPings) {
+      const mentionLength = mention.length + 1; // +1 for newline
+      const fieldNameLength = (fieldCount === 0 ? 'Members' : `Members (${fieldCount + 1})`).length;
+      
+      // Discord embed field format: name + value + some overhead
+      const estimatedNewSize = estimatedEmbedSize + currentFieldValue.length + mentionLength + fieldNameLength + 50;
 
-      if (testValue.length > 1024) {
-        // Save current field and start a new one
-        fields.push({
-          name: fieldCount === 0 ? 'Members' : `Members (continued)`,
-          value: currentValue || 'No members',
+      if (estimatedNewSize > 5500) {
+        // Save current field and start a new embed
+        const fieldName = fieldCount === 0 ? 'Members' : `Members (${fieldCount + 1})`;
+        currentEmbed.addFields({
+          name: fieldName,
+          value: currentFieldValue.trim(),
           inline: false,
         });
-        currentValue = mention;
-        fieldCount++;
+
+        embeds.push(currentEmbed);
+
+        // Create new embed
+        currentEmbed = new EmbedBuilder()
+          .setColor(colors.listinrole || '#3498db')
+          .setFooter({ text: `Page ${embeds.length + 1}` });
+
+        currentFieldValue = mention + '\n';
+        estimatedEmbedSize = 150;
+        fieldCount = 0;
       } else {
-        currentValue = testValue;
+        currentFieldValue += mention + '\n';
       }
     }
 
-    // Add the last chunk
-    if (currentValue) {
-      fields.push({
-        name: fieldCount === 0 ? 'Members' : `Members (continued)`,
-        value: currentValue,
+    // Add the last field and embed
+    if (currentFieldValue.trim()) {
+      const fieldName = fieldCount === 0 ? 'Members' : `Members (${fieldCount + 1})`;
+      currentEmbed.addFields({
+        name: fieldName,
+        value: currentFieldValue.trim(),
         inline: false,
       });
+      embeds.push(currentEmbed);
     }
 
-    // If no members, add a single field
-    if (fields.length === 0) {
-      fields.push({
-        name: 'Members',
-        value: 'No members in this role.',
-        inline: false,
-      });
+    try {
+      await message.reply({ embeds });
+    } catch (err) {
+      console.error('ListInRole error:', err);
+      return message.reply('Failed to display members. Role may be too large.');
     }
-
-    const embed = new EmbedBuilder()
-      .setColor(colors.listinrole || '#3498db') // fallback blue
-      .setTitle(`Members in role: ${role.name}`)
-      .setThumbnail(role.iconURL({ dynamic: true })) // role icon top right
-      .addFields(
-        { name: 'Role ID', value: role.id, inline: true },
-        { name: 'Member Count', value: `${memberCount}`, inline: true },
-      )
-      .addFields(fields);
-
-    await message.reply({ embeds: [embed] });
   },
 };
