@@ -6,9 +6,11 @@ const AUTHORIZED_ROLES = [
   '1431651904269848667'  // director
 ];
 
+const MAX_PURGE = 1000;
+
 module.exports = {
   name: 'purge',
-  description: 'Instantly deletes messages (up to 500).',
+  description: 'Instantly deletes messages (up to 1000).',
   category: 'utility',
   usage: '$purge <amount>',
 
@@ -36,13 +38,26 @@ module.exports = {
       return message.reply('I need **Manage Messages** permission.');
     }
 
-    const amount = parseInt(args[0], 10);
-    if (!amount || amount <= 0) {
-      return message.reply(`Usage: \`${prefix}purge <1-500>\``);
+    // Validate args
+    if (!args[0]) {
+      return message.reply(`Usage: \`${prefix}purge <1-${MAX_PURGE}>\``);
     }
 
-    if (amount > 500) {
-      return message.reply('Max purge limit is **500** messages.');
+    // Parse amount with strict validation
+    const amount = parseInt(args[0], 10);
+
+    // Check if it's a valid number
+    if (isNaN(amount) || !Number.isInteger(amount)) {
+      return message.reply(`❌ **${args[0]}** is not a valid number. Usage: \`${prefix}purge <1-${MAX_PURGE}>\``);
+    }
+
+    // Check range
+    if (amount <= 0) {
+      return message.reply(`❌ Amount must be at least **1**. Usage: \`${prefix}purge <1-${MAX_PURGE}>\``);
+    }
+
+    if (amount > MAX_PURGE) {
+      return message.reply(`❌ Max purge limit is **${MAX_PURGE}** messages.`);
     }
 
     try {
@@ -51,37 +66,74 @@ module.exports = {
 
       let remaining = amount;
       let totalDeleted = 0;
+      let oldMessageCount = 0;
 
       while (remaining > 0) {
         const fetchLimit = Math.min(remaining, 100);
 
-        const messages = await message.channel.messages.fetch({ limit: fetchLimit });
-        if (!messages.size) break;
+        try {
+          const messages = await message.channel.messages.fetch({ limit: fetchLimit }).catch(() => null);
+          
+          if (!messages || !messages.size) break;
 
-        const deleted = await message.channel.bulkDelete(messages, true);
-        totalDeleted += deleted.size;
-        remaining -= deleted.size;
+          const deleted = await message.channel.bulkDelete(messages, true).catch((err) => {
+            console.error('Bulk delete error:', err);
+            return new Map(); // Return empty map on error
+          });
 
-        // Stop if Discord refuses (old messages)
-        if (deleted.size < fetchLimit) break;
+          totalDeleted += deleted.size;
+          remaining -= deleted.size;
+
+          // Stop if Discord refuses (old messages or other issue)
+          if (deleted.size < fetchLimit) {
+            oldMessageCount = remaining;
+            break;
+          }
+
+          // Small delay to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+        } catch (fetchErr) {
+          console.error('Message fetch error:', fetchErr);
+          break;
+        }
       }
 
-      const confirm = await message.channel.send(
-        `🧹 Deleted **${totalDeleted}** messages.`
-      );
+      // Build response message
+      let responseText = `🧹 Deleted **${totalDeleted}** message${totalDeleted !== 1 ? 's' : ''}`;
+      
+      if (oldMessageCount > 0) {
+        responseText += `\n⚠️ Skipped **${oldMessageCount}** message${oldMessageCount !== 1 ? 's' : ''}` +
+                       ` (older than 14 days)`;
+      }
 
-      setTimeout(() => confirm.delete().catch(() => {}), 2500);
+      const confirm = await message.channel.send(responseText);
+
+      setTimeout(() => confirm.delete().catch(() => {}), 3000);
 
     } catch (err) {
       console.error('Purge error:', err);
 
+      // Handle specific error codes
       if (err.code === 50034) {
         return message.channel.send(
-          'Some messages are older than **14 days** and cannot be deleted.'
+          '❌ Some messages are older than **14 days** and cannot be deleted.'
         );
       }
 
-      return message.channel.send('Failed to purge messages.');
+      if (err.code === 50013) {
+        return message.channel.send(
+          '❌ I lack permission to delete messages in this channel.'
+        );
+      }
+
+      if (err.message?.includes('bulk delete')) {
+        return message.channel.send(
+          '❌ Bulk delete failed. Try deleting fewer messages at once.'
+        );
+      }
+
+      return message.channel.send('❌ Failed to purge messages. Check bot permissions.');
     }
   },
 };
