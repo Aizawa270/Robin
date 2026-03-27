@@ -37,8 +37,9 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS pack_cooldowns (
-    user_id    TEXT PRIMARY KEY,
-    last_claim INTEGER DEFAULT 0
+    user_id      TEXT    PRIMARY KEY,
+    window_start INTEGER DEFAULT 0,
+    packs_used   INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS point_cooldowns (
@@ -631,49 +632,72 @@ async function handlePoint(message, args) {
 
 // ─── PACK ─────────────────────────────────────────────────────────────────────
 // 5 packs max per day — each pack gives exactly 1 animal
+// ─── PACK ─────────────────────────────────────────────────────────────────────
+// 5 packs per 24h window — each pack gives exactly 1 animal.
+// The 24h cooldown only starts after ALL 5 packs are used (or the window expires).
 async function handlePack(message, args) {
   const { author } = message;
   ensureProfile(author.id);
 
-  const CD_MS    = 24 * 60 * 60 * 1000;
+  const CD_MS     = 24 * 60 * 60 * 1000;
   const MAX_PACKS = 5;
+  const now       = Date.now();
 
-  const cdRow   = db.prepare('SELECT last_claim FROM pack_cooldowns WHERE user_id = ?').get(author.id);
-  const elapsed = Date.now() - (cdRow?.last_claim || 0);
+  let cdRow = db.prepare('SELECT * FROM pack_cooldowns WHERE user_id = ?').get(author.id);
 
-  if (elapsed < CD_MS) {
-    const left = CD_MS - elapsed;
+  // If no row, or the 24h window has expired — reset
+  if (!cdRow || (now - cdRow.window_start) >= CD_MS) {
+    db.prepare(`
+      INSERT INTO pack_cooldowns (user_id, window_start, packs_used) VALUES (?, ?, 0)
+      ON CONFLICT(user_id) DO UPDATE SET window_start = excluded.window_start, packs_used = 0
+    `).run(author.id, now);
+    cdRow = { window_start: now, packs_used: 0 };
+  }
+
+  const packsLeft = MAX_PACKS - cdRow.packs_used;
+
+  if (packsLeft <= 0) {
+    // All 5 used — tell them when window resets
+    const left = CD_MS - (now - cdRow.window_start);
     const h    = Math.floor(left / 3_600_000);
     const m    = Math.floor((left % 3_600_000) / 60_000);
-    return message.reply(`⏳ Pack on cooldown. Come back in **${h}h ${m}m**.`);
+    return message.reply(`⏳ You've used all **5 packs** for today. Resets in **${h}h ${m}m**.`);
   }
 
-  // How many packs to open? Default 1, max 5
+  // How many to open this call? Default 1, max whatever's left
   const rawAmount = parseInt(args[1]);
 
-  if (args[1] && (isNaN(rawAmount) || rawAmount < 1 || rawAmount > MAX_PACKS)) {
-    return message.reply(`❌ Specify a number between 1 and ${MAX_PACKS}. Usage: \`!1v1 pack [1-5]\``);
+  if (args[1] && (isNaN(rawAmount) || rawAmount < 1)) {
+    return message.reply(`❌ Specify a number between 1 and ${packsLeft}. Usage: \`!1v1 pack [1-5]\``);
   }
 
-  const packCount = (!rawAmount || rawAmount < 1) ? 1 : Math.min(rawAmount, MAX_PACKS);
+  const packCount = (!rawAmount || rawAmount < 1) ? 1 : Math.min(rawAmount, packsLeft);
 
-  // 1 animal per pack
+  // Pull 1 animal per pack
   const pulled = Array.from({ length: packCount }, pullRandomAnimal);
   for (const a of pulled) upsertInventory.run(author.id, a.name, 1);
-  db.prepare('INSERT OR REPLACE INTO pack_cooldowns (user_id, last_claim) VALUES (?, ?)').run(author.id, Date.now());
 
+  const newPacksUsed = cdRow.packs_used + packCount;
+  db.prepare('UPDATE pack_cooldowns SET packs_used = ? WHERE user_id = ?').run(newPacksUsed, author.id);
+
+  const remaining = MAX_PACKS - newPacksUsed;
   const lines = pulled.map((a, i) =>
-    `**Pack ${i + 1}:** ${a.emoji} **${a.name}** — ${a.pts} pts \`${a.rarity}\``
+    `**Pack ${cdRow.packs_used + i + 1}:** ${a.emoji} **${a.name}** — ${a.pts} pts \`${a.rarity}\``
   ).join('\n');
+
+  const footerText = remaining > 0
+    ? `${remaining} pack${remaining > 1 ? 's' : ''} remaining today`
+    : 'All 5 packs used! Resets in 24h from your first pack today';
 
   const embed = new EmbedBuilder()
     .setColor(0x9b59b6)
     .setTitle(`📦 Opened ${packCount} Pack${packCount > 1 ? 's' : ''}!`)
-    .setDescription(`You got:\n\n${lines}\n\nNext packs reset in **24h**.`)
-    .setFooter({ text: 'Each pack gives 1 animal  •  Up to 5 packs per day' });
+    .setDescription(`You got:\n\n${lines}`)
+    .setFooter({ text: footerText });
 
   return message.reply({ embeds: [embed] });
 }
+
 
 // ─── INVENTORY ────────────────────────────────────────────────────────────────
 async function handleInventory(message) {
