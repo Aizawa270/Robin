@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActivityType } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
-const { handleButtonInteraction: handle1v1Button } = require('./commands/misc/1v1'); // ✅ FIXED PATH
+const { handleButtonInteraction: handle1v1Button } = require('./commands/misc/1v1');
+const { restoreReminders } = require('./commands/misc/remind');
 const Database = require('better-sqlite3');
 
 // 🔥 SERVICES
@@ -56,7 +57,6 @@ prefixDB.pragma('journal_mode = WAL');
 prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY, prefix TEXT)').run();
 client.prefixDB = prefixDB;
 
-// ===== OTHER DBS (unchanged, trimmed for clarity in explanation but KEEP YOURS) =====
 const fameDB = new Database(path.join(DATA_DIR, 'fame.sqlite'));
 fameDB.pragma('journal_mode = WAL');
 client.fameDB = fameDB;
@@ -105,6 +105,9 @@ client.once('ready', async () => {
   birthdayService(client);
   welcomeHandler(client);
 
+  // Restore any reminders that were pending before the bot restarted
+  restoreReminders(client);
+
   console.log('🚀 Bot fully operational');
 });
 
@@ -115,7 +118,7 @@ client.on('messageCreate', async (message) => {
   await handleMessage(client, message);
 });
 
-// ===== 🔥 BUTTON HANDLER (IMPORTANT) =====
+// ===== BUTTON HANDLER =====
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
