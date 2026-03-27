@@ -1,6 +1,4 @@
-// commands/1v1.js
-// Plugs into the existing commandHandler pattern
-// DB stored in data/1v1.sqlite — persisted via the GitHub Actions git-commit backup
+// commands/misc/1v1.js
 
 const {
   EmbedBuilder,
@@ -14,7 +12,7 @@ const path = require('path');
 const fs = require('fs');
 
 // ─── DATABASE ────────────────────────────────────────────────────────────────
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, '1v1.sqlite'));
@@ -28,20 +26,17 @@ db.exec(`
     losses        INTEGER DEFAULT 0,
     points_gifted INTEGER DEFAULT 0
   );
-
   CREATE TABLE IF NOT EXISTS inventory (
     user_id TEXT,
     animal  TEXT,
     amount  INTEGER DEFAULT 0,
     PRIMARY KEY (user_id, animal)
   );
-
   CREATE TABLE IF NOT EXISTS pack_cooldowns (
     user_id      TEXT    PRIMARY KEY,
     window_start INTEGER DEFAULT 0,
     packs_used   INTEGER DEFAULT 0
   );
-
   CREATE TABLE IF NOT EXISTS point_cooldowns (
     user_id    TEXT PRIMARY KEY,
     last_point INTEGER DEFAULT 0
@@ -50,7 +45,7 @@ db.exec(`
 
 console.log('[1v1] Database initialized');
 
-// ─── ANIMALS + RARITY ────────────────────────────────────────────────────────
+// ─── ANIMALS ─────────────────────────────────────────────────────────────────
 const ANIMALS = [
   { name: 'Mouse',     pts: 1,   rarity: 'Common',    emoji: '🐭', weight: 100 },
   { name: 'Rabbit',    pts: 2,   rarity: 'Common',    emoji: '🐰', weight: 90  },
@@ -78,12 +73,8 @@ const ANIMALS = [
 ];
 
 const RARITY_COLORS = {
-  Common:    0x95a5a6,
-  Uncommon:  0x2ecc71,
-  Rare:      0x3498db,
-  Epic:      0x9b59b6,
-  Legendary: 0xf1c40f,
-  Mythic:    0xe74c3c,
+  Common: 0x95a5a6, Uncommon: 0x2ecc71, Rare: 0x3498db,
+  Epic: 0x9b59b6, Legendary: 0xf1c40f, Mythic: 0xe74c3c,
 };
 
 const ANIMAL_MAP   = Object.fromEntries(ANIMALS.map(a => [a.name.toLowerCase(), a]));
@@ -91,10 +82,7 @@ const TOTAL_WEIGHT = ANIMALS.reduce((s, a) => s + a.weight, 0);
 
 function pullRandomAnimal() {
   let r = Math.random() * TOTAL_WEIGHT;
-  for (const a of ANIMALS) {
-    r -= a.weight;
-    if (r <= 0) return a;
-  }
+  for (const a of ANIMALS) { r -= a.weight; if (r <= 0) return a; }
   return ANIMALS[0];
 }
 
@@ -134,11 +122,10 @@ function getInventory(userId) {
   return db.prepare('SELECT animal, amount FROM inventory WHERE user_id = ? AND amount > 0').all(userId);
 }
 
-// ─── ACTIVE BATTLES (in-memory) ───────────────────────────────────────────────
+// ─── ACTIVE BATTLES ──────────────────────────────────────────────────────────
 const activeBattles = new Map();
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
-// Get display name safely from a User object (needs guild for server nickname)
+// ─── DISPLAY NAME HELPER ─────────────────────────────────────────────────────
 async function getDisplayName(guild, user) {
   try {
     const member = await guild.members.fetch(user.id);
@@ -149,25 +136,24 @@ async function getDisplayName(guild, user) {
 }
 
 // ─── CANVAS BATTLE IMAGE ─────────────────────────────────────────────────────
-// Uses the Imgur template — no local file needed
-// Template layout (1280x720): left avatar circle ~(282, 360), right ~(998, 360)
-// Name text sits in the upper corners
+// Template: https://i.imgur.com/8PTD0Bz.png (1536x1024)
+//
+// Pixel-analysed from the actual template image:
+//   Left  circle centre: x=381  (W*0.2480), y=378 (H*0.3691)
+//   Right circle centre: x=1138 (W*0.7409), y=378 (H*0.3691)
+//   Avatar radius: 215px (H*0.210) — fills the circle without overflow
+//   [Name] text white region: y=58–129, canvas baseline at y=117 (H*0.1143)
+//
 const TEMPLATE_URL = 'https://i.imgur.com/8PTD0Bz.png';
 
 async function buildBattleImage(challengerUser, opponentUser, guild) {
   let createCanvas, loadImage;
   try {
     ({ createCanvas, loadImage } = require('@napi-rs/canvas'));
-  } catch {
-    return null; // @napi-rs/canvas not installed — skip image
-  }
+  } catch { return null; }
 
   let template;
-  try {
-    template = await loadImage(TEMPLATE_URL);
-  } catch {
-    return null;
-  }
+  try { template = await loadImage(TEMPLATE_URL); } catch { return null; }
 
   const W = template.width;
   const H = template.height;
@@ -175,17 +161,13 @@ async function buildBattleImage(challengerUser, opponentUser, guild) {
   const ctx    = canvas.getContext('2d');
   ctx.drawImage(template, 0, 0, W, H);
 
-  // Fetch guild display names
   const challName = await getDisplayName(guild, challengerUser);
   const oppName   = await getDisplayName(guild, opponentUser);
 
-  // Avatar circle positions — calibrated to the boxing template (1280×720)
-  // Left circle centre: ~22% from left, ~50% down
-  // Right circle centre: ~78% from left, ~50% down
-  const leftCX   = Math.round(W * 0.220);
-  const rightCX  = Math.round(W * 0.780);
-  const circleCY = Math.round(H * 0.500);
-  const avatarR  = Math.round(H * 0.200); // radius snug inside the circles
+  const leftCX   = Math.round(W * 0.2480);  // 381px
+  const rightCX  = Math.round(W * 0.7409);  // 1138px
+  const circleCY = Math.round(H * 0.3691);  // 378px
+  const avatarR  = Math.round(H * 0.2100);  // 215px
 
   async function drawCircularAvatar(user, cx, cy, radius) {
     try {
@@ -197,20 +179,19 @@ async function buildBattleImage(challengerUser, opponentUser, guild) {
       ctx.clip();
       ctx.drawImage(img, cx - radius, cy - radius, radius * 2, radius * 2);
       ctx.restore();
-    } catch { /* skip if avatar fails to load */ }
+    } catch { /* skip if avatar fails */ }
   }
 
   await drawCircularAvatar(challengerUser, leftCX,  circleCY, avatarR);
   await drawCircularAvatar(opponentUser,   rightCX, circleCY, avatarR);
 
-  // Draw names — cover the [Name] placeholder text near top of each side
-  // [Name] is at roughly y=11% of height
-  const fontSize = Math.round(H * 0.058);
-  const nameY    = Math.round(H * 0.115);
+  // Names — baseline at y=117 covers the [Name] placeholder perfectly
+  const fontSize = Math.round(H * 0.057);
+  const nameY    = Math.round(H * 0.1143);
 
   ctx.font        = `bold ${fontSize}px Arial`;
   ctx.textAlign   = 'center';
-  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowColor = 'rgba(0,0,0,0.95)';
   ctx.shadowBlur  = 10;
   ctx.fillStyle   = '#ffffff';
 
@@ -260,25 +241,17 @@ async function startBattle(channel, challenger, opponent) {
   ensureProfile(challenger.id);
   ensureProfile(opponent.id);
 
-  // Resolve display names once upfront so embeds and image both use them
   const challName = await getDisplayName(channel.guild, challenger);
   const oppName   = await getDisplayName(channel.guild, opponent);
 
   const state = {
-    challenger,
-    opponent,
-    challName,
-    oppName,
-    points:     { [challenger.id]: 0, [opponent.id]: 0 },
-    endTime,
-    intervalId: null,
-    battleMsg:  null,
-    hasImage:   false,
+    challenger, opponent, challName, oppName,
+    points: { [challenger.id]: 0, [opponent.id]: 0 },
+    endTime, intervalId: null, battleMsg: null, hasImage: false,
   };
 
   activeBattles.set(channel.id, state);
 
-  // Build the battle image (avatars + names drawn over the Imgur template)
   let imageBuffer = null;
   try { imageBuffer = await buildBattleImage(challenger, opponent, channel.guild); } catch { /* skip */ }
   state.hasImage = !!imageBuffer;
@@ -315,17 +288,11 @@ async function endBattle(channel, state) {
   if (cp === op) {
     db.prepare('UPDATE profiles SET losses = losses + 1 WHERE user_id = ?').run(challenger.id);
     db.prepare('UPDATE profiles SET losses = losses + 1 WHERE user_id = ?').run(opponent.id);
-
     return channel.send({
       embeds: [
-        new EmbedBuilder()
-          .setColor(0x95a5a6)
+        new EmbedBuilder().setColor(0x95a5a6)
           .setTitle('💀 Both fighters failed to impress the crowd!')
-          .setDescription(
-            `**${challName}** — ${cp} pts\n` +
-            `**${oppName}** — ${op} pts\n\n` +
-            `Tied. Both get **+1 loss**.`
-          ),
+          .setDescription(`**${challName}** — ${cp} pts\n**${oppName}** — ${op} pts\n\nTied. Both get **+1 loss**.`),
       ],
     });
   }
@@ -340,13 +307,8 @@ async function endBattle(channel, state) {
 
   return channel.send({
     embeds: [
-      new EmbedBuilder()
-        .setColor(0xf1c40f)
-        .setTitle('🏆 Battle Over!')
-        .setDescription(
-          `**${winName}** wins with **${winPts} pts**!\n` +
-          `${loseName} scored ${losePts} pts.`
-        )
+      new EmbedBuilder().setColor(0xf1c40f).setTitle('🏆 Battle Over!')
+        .setDescription(`**${winName}** wins with **${winPts} pts**!\n${loseName} scored ${losePts} pts.`)
         .setThumbnail(winner.displayAvatarURL()),
     ],
   });
@@ -362,15 +324,13 @@ async function handleButtonInteraction(interaction) {
   const challId = parts[2];
   const oppId   = parts[3];
 
-  if (user.id !== oppId) {
+  if (user.id !== oppId)
     return interaction.reply({ content: 'This challenge is not for you.', ephemeral: true });
-  }
 
   const key     = `${challId}_${oppId}`;
   const pending = channel.client._1v1Challenges?.get(key);
-  if (!pending) {
+  if (!pending)
     return interaction.reply({ content: 'Challenge not found or already expired.', ephemeral: true });
-  }
 
   clearTimeout(pending.expireTimeout);
   channel.client._1v1Challenges.delete(key);
@@ -383,23 +343,13 @@ async function handleButtonInteraction(interaction) {
   if (action === 'deny') {
     const userName = await getDisplayName(guild, user).catch(() => user.username);
     return interaction.update({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x95a5a6)
-          .setTitle('❌ Challenge Denied')
-          .setDescription(`**${userName}** said no.`),
-      ],
+      embeds: [new EmbedBuilder().setColor(0x95a5a6).setTitle('❌ Challenge Denied').setDescription(`**${userName}** said no.`)],
       components: [disabledRow],
     });
   }
 
   await interaction.update({
-    embeds: [
-      new EmbedBuilder()
-        .setColor(0x2ecc71)
-        .setTitle('✅ Challenge Accepted!')
-        .setDescription('The battle is starting…'),
-    ],
+    embeds: [new EmbedBuilder().setColor(0x2ecc71).setTitle('✅ Challenge Accepted!').setDescription('The battle is starting…')],
     components: [disabledRow],
   });
 
@@ -418,81 +368,37 @@ async function execute(client, message, args) {
 
   if (trigger === 'point') return handlePoint(message, args);
 
-  // !1v1 <subcommand>
   const sub = args[0]?.toLowerCase();
-
   if (sub === 'help')                         return handleHelp(message);
   if (sub === 'pack')                         return handlePack(message, args);
   if (sub === 'inventory' || sub === 'inv')   return handleInventory(message);
   if (sub === 'profile')                      return handleProfile(message, args);
   if (sub === 'leaderboard' || sub === 'lb')  return handleLeaderboard(message);
+  if (sub === 'reset')                        return handleReset(message, args);
 
-  // !1v1 @user or !1v1 <userId>
   const target =
     message.mentions.users.first() ||
     (args[0] ? await message.guild.members.fetch(args[0]).then(m => m?.user).catch(() => null) : null);
 
   if (target) return handleChallenge(message, target);
-
-  // No args and no target — do nothing silently (only !1v1 help shows help)
 }
 
 // ─── HELP ─────────────────────────────────────────────────────────────────────
 async function handleHelp(message) {
-  const embed = new EmbedBuilder()
-    .setColor(0xe74c3c)
-    .setTitle('⚔️  Clout 1v1 — Help')
-    .setDescription('Two players fight for 3 minutes while the chat sends them animals as points.')
-    .addFields(
-      {
-        name: '🥊 Fighting',
-        value: [
-          '`!1v1 @user` — Challenge someone to a fight (they have 60s to accept)',
-          '`!point @user <amount> <animal>` — Gift points to a battler (15s cooldown, battlers cannot point)',
-        ].join('\n'),
-      },
-      {
-        name: '📦 Packs & Inventory',
-        value: [
-          '`!1v1 pack` — Open 1 daily pack (1 animal each, up to 5 packs per 24h)',
-          '`!1v1 pack 3` — Open 3 packs at once',
-          '`!1v1 inventory` — See all animals you own',
-        ].join('\n'),
-      },
-      {
-        name: '📊 Stats & Leaderboard',
-        value: [
-          '`!1v1 profile` — Your wins, losses & total points gifted',
-          '`!1v1 profile @user` — View someone else\'s profile',
-          '`!1v1 leaderboard` — Top fighters + top gifters',
-        ].join('\n'),
-      },
-      {
-        name: '🐾 Animal Rarities (pack drop rates)',
-        value: [
-          '🩶 Common — Mouse · Rabbit · Fox · Turtle (1–5 pts)',
-          '💚 Uncommon — Wolf · Eagle · Tiger · Bear (7–15 pts)',
-          '💙 Rare — Lion · Gorilla · Crocodile · Elephant (20–35 pts)',
-          '💜 Epic — Shark · Rhino · T-Rex · Phoenix (40–60 pts)',
-          '💛 Legendary — Unicorn · Griffin · Pegasus · Dragon (70–100 pts)',
-          '❤️ Mythic — Hydra · Kraken · Cerberus (120–160 pts) — extremely rare',
-        ].join('\n'),
-      },
-      {
-        name: '🎁 Starter Kit',
-        value: 'Every new player gets: 10× Mouse, 5× Turtle, 1× Tiger',
-      },
-      {
-        name: '🏆 Win / Lose',
-        value: [
-          'Most points after 3 min = Win (+1W)  |  Other player = Loss (+1L)',
-          'Tied = both get +1 Loss 💀',
-        ].join('\n'),
-      },
-    )
-    .setFooter({ text: 'Example: !point @Astrix 2 Dragon  →  gifts 2 Dragons (200 pts) to Astrix' });
-
-  return message.reply({ embeds: [embed] });
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(0xe74c3c).setTitle('⚔️  Clout 1v1 — Help')
+        .setDescription('Two players fight for 3 minutes while the chat sends them animals as points.')
+        .addFields(
+          { name: '🥊 Fighting', value: '`!1v1 @user` — Challenge someone (60s to accept)\n`!point @user <amount> <animal>` — Gift points (15s cooldown)' },
+          { name: '📦 Packs', value: '`!1v1 pack` — Open 1 pack (1 animal, up to 5 per 24h)\n`!1v1 pack 3` — Open 3 packs at once\n`!1v1 inventory` — See your animals' },
+          { name: '📊 Stats', value: '`!1v1 profile` — Your W/L record\n`!1v1 profile @user` — View someone\'s profile\n`!1v1 leaderboard` — Top fighters & gifters\n`!1v1 reset` — Reset your own W/L' },
+          { name: '🐾 Rarities', value: '🩶 Common · 💚 Uncommon · 💙 Rare · 💜 Epic · 💛 Legendary · ❤️ Mythic' },
+          { name: '🎁 Starter Kit', value: '10× Mouse, 5× Turtle, 1× Tiger' },
+        )
+        .setFooter({ text: 'Example: !point @Astrix 2 Dragon  →  gifts 2 Dragons (200 pts) to Astrix' }),
+    ],
+  });
 }
 
 // ─── CHALLENGE ────────────────────────────────────────────────────────────────
@@ -502,41 +408,26 @@ async function handleChallenge(message, target) {
   if (target.id === author.id) return message.reply("You can't fight yourself 💀");
   if (target.bot)              return message.reply("Bots don't fight.");
 
-  if (activeBattles.has(channel.id)) {
+  if (activeBattles.has(channel.id))
     return message.reply('There\'s already an active battle in this channel!');
-  }
 
-  // Only block if the exact users are already fighting somewhere else
   for (const [, battle] of activeBattles) {
-    if (battle.challenger.id === author.id || battle.opponent.id === author.id) {
+    if (battle.challenger.id === author.id || battle.opponent.id === author.id)
       return message.reply('You\'re already in an active battle somewhere else!');
-    }
-    if (battle.challenger.id === target.id || battle.opponent.id === target.id) {
+    if (battle.challenger.id === target.id || battle.opponent.id === target.id)
       return message.reply(`${target.username} is already in an active battle!`);
-    }
   }
 
   const authName = await getDisplayName(channel.guild, author);
   const targName = await getDisplayName(channel.guild, target);
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`1v1_accept_${author.id}_${target.id}`)
-      .setLabel('✅ Accept')
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`1v1_deny_${author.id}_${target.id}`)
-      .setLabel('❌ Deny')
-      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`1v1_accept_${author.id}_${target.id}`).setLabel('✅ Accept').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`1v1_deny_${author.id}_${target.id}`).setLabel('❌ Deny').setStyle(ButtonStyle.Danger),
   );
 
-  const embed = new EmbedBuilder()
-    .setColor(0xe74c3c)
-    .setTitle('⚔️  Fight Challenge!')
-    .setDescription(
-      `**${authName}** challenged **${targName}** to a Clout 1v1!\n\n` +
-      `<@${target.id}>, do you accept?\n\n*Expires in 60 seconds.*`
-    )
+  const embed = new EmbedBuilder().setColor(0xe74c3c).setTitle('⚔️  Fight Challenge!')
+    .setDescription(`**${authName}** challenged **${targName}** to a Clout 1v1!\n\n<@${target.id}>, do you accept?\n\n*Expires in 60 seconds.*`)
     .setThumbnail(author.displayAvatarURL());
 
   const msg = await channel.send({ content: `<@${target.id}>`, embeds: [embed], components: [row] });
@@ -547,12 +438,7 @@ async function handleChallenge(message, target) {
       new ButtonBuilder().setCustomId('e2').setLabel('❌ Deny').setStyle(ButtonStyle.Danger).setDisabled(true),
     );
     await msg.edit({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x95a5a6)
-          .setTitle('⏰ Challenge Expired')
-          .setDescription(`**${authName}** vs **${targName}** — no response.`),
-      ],
+      embeds: [new EmbedBuilder().setColor(0x95a5a6).setTitle('⏰ Challenge Expired').setDescription(`**${authName}** vs **${targName}** — no response.`)],
       components: [expired],
     }).catch(() => {});
     channel.client._1v1Challenges?.delete(`${author.id}_${target.id}`);
@@ -566,22 +452,18 @@ async function handleChallenge(message, target) {
 async function handlePoint(message, args) {
   const { author, channel } = message;
 
-  // Only care about whether there's a battle in THIS channel
+  // ONLY check the battle in this specific channel — no cross-channel logic here
   const battle = activeBattles.get(channel.id);
   if (!battle) return message.reply('No active battle in this channel right now.');
 
-  // Battlers can't gift points during their own fight
-  if (author.id === battle.challenger.id || author.id === battle.opponent.id) {
+  if (author.id === battle.challenger.id || author.id === battle.opponent.id)
     return message.reply("You're in the battle! You can't send points.");
-  }
 
-  // args: [0] = @mention, [1] = amount, [2]+ = animal name
   const target = message.mentions.users.first();
   if (!target) return message.reply('Mention a battler. Usage: `!point @user <amount> <animal>`');
 
-  if (target.id !== battle.challenger.id && target.id !== battle.opponent.id) {
+  if (target.id !== battle.challenger.id && target.id !== battle.opponent.id)
     return message.reply("That person isn't in the current battle.");
-  }
 
   const amount = parseInt(args[1]);
   if (!amount || amount < 1) return message.reply('Specify a valid amount. `!point @user <amount> <animal>`');
@@ -590,11 +472,8 @@ async function handlePoint(message, args) {
   if (!animalName) return message.reply('Specify an animal. `!point @user <amount> <animal>`');
 
   const animal = ANIMAL_MAP[animalName.toLowerCase()];
-  if (!animal) {
-    return message.reply(`Unknown animal **${animalName}**. Check \`!1v1 inventory\` for your animals.`);
-  }
+  if (!animal) return message.reply(`Unknown animal **${animalName}**. Check \`!1v1 inventory\` for your animals.`);
 
-  // 15s cooldown per gifter
   const cdRow   = db.prepare('SELECT last_point FROM point_cooldowns WHERE user_id = ?').get(author.id);
   const elapsed = Date.now() - (cdRow?.last_point || 0);
   if (elapsed < 15_000) {
@@ -604,9 +483,8 @@ async function handlePoint(message, args) {
 
   ensureProfile(author.id);
 
-  if (!removeFromInventory(author.id, animal.name, amount)) {
+  if (!removeFromInventory(author.id, animal.name, amount))
     return message.reply(`You don't have ${amount}× **${animal.name}**. Check \`!1v1 inventory\`.`);
-  }
 
   const totalPts = amount * animal.pts;
   battle.points[target.id] += totalPts;
@@ -616,25 +494,21 @@ async function handlePoint(message, args) {
 
   const currentPts = battle.points[target.id];
   const gifterName = await getDisplayName(channel.guild, author);
-  // Use pre-resolved names stored in battle state for target
   const targetName = target.id === battle.challenger.id ? battle.challName : battle.oppName;
 
-  const embed = new EmbedBuilder()
-    .setColor(RARITY_COLORS[animal.rarity] ?? 0x2ecc71)
-    .setDescription(
-      `${animal.emoji} **${gifterName}** gifted **${targetName}** ` +
-      `${amount}× **${animal.name}** *(${totalPts} pts)*\n` +
-      `${targetName}'s current points: **${currentPts}**`
-    );
-
-  return channel.send({ embeds: [embed] });
+  return channel.send({
+    embeds: [
+      new EmbedBuilder().setColor(RARITY_COLORS[animal.rarity] ?? 0x2ecc71)
+        .setDescription(
+          `${animal.emoji} **${gifterName}** gifted **${targetName}** ` +
+          `${amount}× **${animal.name}** *(${totalPts} pts)*\n` +
+          `${targetName}'s current points: **${currentPts}**`
+        ),
+    ],
+  });
 }
 
 // ─── PACK ─────────────────────────────────────────────────────────────────────
-// 5 packs max per day — each pack gives exactly 1 animal
-// ─── PACK ─────────────────────────────────────────────────────────────────────
-// 5 packs per 24h window — each pack gives exactly 1 animal.
-// The 24h cooldown only starts after ALL 5 packs are used (or the window expires).
 async function handlePack(message, args) {
   const { author } = message;
   ensureProfile(author.id);
@@ -645,7 +519,6 @@ async function handlePack(message, args) {
 
   let cdRow = db.prepare('SELECT * FROM pack_cooldowns WHERE user_id = ?').get(author.id);
 
-  // If no row, or the 24h window has expired — reset
   if (!cdRow || (now - cdRow.window_start) >= CD_MS) {
     db.prepare(`
       INSERT INTO pack_cooldowns (user_id, window_start, packs_used) VALUES (?, ?, 0)
@@ -657,47 +530,37 @@ async function handlePack(message, args) {
   const packsLeft = MAX_PACKS - cdRow.packs_used;
 
   if (packsLeft <= 0) {
-    // All 5 used — tell them when window resets
     const left = CD_MS - (now - cdRow.window_start);
-    const h    = Math.floor(left / 3_600_000);
-    const m    = Math.floor((left % 3_600_000) / 60_000);
+    const h = Math.floor(left / 3_600_000);
+    const m = Math.floor((left % 3_600_000) / 60_000);
     return message.reply(`⏳ You've used all **5 packs** for today. Resets in **${h}h ${m}m**.`);
   }
 
-  // How many to open this call? Default 1, max whatever's left
   const rawAmount = parseInt(args[1]);
-
-  if (args[1] && (isNaN(rawAmount) || rawAmount < 1)) {
+  if (args[1] && (isNaN(rawAmount) || rawAmount < 1))
     return message.reply(`❌ Specify a number between 1 and ${packsLeft}. Usage: \`!1v1 pack [1-5]\``);
-  }
 
-  const packCount = (!rawAmount || rawAmount < 1) ? 1 : Math.min(rawAmount, packsLeft);
-
-  // Pull 1 animal per pack
-  const pulled = Array.from({ length: packCount }, pullRandomAnimal);
+  const packCount    = (!rawAmount || rawAmount < 1) ? 1 : Math.min(rawAmount, packsLeft);
+  const pulled       = Array.from({ length: packCount }, pullRandomAnimal);
   for (const a of pulled) upsertInventory.run(author.id, a.name, 1);
 
   const newPacksUsed = cdRow.packs_used + packCount;
   db.prepare('UPDATE pack_cooldowns SET packs_used = ? WHERE user_id = ?').run(newPacksUsed, author.id);
 
   const remaining = MAX_PACKS - newPacksUsed;
-  const lines = pulled.map((a, i) =>
+  const lines     = pulled.map((a, i) =>
     `**Pack ${cdRow.packs_used + i + 1}:** ${a.emoji} **${a.name}** — ${a.pts} pts \`${a.rarity}\``
   ).join('\n');
 
-  const footerText = remaining > 0
-    ? `${remaining} pack${remaining > 1 ? 's' : ''} remaining today`
-    : 'All 5 packs used! Resets in 24h from your first pack today';
-
-  const embed = new EmbedBuilder()
-    .setColor(0x9b59b6)
-    .setTitle(`📦 Opened ${packCount} Pack${packCount > 1 ? 's' : ''}!`)
-    .setDescription(`You got:\n\n${lines}`)
-    .setFooter({ text: footerText });
-
-  return message.reply({ embeds: [embed] });
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(0x9b59b6)
+        .setTitle(`📦 Opened ${packCount} Pack${packCount > 1 ? 's' : ''}!`)
+        .setDescription(`You got:\n\n${lines}`)
+        .setFooter({ text: remaining > 0 ? `${remaining} pack${remaining > 1 ? 's' : ''} remaining today` : 'All 5 packs used! Resets in 24h' }),
+    ],
+  });
 }
-
 
 // ─── INVENTORY ────────────────────────────────────────────────────────────────
 async function handleInventory(message) {
@@ -716,19 +579,15 @@ async function handleInventory(message) {
     grouped[a.rarity].push(`${a.emoji} **${row.animal}** ×${row.amount} *(${a.pts} pts each)*`);
   }
 
-  const fields = rarityOrder
-    .filter(r => grouped[r])
-    .map(r => ({ name: r, value: grouped[r].join('\n'), inline: false }));
-
+  const fields      = rarityOrder.filter(r => grouped[r]).map(r => ({ name: r, value: grouped[r].join('\n'), inline: false }));
   const displayName = await getDisplayName(guild, author);
 
-  const embed = new EmbedBuilder()
-    .setColor(0x3498db)
-    .setTitle(`🎒 ${displayName}'s Inventory`)
-    .addFields(fields)
-    .setThumbnail(author.displayAvatarURL());
-
-  return message.reply({ embeds: [embed] });
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(0x3498db).setTitle(`🎒 ${displayName}'s Inventory`)
+        .addFields(fields).setThumbnail(author.displayAvatarURL()),
+    ],
+  });
 }
 
 // ─── PROFILE ──────────────────────────────────────────────────────────────────
@@ -736,30 +595,58 @@ async function handleProfile(message, args) {
   const { author, mentions, guild } = message;
 
   let target = mentions.users.first();
-  if (!target && args[1]) {
-    target = await guild.members.fetch(args[1]).then(m => m?.user).catch(() => null);
-  }
+  if (!target && args[1]) target = await guild.members.fetch(args[1]).then(m => m?.user).catch(() => null);
   target = target || author;
 
   ensureProfile(target.id);
-  const p     = db.prepare('SELECT * FROM profiles WHERE user_id = ?').get(target.id);
-  const total = p.wins + p.losses;
-  const wr    = total > 0 ? ((p.wins / total) * 100).toFixed(1) : '0.0';
-
+  const p           = db.prepare('SELECT * FROM profiles WHERE user_id = ?').get(target.id);
+  const total       = p.wins + p.losses;
+  const wr          = total > 0 ? ((p.wins / total) * 100).toFixed(1) : '0.0';
   const displayName = await getDisplayName(guild, target);
 
-  const embed = new EmbedBuilder()
-    .setColor(0xe67e22)
-    .setTitle(`⚔️  ${displayName}'s Profile`)
-    .setThumbnail(target.displayAvatarURL())
-    .addFields(
-      { name: '🏆 Wins',          value: `${p.wins}`,          inline: true },
-      { name: '💀 Losses',        value: `${p.losses}`,        inline: true },
-      { name: '📊 Win Rate',      value: `${wr}%`,             inline: true },
-      { name: '🎁 Points Gifted', value: `${p.points_gifted}`, inline: true },
-    );
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(0xe67e22).setTitle(`⚔️  ${displayName}'s Profile`)
+        .setThumbnail(target.displayAvatarURL())
+        .addFields(
+          { name: '🏆 Wins',          value: `${p.wins}`,          inline: true },
+          { name: '💀 Losses',        value: `${p.losses}`,        inline: true },
+          { name: '📊 Win Rate',      value: `${wr}%`,             inline: true },
+          { name: '🎁 Points Gifted', value: `${p.points_gifted}`, inline: true },
+        ),
+    ],
+  });
+}
 
-  return message.reply({ embeds: [embed] });
+// ─── RESET ────────────────────────────────────────────────────────────────────
+async function handleReset(message, args) {
+  const { author, mentions, guild } = message;
+
+  let target = mentions.users.first();
+  const rawId = args[1]?.replace(/\D/g, '');
+  if (!target && rawId) target = await guild.members.fetch(rawId).then(m => m?.user).catch(() => null);
+
+  const isSelf = !target || target.id === author.id;
+
+  if (!isSelf) {
+    const member = await guild.members.fetch(author.id).catch(() => null);
+    if (!member?.permissions.has('ManageGuild'))
+      return message.reply('❌ You need **Manage Server** permission to reset someone else\'s record.');
+  }
+
+  const resetTarget = isSelf ? author : target;
+  ensureProfile(resetTarget.id);
+  db.prepare('UPDATE profiles SET wins = 0, losses = 0 WHERE user_id = ?').run(resetTarget.id);
+
+  const displayName = await getDisplayName(guild, resetTarget);
+
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(0xe74c3c).setTitle('🔄 Record Reset')
+        .setDescription(`**${displayName}**'s wins and losses have been reset to **0**.`)
+        .setThumbnail(resetTarget.displayAvatarURL()),
+    ],
+  });
 }
 
 // ─── LEADERBOARD ──────────────────────────────────────────────────────────────
@@ -779,27 +666,21 @@ async function handleLeaderboard(message) {
 
   const topWins = db.prepare('SELECT user_id, wins, losses FROM profiles ORDER BY wins DESC LIMIT 10').all();
   const topGift = db.prepare('SELECT user_id, points_gifted FROM profiles ORDER BY points_gifted DESC LIMIT 10').all();
-
   const [winsText, giftText] = await Promise.all([
     formatRows(topWins, r => `${r.wins}W / ${r.losses}L`),
     formatRows(topGift, r => `${r.points_gifted} pts gifted`),
   ]);
 
-  const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
-    .setTitle('🏆 1v1 Leaderboard')
-    .addFields(
-      { name: '🥊 Top Fighters', value: winsText, inline: false },
-      { name: '🎁 Top Gifters',  value: giftText, inline: false },
-    );
-
-  return message.channel.send({ embeds: [embed] });
+  return message.channel.send({
+    embeds: [
+      new EmbedBuilder().setColor(0xf1c40f).setTitle('🏆 1v1 Leaderboard')
+        .addFields(
+          { name: '🥊 Top Fighters', value: winsText, inline: false },
+          { name: '🎁 Top Gifters',  value: giftText, inline: false },
+        ),
+    ],
+  });
 }
 
 // ─── EXPORTS ──────────────────────────────────────────────────────────────────
-module.exports = {
-  name,
-  aliases,
-  execute,
-  handleButtonInteraction,
-};
+module.exports = { name, aliases, execute, handleButtonInteraction };
