@@ -47,34 +47,63 @@ console.log('[1v1] Database initialized');
 
 // ─── ANIMALS ─────────────────────────────────────────────────────────────────
 const ANIMALS = [
-  { name: 'Mouse',     pts: 1,   rarity: 'Common',    emoji: '🐭', weight: 100 },
-  { name: 'Rabbit',    pts: 2,   rarity: 'Common',    emoji: '🐰', weight: 90  },
-  { name: 'Fox',       pts: 3,   rarity: 'Common',    emoji: '🦊', weight: 80  },
-  { name: 'Turtle',    pts: 5,   rarity: 'Common',    emoji: '🐢', weight: 70  },
-  { name: 'Wolf',      pts: 7,   rarity: 'Uncommon',  emoji: '🐺', weight: 55  },
-  { name: 'Eagle',     pts: 8,   rarity: 'Uncommon',  emoji: '🦅', weight: 50  },
-  { name: 'Tiger',     pts: 10,  rarity: 'Uncommon',  emoji: '🐯', weight: 45  },
-  { name: 'Bear',      pts: 15,  rarity: 'Uncommon',  emoji: '🐻', weight: 38  },
-  { name: 'Lion',      pts: 20,  rarity: 'Rare',      emoji: '🦁', weight: 30  },
-  { name: 'Gorilla',   pts: 25,  rarity: 'Rare',      emoji: '🦍', weight: 25  },
-  { name: 'Crocodile', pts: 30,  rarity: 'Rare',      emoji: '🐊', weight: 20  },
-  { name: 'Elephant',  pts: 35,  rarity: 'Rare',      emoji: '🐘', weight: 16  },
-  { name: 'Shark',     pts: 40,  rarity: 'Epic',      emoji: '🦈', weight: 12  },
-  { name: 'Rhino',     pts: 45,  rarity: 'Epic',      emoji: '🦏', weight: 10  },
-  { name: 'T-Rex',     pts: 50,  rarity: 'Epic',      emoji: '🦖', weight: 8   },
-  { name: 'Phoenix',   pts: 60,  rarity: 'Epic',      emoji: '🔥', weight: 6   },
-  { name: 'Unicorn',   pts: 70,  rarity: 'Legendary', emoji: '🦄', weight: 4   },
-  { name: 'Griffin',   pts: 80,  rarity: 'Legendary', emoji: '🦅', weight: 3   },
-  { name: 'Pegasus',   pts: 90,  rarity: 'Legendary', emoji: '✨', weight: 2   },
-  { name: 'Dragon',    pts: 100, rarity: 'Legendary', emoji: '🐉', weight: 1.5 },
-  { name: 'Hydra',     pts: 120, rarity: 'Mythic',    emoji: '🐲', weight: 1   },
-  { name: 'Kraken',    pts: 140, rarity: 'Mythic',    emoji: '🦑', weight: 0.7 },
-  { name: 'Cerberus',  pts: 160, rarity: 'Mythic',    emoji: '👁️',  weight: 0.4 },
+  // ── Common ────────────────────────────────────────────────────────────────
+  { name: 'Mouse',       pts: 1,   rarity: 'Common',    emoji: '🐭', weight: 110 },
+  { name: 'Rabbit',      pts: 2,   rarity: 'Common',    emoji: '🐰', weight: 100 },
+  { name: 'Hamster',     pts: 2,   rarity: 'Common',    emoji: '🐹', weight: 95  },
+  { name: 'Frog',        pts: 4,   rarity: 'Common',    emoji: '🐸', weight: 85  },
+  { name: 'Fox',         pts: 3,   rarity: 'Common',    emoji: '🦊', weight: 88  },
+  { name: 'Duck',        pts: 4,   rarity: 'Common',    emoji: '🦆', weight: 80  },
+  { name: 'Penguin',     pts: 5,   rarity: 'Common',    emoji: '🐧', weight: 78  },
+  { name: 'Turtle',      pts: 5,   rarity: 'Common',    emoji: '🐢', weight: 75  },
+  // ── Uncommon ──────────────────────────────────────────────────────────────
+  { name: 'Wolf',        pts: 7,   rarity: 'Uncommon',  emoji: '🐺', weight: 58  },
+  { name: 'Eagle',       pts: 8,   rarity: 'Uncommon',  emoji: '🦅', weight: 52  },
+  { name: 'Panther',     pts: 12,  rarity: 'Uncommon',  emoji: '🐆', weight: 46  },
+  { name: 'Hyena',       pts: 11,  rarity: 'Uncommon',  emoji: '🦡', weight: 44  },
+  { name: 'Tiger',       pts: 10,  rarity: 'Uncommon',  emoji: '🐯', weight: 47  },
+  { name: 'Bear',        pts: 15,  rarity: 'Uncommon',  emoji: '🐻', weight: 40  },
+  // ── Rare ──────────────────────────────────────────────────────────────────
+  { name: 'Lion',        pts: 20,  rarity: 'Rare',      emoji: '🦁', weight: 30  },
+  { name: 'Hippo',       pts: 25,  rarity: 'Rare',      emoji: '🦛', weight: 22  },
+  { name: 'Gorilla',     pts: 25,  rarity: 'Rare',      emoji: '🦍', weight: 24  },
+  { name: 'Crocodile',   pts: 30,  rarity: 'Rare',      emoji: '🐊', weight: 20  },
+  { name: 'Grizzly',     pts: 32,  rarity: 'Rare',      emoji: '🐻‍❄️', weight: 17  },
+  { name: 'Elephant',    pts: 35,  rarity: 'Rare',      emoji: '🐘', weight: 16  },
+  // ── Epic ──────────────────────────────────────────────────────────────────
+  { name: 'Komodo',      pts: 42,  rarity: 'Epic',      emoji: '🦎', weight: 11  },
+  { name: 'Shark',       pts: 40,  rarity: 'Epic',      emoji: '🦈', weight: 12  },
+  { name: 'Rhino',       pts: 45,  rarity: 'Epic',      emoji: '🦏', weight: 10  },
+  { name: 'Orca',        pts: 55,  rarity: 'Epic',      emoji: '🐋', weight: 7   },
+  { name: 'T-Rex',       pts: 50,  rarity: 'Epic',      emoji: '🦖', weight: 8   },
+  { name: 'Phoenix',     pts: 60,  rarity: 'Epic',      emoji: '🔥', weight: 6   },
+  // ── Legendary ─────────────────────────────────────────────────────────────
+  { name: 'Manticore',   pts: 75,  rarity: 'Legendary', emoji: '🦁', weight: 2.8 },
+  { name: 'Unicorn',     pts: 70,  rarity: 'Legendary', emoji: '🦄', weight: 3.5 },
+  { name: 'Griffin',     pts: 80,  rarity: 'Legendary', emoji: '🦅', weight: 2.5 },
+  { name: 'Thunderbird', pts: 88,  rarity: 'Legendary', emoji: '⚡', weight: 2.0 },
+  { name: 'Pegasus',     pts: 90,  rarity: 'Legendary', emoji: '✨', weight: 1.8 },
+  { name: 'Dragon',      pts: 100, rarity: 'Legendary', emoji: '🐉', weight: 1.5 },
+  // ── Mythic ────────────────────────────────────────────────────────────────
+  { name: 'Hydra',       pts: 120, rarity: 'Mythic',    emoji: '🐲', weight: 1.0 },
+  { name: 'Kraken',      pts: 140, rarity: 'Mythic',    emoji: '🦑', weight: 0.7 },
+  { name: 'Cerberus',    pts: 160, rarity: 'Mythic',    emoji: '👁️',  weight: 0.4 },
+  { name: 'Leviathan',   pts: 180, rarity: 'Mythic',    emoji: '🌊', weight: 0.25},
+  { name: 'Fenrir',      pts: 200, rarity: 'Mythic',    emoji: '🐺', weight: 0.15},
+  // ── Divine (almost impossible) ────────────────────────────────────────────
+  { name: 'Bahamut',     pts: 250, rarity: 'Divine',    emoji: '🌟', weight: 0.08},
+  { name: 'Apocalypse',  pts: 300, rarity: 'Divine',    emoji: '☄️',  weight: 0.05},
+  { name: 'Void Dragon', pts: 500, rarity: 'Divine',    emoji: '🌌', weight: 0.02},
 ];
 
 const RARITY_COLORS = {
-  Common: 0x95a5a6, Uncommon: 0x2ecc71, Rare: 0x3498db,
-  Epic: 0x9b59b6, Legendary: 0xf1c40f, Mythic: 0xe74c3c,
+  Common:    0x95a5a6,
+  Uncommon:  0x2ecc71,
+  Rare:      0x3498db,
+  Epic:      0x9b59b6,
+  Legendary: 0xf1c40f,
+  Mythic:    0xe74c3c,
+  Divine:    0xffffff,
 };
 
 const ANIMAL_MAP   = Object.fromEntries(ANIMALS.map(a => [a.name.toLowerCase(), a]));
@@ -136,13 +165,18 @@ async function getDisplayName(guild, user) {
 }
 
 // ─── CANVAS BATTLE IMAGE ─────────────────────────────────────────────────────
-// Template: https://i.imgur.com/8PTD0Bz.png (1536x1024)
+// Template: https://i.imgur.com/8PTD0Bz.png  (1536 x 1024)
 //
-// Pixel-analysed from the actual template image:
-//   Left  circle centre: x=381  (W*0.2480), y=378 (H*0.3691)
-//   Right circle centre: x=1138 (W*0.7409), y=378 (H*0.3691)
-//   Avatar radius: 215px (H*0.210) — fills the circle without overflow
-//   [Name] text white region: y=58–129, canvas baseline at y=117 (H*0.1143)
+// Pixel-exact measurements from the real template:
+//   Left  circle: centre x=381 (W×0.248), y=375 (H×0.366), placeholder radius=232
+//   Right circle: centre x=1143 (W×0.744), y=375 (H×0.366), same radius
+//   [Name] text area: y=58–130, left x=256–507, right x=1016–1269
+//
+// Strategy:
+//   1. Draw avatar at radius=232 → completely covers the pink placeholder
+//      circle, the "AVATAR" text inside it, and the outline ring.
+//   2. Draw a dark rounded pill over the [Name] text area.
+//   3. Write the real username on the pill.
 //
 const TEMPLATE_URL = 'https://i.imgur.com/8PTD0Bz.png';
 
@@ -155,8 +189,8 @@ async function buildBattleImage(challengerUser, opponentUser, guild) {
   let template;
   try { template = await loadImage(TEMPLATE_URL); } catch { return null; }
 
-  const W = template.width;
-  const H = template.height;
+  const W = template.width;   // 1536
+  const H = template.height;  // 1024
   const canvas = createCanvas(W, H);
   const ctx    = canvas.getContext('2d');
   ctx.drawImage(template, 0, 0, W, H);
@@ -164,40 +198,90 @@ async function buildBattleImage(challengerUser, opponentUser, guild) {
   const challName = await getDisplayName(guild, challengerUser);
   const oppName   = await getDisplayName(guild, opponentUser);
 
-  const leftCX   = Math.round(W * 0.2480);  // 381px
-  const rightCX  = Math.round(W * 0.7409);  // 1138px
-  const circleCY = Math.round(H * 0.3691);  // 378px
-  const avatarR  = Math.round(H * 0.2100);  // 215px
+  // Circle centres (pixel-measured from template)
+  const leftCX   = Math.round(W * 0.2480);  // 381
+  const rightCX  = Math.round(W * 0.7441);  // 1143
+  const circleCY = Math.round(H * 0.3662);  // 375
+  // Full placeholder radius — avatar drawn at this size covers everything
+  const avatarR  = 232;
 
-  async function drawCircularAvatar(user, cx, cy, radius) {
+  // ── 1. Draw avatars (cover the entire placeholder circle) ──────────────
+  async function drawAvatar(user, cx, cy, radius) {
     try {
-      const url = user.displayAvatarURL({ extension: 'png', size: 256 });
+      const url = user.displayAvatarURL({ extension: 'png', size: 512 });
       const img = await loadImage(url);
+      // Clip to circle and draw avatar
       ctx.save();
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.clip();
       ctx.drawImage(img, cx - radius, cy - radius, radius * 2, radius * 2);
       ctx.restore();
-    } catch { /* skip if avatar fails */ }
+      // Clean circular border
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth   = 5;
+      ctx.stroke();
+      ctx.restore();
+    } catch { /* skip on fail */ }
   }
 
-  await drawCircularAvatar(challengerUser, leftCX,  circleCY, avatarR);
-  await drawCircularAvatar(opponentUser,   rightCX, circleCY, avatarR);
+  await drawAvatar(challengerUser, leftCX,  circleCY, avatarR);
+  await drawAvatar(opponentUser,   rightCX, circleCY, avatarR);
 
-  // Names — baseline at y=117 covers the [Name] placeholder perfectly
-  const fontSize = Math.round(H * 0.057);
-  const nameY    = Math.round(H * 0.1143);
+  // ── 2. Draw name pills over the [Name] placeholder text ────────────────
+  // [Name] text region: y=58–130 (height=72px), centred on x=381 / x=1143
+  const pillTopY  = 50;
+  const pillBotY  = 138;
+  const pillH     = pillBotY - pillTopY;      // 88px
+  const pillMidY  = pillTopY + pillH / 2;     // 94px
+  const pillR     = pillH / 2;               // corner radius
+  const fontSize  = Math.round(pillH * 0.60); // ~53px
 
-  ctx.font        = `bold ${fontSize}px Arial`;
-  ctx.textAlign   = 'center';
-  ctx.shadowColor = 'rgba(0,0,0,0.95)';
-  ctx.shadowBlur  = 10;
-  ctx.fillStyle   = '#ffffff';
+  function drawNamePill(cx, name) {
+    ctx.font = `bold ${fontSize}px Arial`;
+    const trim     = s => s.length > 13 ? s.slice(0, 12) + '…' : s;
+    const label    = trim(name);
+    const measured = ctx.measureText(label).width;
+    const pad      = 20;
+    const pillW    = measured + pad * 2;
+    const pillX    = cx - pillW / 2;
 
-  const trim = s => s.length > 12 ? s.slice(0, 11) + '…' : s;
-  ctx.fillText(trim(challName), leftCX,  nameY);
-  ctx.fillText(trim(oppName),   rightCX, nameY);
+    // Dark semi-transparent pill background
+    ctx.save();
+    ctx.globalAlpha = 0.70;
+    ctx.fillStyle   = '#000000';
+    ctx.beginPath();
+    ctx.moveTo(pillX + pillR,       pillTopY);
+    ctx.lineTo(pillX + pillW - pillR, pillTopY);
+    ctx.arcTo(pillX + pillW, pillTopY, pillX + pillW, pillTopY + pillR, pillR);
+    ctx.lineTo(pillX + pillW,       pillBotY - pillR);
+    ctx.arcTo(pillX + pillW, pillBotY, pillX + pillW - pillR, pillBotY, pillR);
+    ctx.lineTo(pillX + pillR,       pillBotY);
+    ctx.arcTo(pillX, pillBotY, pillX, pillBotY - pillR, pillR);
+    ctx.lineTo(pillX,               pillTopY + pillR);
+    ctx.arcTo(pillX, pillTopY, pillX + pillR, pillTopY, pillR);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Username text
+    ctx.save();
+    ctx.globalAlpha  = 1;
+    ctx.font         = `bold ${fontSize}px Arial`;
+    ctx.fillStyle    = '#ffffff';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor  = 'rgba(0,0,0,0.9)';
+    ctx.shadowBlur   = 6;
+    ctx.fillText(label, cx, pillMidY);
+    ctx.restore();
+  }
+
+  drawNamePill(leftCX,  challName);
+  drawNamePill(rightCX, oppName);
 
   return canvas.toBuffer('image/png');
 }
@@ -392,8 +476,8 @@ async function handleHelp(message) {
         .addFields(
           { name: '🥊 Fighting', value: '`!1v1 @user` — Challenge someone (60s to accept)\n`!point @user <amount> <animal>` — Gift points (15s cooldown)' },
           { name: '📦 Packs', value: '`!1v1 pack` — Open 1 pack (1 animal, up to 5 per 24h)\n`!1v1 pack 3` — Open 3 packs at once\n`!1v1 inventory` — See your animals' },
-          { name: '📊 Stats', value: '`!1v1 profile` — Your W/L record\n`!1v1 profile @user` — View someone\'s profile\n`!1v1 leaderboard` — Top fighters & gifters\n`!1v1 reset` — Reset your own W/L' },
-          { name: '🐾 Rarities', value: '🩶 Common · 💚 Uncommon · 💙 Rare · 💜 Epic · 💛 Legendary · ❤️ Mythic' },
+          { name: '📊 Stats', value: '`!1v1 profile` — Your W/L record\n`!1v1 profile @user` — View profile\n`!1v1 leaderboard` — Top fighters & gifters\n`!1v1 reset` — Reset your own W/L' },
+          { name: '🐾 Rarities', value: '🩶 Common · 💚 Uncommon · 💙 Rare · 💜 Epic · 💛 Legendary · ❤️ Mythic · 🤍 Divine' },
           { name: '🎁 Starter Kit', value: '10× Mouse, 5× Turtle, 1× Tiger' },
         )
         .setFooter({ text: 'Example: !point @Astrix 2 Dragon  →  gifts 2 Dragons (200 pts) to Astrix' }),
@@ -452,7 +536,7 @@ async function handleChallenge(message, target) {
 async function handlePoint(message, args) {
   const { author, channel } = message;
 
-  // ONLY check the battle in this specific channel — no cross-channel logic here
+  // Only check the battle in THIS channel — no cross-channel interference
   const battle = activeBattles.get(channel.id);
   if (!battle) return message.reply('No active battle in this channel right now.');
 
@@ -570,7 +654,7 @@ async function handleInventory(message) {
   const inv = getInventory(author.id);
   if (!inv.length) return message.reply('Your inventory is empty! Use `!1v1 pack` to get animals.');
 
-  const rarityOrder = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Mythic'];
+  const rarityOrder = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Mythic', 'Divine'];
   const grouped = {};
   for (const row of inv) {
     const a = ANIMAL_MAP[row.animal.toLowerCase()];
