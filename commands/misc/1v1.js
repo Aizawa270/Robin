@@ -41,6 +41,15 @@ db.exec(`
     user_id    TEXT PRIMARY KEY,
     last_point INTEGER DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS daily_cooldowns (
+    user_id    TEXT PRIMARY KEY,
+    last_daily INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS starter_tracking (
+    user_id          TEXT PRIMARY KEY,
+    starter_used     INTEGER DEFAULT 0,
+    starter_given_at INTEGER DEFAULT 0
+  );
 `);
 
 console.log('[1v1] Database initialized');
@@ -135,6 +144,11 @@ function ensureProfile(userId) {
     for (const { animal, amount } of STARTER_KIT) {
       db.prepare(UPSERT_SQL).run(userId, animal, amount);
     }
+    // Track when starter was given
+    db.prepare(`
+      INSERT OR IGNORE INTO starter_tracking (user_id, starter_used, starter_given_at)
+      VALUES (?, 0, ?)
+    `).run(userId, Date.now());
   }
 }
 
@@ -151,7 +165,52 @@ function getInventory(userId) {
   return db.prepare('SELECT animal, amount FROM inventory WHERE user_id = ? AND amount > 0').all(userId);
 }
 
+// ─── STARTER WEEKLY RESET CHECK ──────────────────────────────────────────────
+// If the user has used ALL of their starter animals and it's been 1 week since
+// they were originally given, restore them.
+function checkStarterReset(userId) {
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+  const tracking = db.prepare('SELECT * FROM starter_tracking WHERE user_id = ?').get(userId);
+  if (!tracking) return; // No tracking row = they still have originals
+
+  // Only reset if starter was previously marked as fully used
+  if (!tracking.starter_used) return;
+
+  const elapsed = Date.now() - tracking.starter_given_at;
+  if (elapsed < WEEK_MS) return; // Not a week yet
+
+  // Give back the starter kit
+  for (const { animal, amount } of STARTER_KIT) {
+    db.prepare(UPSERT_SQL).run(userId, animal, amount);
+  }
+
+  // Reset the tracking — new 1-week window starts now, not used yet
+  db.prepare('UPDATE starter_tracking SET starter_used = 0, starter_given_at = ? WHERE user_id = ?')
+    .run(Date.now(), userId);
+}
+
+// Call this whenever the user uses animals (after removeFromInventory)
+function checkAndMarkStarterUsed(userId) {
+  const tracking = db.prepare('SELECT * FROM starter_tracking WHERE user_id = ?').get(userId);
+  if (!tracking || tracking.starter_used) return;
+
+  // Check if all starter animals are now depleted
+  const allUsed = STARTER_KIT.every(({ animal }) => {
+    const row = db.prepare('SELECT amount FROM inventory WHERE user_id = ? AND animal = ?').get(userId, animal);
+    return !row || row.amount === 0;
+  });
+
+  if (allUsed) {
+    db.prepare('UPDATE starter_tracking SET starter_used = 1, starter_given_at = ? WHERE user_id = ?')
+      .run(Date.now(), userId);
+  }
+}
+
 // ─── ACTIVE BATTLES ──────────────────────────────────────────────────────────
+// Keyed by channel.id so battles are channel-scoped.
+// Point gifting checks only the battle in the current channel — no cross-channel
+// interference that was causing the "active battle in another channel" bug.
 const activeBattles = new Map();
 
 // ─── DISPLAY NAME HELPER ─────────────────────────────────────────────────────
@@ -165,109 +224,139 @@ async function getDisplayName(guild, user) {
 }
 
 // ─── CANVAS BATTLE IMAGE ─────────────────────────────────────────────────────
-// Template: https://i.imgur.com/8PTD0Bz.png  (1536 x 1024)
-//
-// Pixel-exact measurements from the real template:
-//   Left  circle: centre x=381 (W×0.248), y=375 (H×0.366), placeholder radius=232
-//   Right circle: centre x=1143 (W×0.744), y=375 (H×0.366), same radius
-//   [Name] text area: y=58–130, left x=256–507, right x=1016–1269
-//
-// Strategy:
-//   1. Draw avatar at radius=232 → completely covers the pink placeholder
-//      circle, the "AVATAR" text inside it, and the outline ring.
-//   2. Draw a dark rounded pill over the [Name] text area.
-//   3. Write the real username on the pill.
-//
-const TEMPLATE_URL = 'https://i.imgur.com/8PTD0Bz.png';
-
+// Clean design: solid split background (red left / blue right), circular
+// avatar with username pill on top. No template/gloves — just the pure VS card.
 async function buildBattleImage(challengerUser, opponentUser, guild) {
   let createCanvas, loadImage;
   try {
     ({ createCanvas, loadImage } = require('@napi-rs/canvas'));
   } catch { return null; }
 
-  let template;
-  try { template = await loadImage(TEMPLATE_URL); } catch { return null; }
-
-  const W = template.width;   // 1536
-  const H = template.height;  // 1024
+  const W = 900;
+  const H = 400;
   const canvas = createCanvas(W, H);
   const ctx    = canvas.getContext('2d');
-  ctx.drawImage(template, 0, 0, W, H);
+
+  // ── Background: red left / blue right split ──────────────────────────────
+  // Left half
+  ctx.fillStyle = '#c0392b';
+  ctx.fillRect(0, 0, W / 2, H);
+  // Right half
+  ctx.fillStyle = '#2471a3';
+  ctx.fillRect(W / 2, 0, W / 2, H);
+
+  // Radiating lines (left side)
+  const drawRays = (cx, cy, color, count = 18) => {
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = 2;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(angle) * 700, cy + Math.sin(angle) * 700);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+  drawRays(W * 0.25, H * 0.5, '#ffffff');
+  drawRays(W * 0.75, H * 0.5, '#ffffff');
+
+  // ── Diagonal divider ─────────────────────────────────────────────────────
+  ctx.save();
+  ctx.fillStyle = '#111111';
+  ctx.globalAlpha = 0.85;
+  ctx.beginPath();
+  ctx.moveTo(W / 2 - 18, 0);
+  ctx.lineTo(W / 2 + 18, 0);
+  ctx.lineTo(W / 2 + 10, H);
+  ctx.lineTo(W / 2 - 10, H);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // VS text
+  ctx.save();
+  ctx.font         = 'bold 52px Arial';
+  ctx.fillStyle    = '#ffffff';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor  = '#000000';
+  ctx.shadowBlur   = 12;
+  ctx.fillText('VS', W / 2, H / 2);
+  ctx.restore();
 
   const challName = await getDisplayName(guild, challengerUser);
   const oppName   = await getDisplayName(guild, opponentUser);
 
-  // Circle centres (pixel-measured from template)
-  const leftCX   = Math.round(W * 0.2480);  // 381
-  const rightCX  = Math.round(W * 0.7441);  // 1143
-  const circleCY = Math.round(H * 0.3662);  // 375
-  // Full placeholder radius — avatar drawn at this size covers everything
-  const avatarR  = 232;
+  const leftCX  = Math.round(W * 0.25);
+  const rightCX = Math.round(W * 0.75);
+  const avatarY = Math.round(H * 0.52);
+  const avatarR = 110;
 
-  // ── 1. Draw avatars (cover the entire placeholder circle) ──────────────
+  // ── Draw avatar ──────────────────────────────────────────────────────────
   async function drawAvatar(user, cx, cy, radius) {
     try {
-      const url = user.displayAvatarURL({ extension: 'png', size: 512 });
+      const url = user.displayAvatarURL({ extension: 'png', size: 256 });
       const img = await loadImage(url);
-      // Clip to circle and draw avatar
+      // Outer glow ring
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 6, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth   = 4;
+      ctx.stroke();
+      ctx.restore();
+      // Clip + draw avatar
       ctx.save();
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.clip();
       ctx.drawImage(img, cx - radius, cy - radius, radius * 2, radius * 2);
       ctx.restore();
-      // Clean circular border
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-      ctx.lineWidth   = 5;
-      ctx.stroke();
-      ctx.restore();
-    } catch { /* skip on fail */ }
+    } catch { /* skip */ }
   }
 
-  await drawAvatar(challengerUser, leftCX,  circleCY, avatarR);
-  await drawAvatar(opponentUser,   rightCX, circleCY, avatarR);
+  await drawAvatar(challengerUser, leftCX,  avatarY, avatarR);
+  await drawAvatar(opponentUser,   rightCX, avatarY, avatarR);
 
-  // ── 2. Draw name pills over the [Name] placeholder text ────────────────
-  // [Name] text region: y=58–130 (height=72px), centred on x=381 / x=1143
-  const pillTopY  = 50;
-  const pillBotY  = 138;
-  const pillH     = pillBotY - pillTopY;      // 88px
-  const pillMidY  = pillTopY + pillH / 2;     // 94px
-  const pillR     = pillH / 2;               // corner radius
-  const fontSize  = Math.round(pillH * 0.60); // ~53px
+  // ── Name pills (above each avatar) ───────────────────────────────────────
+  const pillH    = 44;
+  const pillMidY = avatarY - avatarR - 20;
+  const pillR2   = pillH / 2;
+  const fontSize = 26;
 
   function drawNamePill(cx, name) {
-    ctx.font = `bold ${fontSize}px Arial`;
-    const trim     = s => s.length > 13 ? s.slice(0, 12) + '…' : s;
-    const label    = trim(name);
-    const measured = ctx.measureText(label).width;
-    const pad      = 20;
-    const pillW    = measured + pad * 2;
-    const pillX    = cx - pillW / 2;
+    const trim    = s => s.length > 16 ? s.slice(0, 15) + '…' : s;
+    const label   = trim(name);
+    ctx.font      = `bold ${fontSize}px Arial`;
+    const textW   = ctx.measureText(label).width;
+    const pad     = 18;
+    const pillW   = textW + pad * 2;
+    const pillX   = cx - pillW / 2;
+    const pillTop = pillMidY - pillH / 2;
+    const pillBot = pillMidY + pillH / 2;
 
-    // Dark semi-transparent pill background
+    // Dark pill bg
     ctx.save();
-    ctx.globalAlpha = 0.70;
+    ctx.globalAlpha = 0.78;
     ctx.fillStyle   = '#000000';
     ctx.beginPath();
-    ctx.moveTo(pillX + pillR,       pillTopY);
-    ctx.lineTo(pillX + pillW - pillR, pillTopY);
-    ctx.arcTo(pillX + pillW, pillTopY, pillX + pillW, pillTopY + pillR, pillR);
-    ctx.lineTo(pillX + pillW,       pillBotY - pillR);
-    ctx.arcTo(pillX + pillW, pillBotY, pillX + pillW - pillR, pillBotY, pillR);
-    ctx.lineTo(pillX + pillR,       pillBotY);
-    ctx.arcTo(pillX, pillBotY, pillX, pillBotY - pillR, pillR);
-    ctx.lineTo(pillX,               pillTopY + pillR);
-    ctx.arcTo(pillX, pillTopY, pillX + pillR, pillTopY, pillR);
+    ctx.moveTo(pillX + pillR2,        pillTop);
+    ctx.lineTo(pillX + pillW - pillR2, pillTop);
+    ctx.arcTo(pillX + pillW, pillTop, pillX + pillW, pillTop + pillR2, pillR2);
+    ctx.lineTo(pillX + pillW,          pillBot - pillR2);
+    ctx.arcTo(pillX + pillW, pillBot,  pillX + pillW - pillR2, pillBot, pillR2);
+    ctx.lineTo(pillX + pillR2,         pillBot);
+    ctx.arcTo(pillX, pillBot,          pillX, pillBot - pillR2, pillR2);
+    ctx.lineTo(pillX,                  pillTop + pillR2);
+    ctx.arcTo(pillX, pillTop,          pillX + pillR2, pillTop, pillR2);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
 
-    // Username text
+    // Text
     ctx.save();
     ctx.globalAlpha  = 1;
     ctx.font         = `bold ${fontSize}px Arial`;
@@ -459,6 +548,8 @@ async function execute(client, message, args) {
   if (sub === 'profile')                      return handleProfile(message, args);
   if (sub === 'leaderboard' || sub === 'lb')  return handleLeaderboard(message);
   if (sub === 'reset')                        return handleReset(message, args);
+  if (sub === 'animals')                      return handleAnimals(message, args);
+  if (sub === 'daily')                        return handleDaily(message);
 
   const target =
     message.mentions.users.first() ||
@@ -475,12 +566,13 @@ async function handleHelp(message) {
         .setDescription('Two players fight for 3 minutes while the chat sends them animals as points.')
         .addFields(
           { name: '🥊 Fighting', value: '`!1v1 @user` — Challenge someone (60s to accept)\n`!point @user <amount> <animal>` — Gift points (15s cooldown)' },
-          { name: '📦 Packs', value: '`!1v1 pack` — Open 1 pack (1 animal, up to 5 per 24h)\n`!1v1 pack 3` — Open 3 packs at once\n`!1v1 inventory` — See your animals' },
+          { name: '📦 Packs', value: '`!1v1 pack` — Open 1 pack (5 animals, up to 2 packs per 24h)\n`!1v1 pack 2` — Open 2 packs at once\n`!1v1 inventory` — See your animals' },
+          { name: '🎁 Daily & Animals', value: '`!1v1 daily` — Claim 1 free animal per day\n`!1v1 animals` — View all animals and their point values' },
           { name: '📊 Stats', value: '`!1v1 profile` — Your W/L record\n`!1v1 profile @user` — View profile\n`!1v1 leaderboard` — Top fighters & gifters\n`!1v1 reset` — Reset your own W/L' },
           { name: '🐾 Rarities', value: '🩶 Common · 💚 Uncommon · 💙 Rare · 💜 Epic · 💛 Legendary · ❤️ Mythic · 🤍 Divine' },
-          { name: '🎁 Starter Kit', value: '10× Mouse, 5× Turtle, 1× Tiger' },
+          { name: '🎁 Starter Kit', value: '10× Mouse, 5× Turtle, 1× Tiger\n*(Resets weekly once all are used)*' },
         )
-        .setFooter({ text: 'Example: !point @Astrix 2 Dragon  →  gifts 2 Dragons (200 pts) to Astrix' }),
+        .setFooter({ text: 'Example: !point @Astrix 2 Dragon  →  gifts Astrix 200 pts (100 per Dragon)' }),
     ],
   });
 }
@@ -533,10 +625,11 @@ async function handleChallenge(message, target) {
 }
 
 // ─── POINT ────────────────────────────────────────────────────────────────────
+// FIX: Only check the battle in THIS channel. No cross-channel block.
 async function handlePoint(message, args) {
   const { author, channel } = message;
 
-  // Only check the battle in THIS channel — no cross-channel interference
+  // Only look at the battle in the current channel — ignore all other channels
   const battle = activeBattles.get(channel.id);
   if (!battle) return message.reply('No active battle in this channel right now.');
 
@@ -558,6 +651,7 @@ async function handlePoint(message, args) {
   const animal = ANIMAL_MAP[animalName.toLowerCase()];
   if (!animal) return message.reply(`Unknown animal **${animalName}**. Check \`!1v1 inventory\` for your animals.`);
 
+  // Per-user cooldown — tracked per user, not per battle/channel
   const cdRow   = db.prepare('SELECT last_point FROM point_cooldowns WHERE user_id = ?').get(author.id);
   const elapsed = Date.now() - (cdRow?.last_point || 0);
   if (elapsed < 15_000) {
@@ -567,8 +661,14 @@ async function handlePoint(message, args) {
 
   ensureProfile(author.id);
 
+  // Check starter weekly reset before consuming inventory
+  checkStarterReset(author.id);
+
   if (!removeFromInventory(author.id, animal.name, amount))
     return message.reply(`You don't have ${amount}× **${animal.name}**. Check \`!1v1 inventory\`.`);
+
+  // Check if starter is now fully used after this removal
+  checkAndMarkStarterUsed(author.id);
 
   const totalPts = amount * animal.pts;
   battle.points[target.id] += totalPts;
@@ -593,13 +693,15 @@ async function handlePoint(message, args) {
 }
 
 // ─── PACK ─────────────────────────────────────────────────────────────────────
+// 1 pack = 5 animals, max 2 packs per 24h
 async function handlePack(message, args) {
   const { author } = message;
   ensureProfile(author.id);
 
-  const CD_MS     = 24 * 60 * 60 * 1000;
-  const MAX_PACKS = 5;
-  const now       = Date.now();
+  const CD_MS        = 24 * 60 * 60 * 1000;
+  const MAX_PACKS    = 2;   // max 2 packs per day
+  const ANIMALS_PER  = 5;   // 5 animals per pack
+  const now          = Date.now();
 
   let cdRow = db.prepare('SELECT * FROM pack_cooldowns WHERE user_id = ?').get(author.id);
 
@@ -617,31 +719,104 @@ async function handlePack(message, args) {
     const left = CD_MS - (now - cdRow.window_start);
     const h = Math.floor(left / 3_600_000);
     const m = Math.floor((left % 3_600_000) / 60_000);
-    return message.reply(`⏳ You've used all **5 packs** for today. Resets in **${h}h ${m}m**.`);
+    return message.reply(`⏳ You've used all **${MAX_PACKS} packs** for today. Resets in **${h}h ${m}m**.`);
   }
 
   const rawAmount = parseInt(args[1]);
   if (args[1] && (isNaN(rawAmount) || rawAmount < 1))
-    return message.reply(`❌ Specify a number between 1 and ${packsLeft}. Usage: \`!1v1 pack [1-5]\``);
+    return message.reply(`❌ Specify a number between 1 and ${packsLeft}. Usage: \`!1v1 pack [1-${MAX_PACKS}]\``);
 
-  const packCount    = (!rawAmount || rawAmount < 1) ? 1 : Math.min(rawAmount, packsLeft);
-  const pulled       = Array.from({ length: packCount }, pullRandomAnimal);
-  for (const a of pulled) upsertInventory.run(author.id, a.name, 1);
+  const packCount = (!rawAmount || rawAmount < 1) ? 1 : Math.min(rawAmount, packsLeft);
+
+  // Pull 5 animals per pack
+  const allPulled = [];
+  for (let p = 0; p < packCount; p++) {
+    const packAnimals = Array.from({ length: ANIMALS_PER }, pullRandomAnimal);
+    allPulled.push(packAnimals);
+    for (const a of packAnimals) upsertInventory.run(author.id, a.name, 1);
+  }
 
   const newPacksUsed = cdRow.packs_used + packCount;
   db.prepare('UPDATE pack_cooldowns SET packs_used = ? WHERE user_id = ?').run(newPacksUsed, author.id);
 
   const remaining = MAX_PACKS - newPacksUsed;
-  const lines     = pulled.map((a, i) =>
-    `**Pack ${cdRow.packs_used + i + 1}:** ${a.emoji} **${a.name}** — ${a.pts} pts \`${a.rarity}\``
-  ).join('\n');
+
+  // Build display: one section per pack
+  const sections = allPulled.map((packAnimals, i) => {
+    const packNum = cdRow.packs_used + i + 1;
+    const lines   = packAnimals.map(a => `  ${a.emoji} **${a.name}** — ${a.pts} pts \`${a.rarity}\``).join('\n');
+    return `**Pack ${packNum}:**\n${lines}`;
+  }).join('\n\n');
 
   return message.reply({
     embeds: [
       new EmbedBuilder().setColor(0x9b59b6)
-        .setTitle(`📦 Opened ${packCount} Pack${packCount > 1 ? 's' : ''}!`)
-        .setDescription(`You got:\n\n${lines}`)
-        .setFooter({ text: remaining > 0 ? `${remaining} pack${remaining > 1 ? 's' : ''} remaining today` : 'All 5 packs used! Resets in 24h' }),
+        .setTitle(`📦 Opened ${packCount} Pack${packCount > 1 ? 's' : ''}! (${packCount * ANIMALS_PER} animals)`)
+        .setDescription(sections)
+        .setFooter({ text: remaining > 0 ? `${remaining} pack${remaining > 1 ? 's' : ''} remaining today` : 'All 2 packs used! Resets in 24h' }),
+    ],
+  });
+}
+
+// ─── DAILY ────────────────────────────────────────────────────────────────────
+async function handleDaily(message) {
+  const { author } = message;
+  ensureProfile(author.id);
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const now    = Date.now();
+
+  const row     = db.prepare('SELECT last_daily FROM daily_cooldowns WHERE user_id = ?').get(author.id);
+  const elapsed = now - (row?.last_daily || 0);
+
+  if (elapsed < DAY_MS) {
+    const left = DAY_MS - elapsed;
+    const h    = Math.floor(left / 3_600_000);
+    const m    = Math.floor((left % 3_600_000) / 60_000);
+    return message.reply(`⏳ You already claimed your daily animal! Come back in **${h}h ${m}m**.`);
+  }
+
+  const animal = pullRandomAnimal();
+  upsertInventory.run(author.id, animal.name, 1);
+  db.prepare('INSERT OR REPLACE INTO daily_cooldowns (user_id, last_daily) VALUES (?, ?)').run(author.id, now);
+
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(RARITY_COLORS[animal.rarity] ?? 0x2ecc71)
+        .setTitle('🎁 Daily Animal!')
+        .setDescription(`You received: ${animal.emoji} **${animal.name}** — ${animal.pts} pts \`${animal.rarity}\`\n\nCome back tomorrow for another one!`)
+        .setFooter({ text: 'Tip: Use !1v1 pack for 5 animals at once (2 packs/day)' }),
+    ],
+  });
+}
+
+// ─── ANIMALS LIST ─────────────────────────────────────────────────────────────
+async function handleAnimals(message, args) {
+  const rarityOrder = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Mythic', 'Divine'];
+
+  // Optional filter: !1v1 animals rare
+  const filterRarity = args[1] ? rarityOrder.find(r => r.toLowerCase() === args[1].toLowerCase()) : null;
+  const raritiesShown = filterRarity ? [filterRarity] : rarityOrder;
+
+  const grouped = {};
+  for (const rarity of rarityOrder) {
+    grouped[rarity] = ANIMALS.filter(a => a.rarity === rarity);
+  }
+
+  const fields = raritiesShown.map(rarity => {
+    const list = grouped[rarity]
+      .map(a => `${a.emoji} **${a.name}** — ${a.pts} pts`)
+      .join('\n');
+    return { name: `${rarity}`, value: list || 'None', inline: false };
+  });
+
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(0x9b59b6)
+        .setTitle('🐾 All Animals & Point Values')
+        .setDescription('Use these in `!point @user <amount> <animal>` during a battle.')
+        .addFields(fields)
+        .setFooter({ text: 'Tip: !1v1 animals rare — filter by rarity' }),
     ],
   });
 }
@@ -650,6 +825,9 @@ async function handlePack(message, args) {
 async function handleInventory(message) {
   const { author, guild } = message;
   ensureProfile(author.id);
+
+  // Check weekly starter reset on inventory view too
+  checkStarterReset(author.id);
 
   const inv = getInventory(author.id);
   if (!inv.length) return message.reply('Your inventory is empty! Use `!1v1 pack` to get animals.');
@@ -759,8 +937,9 @@ async function handleLeaderboard(message) {
     embeds: [
       new EmbedBuilder().setColor(0xf1c40f).setTitle('🏆 1v1 Leaderboard')
         .addFields(
-          { name: '🥊 Top Fighters', value: winsText, inline: false },
-          { name: '🎁 Top Gifters',  value: giftText, inline: false },
+          { name: '🥊 Top Fighters', value: winsText,  inline: false },
+          { name: '\u200b',          value: '\u200b',   inline: false },
+          { name: '🎁 Top Gifters',  value: giftText,   inline: false },
         ),
     ],
   });
