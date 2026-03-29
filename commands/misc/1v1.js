@@ -169,6 +169,8 @@ const ANIMALS = [
   { name: 'Bahamut',     pts: 250, rarity: 'Divine',    emoji: '🌟', weight: 0.08 },
   { name: 'Apocalypse',  pts: 300, rarity: 'Divine',    emoji: '☄️',  weight: 0.05 },
   { name: 'Void Dragon', pts: 500, rarity: 'Divine',    emoji: '🌌', weight: 0.02 },
+  { name: 'Celestial',   pts: 500, rarity: 'Divine',    emoji: '🌠', weight: 0.01 },
+  { name: 'Abyss Nemesis',  pts: 750, rarity: 'Divine',    emoji: '🕳️',  weight: 0.005},
 ];
 
 const RARITY_COLORS = {
@@ -536,13 +538,13 @@ async function execute(client, message, args) {
   if (sub === 'addrp')                       return handleAdminAddRP(message, args);
   if (sub === 'rppack')                      return handleRPPack(message);
 
-  // No sub → treat as a challenge
+  // Try to resolve as a challenge target (mention or ID)
   const target =
     message.mentions.users.first() ||
     (args[0] ? await message.guild.members.fetch(args[0]).then(m => m?.user).catch(() => null) : null);
 
   if (target) return handleChallenge(message, target);
-  return handleHelp(message);
+  // Unknown subcommand or bare !1v1 — silently ignore
 }
 
 // ─── HELP ─────────────────────────────────────────────────────────────────────
@@ -553,7 +555,7 @@ async function handleHelp(message) {
         .setDescription('Two players fight for 3 minutes while the chat sends them animals as points.')
         .addFields(
           { name: '🥊 Fighting',       value: '`!1v1 @user` — Challenge someone (60s to accept)\n`!1v1 point @user <amount> <animal>` — Gift points during a battle (15s cooldown)' },
-          { name: '📦 Packs & Daily',  value: '`!1v1 pack` — Open 1 pack (5 animals, up to 2/day)\n`!1v1 pack 2` — Open both packs\n`!1v1 rppack` — Spend **15 RP** for 1 pack (1/day)\n`!1v1 daily` — 1 free animal per day\n`!1v1 inventory` — View your animals' },
+          { name: '📦 Packs & Daily',  value: '`!1v1 pack` — Open 1 pack (5 animals, up to 2/day)\n`!1v1 rppack` — Spend **15 RP** for 1 pack (1/day)\n`!1v1 daily` — 1 free animal per day\n`!1v1 inventory` — View your animals' },
           { name: '📊 Stats & Rank',   value: '`!1v1 rank` — Your rank & RP\n`!1v1 rank @user` — View someone\'s rank\n`!1v1 profile` — W/L record\n`!1v1 leaderboard` — Top ranked, fighters & gifters' },
           { name: '🐾 Animals',        value: '`!1v1 animals` — All animals & point values\n`!1v1 animals <rarity>` — Filter by rarity' },
           { name: '🔧 Other',          value: '`!1v1 reset` — Reset your own W/L & streak' },
@@ -945,14 +947,11 @@ async function handleLeaderboard(message) {
     embeds: [
       new EmbedBuilder().setColor(0xf1c40f).setTitle('🏆 1v1 Leaderboard')
         .addFields(
-          { name: '👑 Top Ranked',   value: '\u200b',  inline: false },
-          { name: '\u200b',          value: rpText,    inline: false },
-          { name: '\u200b',          value: '\u200b',  inline: false },
-          { name: '🥊 Top Fighters', value: '\u200b',  inline: false },
-          { name: '\u200b',          value: winsText,  inline: false },
-          { name: '\u200b',          value: '\u200b',  inline: false },
-          { name: '🎁 Top Gifters',  value: '\u200b',  inline: false },
-          { name: '\u200b',          value: giftText,  inline: false },
+          { name: '👑 Top Ranked',   value: rpText,            inline: false },
+          { name: '\u200b',          value: '\u200b',           inline: false },
+          { name: '🥊 Top Fighters', value: winsText,           inline: false },
+          { name: '\u200b',          value: '\u200b',           inline: false },
+          { name: '🎁 Top Gifters',  value: giftText,           inline: false },
         ),
     ],
   });
