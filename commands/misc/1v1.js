@@ -12,7 +12,8 @@ const path = require('path');
 const fs = require('fs');
 
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
-const ADMIN_ID = '852839588689870879';
+const ADMIN_IDS = ['852839588689870879', '908521674700390430'];
+function isAdmin(userId) { return ADMIN_IDS.includes(userId); }
 
 // ─── DATABASE ────────────────────────────────────────────────────────────────
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
@@ -51,6 +52,10 @@ db.exec(`
     user_id    TEXT PRIMARY KEY,
     last_daily INTEGER DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS rp_pack_cooldowns (
+    user_id    TEXT PRIMARY KEY,
+    last_rp_pack INTEGER DEFAULT 0
+  );
 `);
 
 // Safe migrations for existing databases
@@ -69,6 +74,18 @@ const RANKS = [
   { name: 'Diamond',  min: 1800, max: 2999,       emoji: '💎', color: 0x3498db },
   { name: 'Mythic',   min: 3000, max: Infinity,   emoji: '👑', color: 0x9b59b6 },
 ];
+
+// RP pack cost
+const RP_PACK_COST = 15;
+
+// Rank-up rewards: animals gifted when a player crosses into a new rank
+const RANKUP_REWARDS = {
+  Silver:   [{ animal: 'Penguin',  amount: 2  }, { animal: 'Fox',    amount: 3  }],
+  Gold:     [{ animal: 'Wolf',     amount: 3  }, { animal: 'Eagle',  amount: 2  }],
+  Platinum: [{ animal: 'Tiger',    amount: 2  }, { animal: 'Panther',amount: 1  }, { animal: 'Bear', amount: 1 }],
+  Diamond:  [{ animal: 'Lion',     amount: 2  }, { animal: 'Elephant', amount: 1 }, { animal: 'Phoenix', amount: 1 }],
+  Mythic:   [{ animal: 'Hydra',    amount: 1  }, { animal: 'Kraken', amount: 1  }, { animal: 'Shark', amount: 1 }],
+};
 
 function getRank(rp) {
   return RANKS.find(r => rp >= r.min && rp <= r.max) ?? RANKS[0];
@@ -422,12 +439,37 @@ async function endBattle(channel, state) {
   desc += `\n💔 **${loseName}**: \`-${rpLoss} RP\` → **${newLoseRP} RP**`;
   if (rankUp) desc += `\n\n🎉 **${winName}** ranked up to **${rankAfter.emoji} ${rankAfter.name}**!`;
 
-  return channel.send({
+  await channel.send({
     embeds: [
       new EmbedBuilder().setColor(rankAfter.color).setTitle('🏆 Battle Over!')
         .setDescription(desc).setThumbnail(winner.displayAvatarURL()),
     ],
   });
+
+  // ── Rank-up reward ────────────────────────────────────────────────────────
+  if (rankUp && RANKUP_REWARDS[rankAfter.name]) {
+    const rewards = RANKUP_REWARDS[rankAfter.name];
+    for (const { animal, amount } of rewards) {
+      upsertInventory.run(winner.id, animal, amount);
+    }
+    const rewardLines = rewards.map(({ animal, amount }) => {
+      const a = ANIMAL_MAP[animal.toLowerCase()];
+      return `${a?.emoji ?? '🐾'} **${amount}× ${animal}**`;
+    }).join('\n');
+
+    await channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(rankAfter.color)
+          .setTitle(`🎁 Rank-Up Reward — ${rankAfter.emoji} ${rankAfter.name}`)
+          .setDescription(
+            `Congrats **${winName}**! You've reached **${rankAfter.emoji} ${rankAfter.name}**.\n\n` +
+            `Here are your rank-up rewards:\n${rewardLines}`
+          )
+          .setThumbnail(winner.displayAvatarURL()),
+      ],
+    });
+  }
 }
 
 // ─── BUTTON HANDLER ───────────────────────────────────────────────────────────
@@ -491,6 +533,8 @@ async function execute(client, message, args) {
   if (sub === 'daily')                       return handleDaily(message);
   if (sub === 'resetcd')                     return handleAdminResetCD(message, args);
   if (sub === 'gift')                        return handleAdminGift(message, args);
+  if (sub === 'addrp')                       return handleAdminAddRP(message, args);
+  if (sub === 'rppack')                      return handleRPPack(message);
 
   // No sub → treat as a challenge
   const target =
@@ -509,7 +553,7 @@ async function handleHelp(message) {
         .setDescription('Two players fight for 3 minutes while the chat sends them animals as points.')
         .addFields(
           { name: '🥊 Fighting',       value: '`!1v1 @user` — Challenge someone (60s to accept)\n`!1v1 point @user <amount> <animal>` — Gift points during a battle (15s cooldown)' },
-          { name: '📦 Packs & Daily',  value: '`!1v1 pack` — Open 1 pack (5 animals, up to 2/day)\n`!1v1 pack 2` — Open both packs\n`!1v1 daily` — 1 free animal per day\n`!1v1 inventory` — View your animals' },
+          { name: '📦 Packs & Daily',  value: '`!1v1 pack` — Open 1 pack (5 animals, up to 2/day)\n`!1v1 pack 2` — Open both packs\n`!1v1 rppack` — Spend **15 RP** for 1 pack (1/day)\n`!1v1 daily` — 1 free animal per day\n`!1v1 inventory` — View your animals' },
           { name: '📊 Stats & Rank',   value: '`!1v1 rank` — Your rank & RP\n`!1v1 rank @user` — View someone\'s rank\n`!1v1 profile` — W/L record\n`!1v1 leaderboard` — Top ranked, fighters & gifters' },
           { name: '🐾 Animals',        value: '`!1v1 animals` — All animals & point values\n`!1v1 animals <rarity>` — Filter by rarity' },
           { name: '🔧 Other',          value: '`!1v1 reset` — Reset your own W/L & streak' },
@@ -901,11 +945,14 @@ async function handleLeaderboard(message) {
     embeds: [
       new EmbedBuilder().setColor(0xf1c40f).setTitle('🏆 1v1 Leaderboard')
         .addFields(
-          { name: '👑 Top Ranked',   value: rpText,   inline: false },
+          { name: '👑 Top Ranked',   value: '\u200b',  inline: false },
+          { name: '\u200b',          value: rpText,    inline: false },
           { name: '\u200b',          value: '\u200b',  inline: false },
-          { name: '🥊 Top Fighters', value: winsText, inline: false },
+          { name: '🥊 Top Fighters', value: '\u200b',  inline: false },
+          { name: '\u200b',          value: winsText,  inline: false },
           { name: '\u200b',          value: '\u200b',  inline: false },
-          { name: '🎁 Top Gifters',  value: giftText, inline: false },
+          { name: '🎁 Top Gifters',  value: '\u200b',  inline: false },
+          { name: '\u200b',          value: giftText,  inline: false },
         ),
     ],
   });
@@ -914,7 +961,7 @@ async function handleLeaderboard(message) {
 // ─── ADMIN: RESET COOLDOWNS ───────────────────────────────────────────────────
 // !1v1 resetcd @user
 async function handleAdminResetCD(message, args) {
-  if (message.author.id !== ADMIN_ID)
+  if (!isAdmin(message.author.id))
     return message.reply({ embeds: [new EmbedBuilder().setColor(0xe74c3c).setDescription('❌ No permission.')] });
 
   const target = message.mentions.users.first() ??
@@ -937,7 +984,7 @@ async function handleAdminResetCD(message, args) {
 // !1v1 gift @user <animal> <amount>
 // Animal can be multi-word (e.g. Void Dragon); amount is always the last argument
 async function handleAdminGift(message, args) {
-  if (message.author.id !== ADMIN_ID)
+  if (!isAdmin(message.author.id))
     return message.reply({ embeds: [new EmbedBuilder().setColor(0xe74c3c).setDescription('❌ No permission.')] });
 
   const target = message.mentions.users.first() ??
@@ -962,6 +1009,106 @@ async function handleAdminGift(message, args) {
       new EmbedBuilder().setColor(RARITY_COLORS[animal.rarity] ?? 0x2ecc71)
         .setTitle('🎁 Admin Gift')
         .setDescription(`${animal.emoji} Gifted **${amount}× ${animal.name}** *(${animal.pts * amount} pts total)* to **${await getDisplayName(message.guild, target)}**.`),
+    ],
+  });
+}
+
+// ─── RP PACK ──────────────────────────────────────────────────────────────────
+// !1v1 rppack — spend 15 RP for 1 pack of 5 animals, once per day
+async function handleRPPack(message) {
+  const { author } = message;
+  ensureProfile(author.id);
+
+  const p = db.prepare('SELECT rp FROM profiles WHERE user_id = ?').get(author.id);
+  if ((p?.rp ?? 0) < RP_PACK_COST) {
+    return message.reply({
+      embeds: [
+        new EmbedBuilder().setColor(0xe74c3c)
+          .setTitle('❌ Not Enough RP')
+          .setDescription(`You need **${RP_PACK_COST} RP** to buy an RP pack.\nYou currently have **${p?.rp ?? 0} RP**.\n\nEarn RP by winning battles!`),
+      ],
+    });
+  }
+
+  const DAY_MS  = 24 * 60 * 60 * 1000;
+  const now     = Date.now();
+  const cdRow   = db.prepare('SELECT last_rp_pack FROM rp_pack_cooldowns WHERE user_id = ?').get(author.id);
+  const elapsed = now - (cdRow?.last_rp_pack || 0);
+
+  if (elapsed < DAY_MS) {
+    const left = DAY_MS - elapsed;
+    const h    = Math.floor(left / 3_600_000);
+    const m    = Math.floor((left % 3_600_000) / 60_000);
+    return message.reply({
+      embeds: [
+        new EmbedBuilder().setColor(0xe67e22)
+          .setTitle('⏳ RP Pack on Cooldown')
+          .setDescription(`You already bought an RP pack today. Come back in **${h}h ${m}m**.`),
+      ],
+    });
+  }
+
+  // Deduct RP and pull 5 animals
+  db.prepare('UPDATE profiles SET rp = rp - ? WHERE user_id = ?').run(RP_PACK_COST, author.id);
+  db.prepare('INSERT OR REPLACE INTO rp_pack_cooldowns (user_id, last_rp_pack) VALUES (?, ?)').run(author.id, now);
+
+  const animals = Array.from({ length: 5 }, pullRandomAnimal);
+  for (const a of animals) upsertInventory.run(author.id, a.name, 1);
+
+  const newRP   = (p.rp ?? 0) - RP_PACK_COST;
+  const lines   = animals.map(a => `  ${a.emoji} **${a.name}** — ${a.pts} pts \`${a.rarity}\``).join('\n');
+
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(0x9b59b6)
+        .setTitle('🎴 RP Pack Opened!')
+        .setDescription(`You spent **${RP_PACK_COST} RP** and received:\n\n${lines}`)
+        .setFooter({ text: `Remaining RP: ${newRP} • 1 RP pack per day` }),
+    ],
+  });
+}
+
+// ─── ADMIN: ADD RP ────────────────────────────────────────────────────────────
+// !1v1 addrp @user <amount>
+async function handleAdminAddRP(message, args) {
+  if (!isAdmin(message.author.id))
+    return message.reply({ embeds: [new EmbedBuilder().setColor(0xe74c3c).setDescription('❌ No permission.')] });
+
+  const target = message.mentions.users.first() ??
+    (args[1] ? await message.guild.members.fetch(args[1].replace(/\D/g, '')).then(m => m?.user).catch(() => null) : null);
+  if (!target) return message.reply('Specify a user. `!1v1 addrp @user <amount>`');
+
+  const amount = parseInt(args[2] ?? args[1]);
+  if (!amount || isNaN(amount)) return message.reply('Specify an RP amount. `!1v1 addrp @user <amount>`');
+
+  ensureProfile(target.id);
+
+  const before    = db.prepare('SELECT rp FROM profiles WHERE user_id = ?').get(target.id)?.rp ?? 0;
+  const newRP     = Math.max(0, before + amount);
+  const rankBefore = getRank(before);
+  const rankAfter  = getRank(newRP);
+
+  db.prepare('UPDATE profiles SET rp = ? WHERE user_id = ?').run(newRP, target.id);
+
+  // Give rank-up rewards if applicable
+  let rewardNote = '';
+  if (RANKS.indexOf(rankAfter) > RANKS.indexOf(rankBefore) && RANKUP_REWARDS[rankAfter.name]) {
+    const rewards = RANKUP_REWARDS[rankAfter.name];
+    for (const { animal, amount: amt } of rewards) upsertInventory.run(target.id, animal, amt);
+    rewardNote = `\n🎁 Rank-up rewards for **${rankAfter.name}** granted.`;
+  }
+
+  const sign        = amount >= 0 ? '+' : '';
+  const displayName = await getDisplayName(message.guild, target);
+
+  return message.reply({
+    embeds: [
+      new EmbedBuilder().setColor(0x2ecc71).setTitle('⚡ Admin: RP Adjusted')
+        .setDescription(
+          `**${displayName}**: \`${sign}${amount} RP\`\n` +
+          `${rankAfter.emoji} **${before} RP** → **${newRP} RP** (${rankAfter.name})` +
+          rewardNote
+        ),
     ],
   });
 }
