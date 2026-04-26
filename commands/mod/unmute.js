@@ -1,38 +1,18 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
-// Role hierarchy configuration
-const ROLE_HIERARCHY = {
-  TRIAL_MOD: ['1431651114008318002', '1432014943900799097'],
-  MOD: ['1431650911784144967', '1432015132346810499'],
-  ADMIN: ['1431650662076256326', '1432015058959073291']
-};
+function makeEmbed(color, title, description) {
+  const embed = new EmbedBuilder().setColor(color).setTimestamp();
+  if (title) embed.setTitle(title);
+  if (description) embed.setDescription(description);
+  return embed;
+}
 
-function canModerateTarget(moderator, target) {
-  if (!target) return false; // Can't unmute someone not in server
+function getRolePos(member) {
+  return member?.roles?.highest?.position ?? 0;
+}
 
-  const modRoles = moderator.roles.cache;
-  const targetRoles = target.roles.cache;
-
-  // Check if moderator is trial mod
-  const isTrialMod = ROLE_HIERARCHY.TRIAL_MOD.some(roleId => modRoles.has(roleId));
-  
-  // Check if target is mod or admin
-  const targetIsMod = ROLE_HIERARCHY.MOD.some(roleId => targetRoles.has(roleId));
-  const targetIsAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => targetRoles.has(roleId));
-
-  if (isTrialMod && (targetIsMod || targetIsAdmin)) {
-    return false; // Trial mods can't moderate mods or admins
-  }
-
-  // Check if moderator is mod (but not admin)
-  const isMod = ROLE_HIERARCHY.MOD.some(roleId => modRoles.has(roleId));
-  const isAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => modRoles.has(roleId));
-
-  if (isMod && !isAdmin && targetIsAdmin) {
-    return false; // Mods can't moderate admins
-  }
-
-  return true;
+function isOwner(guild, member) {
+  return !!guild?.ownerId && member?.id === guild.ownerId;
 }
 
 module.exports = {
@@ -41,64 +21,98 @@ module.exports = {
   category: 'mod',
   usage: '$unmute <@user|userID> [reason]',
   async execute(client, message, args) {
-    if (!message.guild) return message.reply('Server only.');
+    if (!message.guild) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'Server only.')] });
+    }
 
     const memberPerms = message.member.permissions;
-    if (
-      !memberPerms.has(PermissionFlagsBits.ModerateMembers) &&
-      !memberPerms.has(PermissionFlagsBits.Administrator)
-    )
-      return message.reply('You need **Timeout Members** permission or admin.');
+    if (!memberPerms.has(PermissionFlagsBits.ModerateMembers) && !memberPerms.has(PermissionFlagsBits.Administrator)) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'You need **Timeout Members** permission or admin.')] });
+    }
+
+    const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
 
     if (!args.length) {
-      const usageEmbed = new EmbedBuilder()
-        .setColor('#facc15')
-        .setTitle('Unmute Command Usage')
-        .setDescription(
-          '**Usage:**\n' +
-          '`$unmute <@user|userID> [reason]`\n\n' +
-          '**Examples:**\n' +
-          '`$unmute @User spamming ended`\n' +
-          '`$unmute 123456789012345678 apology`\n'
-        );
-      return message.reply({ embeds: [usageEmbed] });
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#facc15')
+            .setTitle('Unmute Command Usage')
+            .setDescription(
+              '**Usage:**\n' +
+              `\`${prefix}unmute <@user|userID> [reason]\`\n\n` +
+              '**Examples:**\n' +
+              `\`${prefix}unmute @User spamming ended\`\n` +
+              `\`${prefix}unmute 123456789012345678 apology\`\n`
+            )
+            .setTimestamp(),
+        ],
+      });
     }
 
     const targetArg = args.shift();
-    const reason = args.join(' ') || 'No reason provided';
+    const reason = args.join(' ').trim() || 'No reason provided';
 
-    const targetUser =
-      message.mentions.users.first() ||
-      (await client.users.fetch(targetArg).catch(() => null));
-    if (!targetUser) return message.reply('User not found.');
-
-    const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member) return message.reply('User not in this server.');
-
-    // 🔹 ROLE HIERARCHY CHECK
-    if (!canModerateTarget(message.member, member)) {
-      return message.reply('You cannot unmute this user due to role hierarchy restrictions.');
+    let targetUser = message.mentions.users.first();
+    if (!targetUser && /^\d{17,20}$/.test(targetArg)) {
+      targetUser = await client.users.fetch(targetArg).catch(() => null);
     }
 
-    if (member.permissions.has(PermissionFlagsBits.Administrator))
-      return message.reply('Cannot unmute an administrator.');
+    if (!targetUser) {
+      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Unmute Failed', 'User not found.')] });
+    }
 
-    const botMember = message.guild.members.me;
-    if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers))
-      return message.reply('I need **Timeout Members** permission.');
+    const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
+    const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
 
-    if (!member.communicationDisabledUntilTimestamp || member.communicationDisabledUntilTimestamp < Date.now())
-      return message.reply('This user is not muted.');
+    if (!member) {
+      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Unmute Failed', 'User not in this server.')] });
+    }
+
+    if (member.id === message.author.id) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'You cannot unmute yourself.')] });
+    }
+
+    if (member.id === client.user.id) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'I cannot unmute myself.')] });
+    }
+
+    if (isOwner(message.guild, member) && !isOwner(message.guild, message.member)) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'You cannot unmute the server owner.')] });
+    }
+
+    if (!isOwner(message.guild, message.member)) {
+      if (getRolePos(member) >= getRolePos(message.member)) {
+        return message.reply({
+          embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'You cannot unmute someone with equal or higher role.')]
+        });
+      }
+    }
+
+    if (botMember && getRolePos(member) >= getRolePos(botMember)) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'I cannot unmute that user because my role is too low.')]
+      });
+    }
+
+    if (member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'Cannot unmute an administrator.')] });
+    }
+
+    if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'I need **Timeout Members** permission.')] });
+    }
+
+    if (!member.communicationDisabledUntilTimestamp || member.communicationDisabledUntilTimestamp < Date.now()) {
+      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Unmute Failed', 'This user is not muted.')] });
+    }
 
     try {
       await member.timeout(null, `${reason} (unmuted by ${message.author.tag})`);
 
-      // Logging is intentionally skipped
-      console.log(`[Unmute] ${message.author.tag} unmuted ${targetUser.tag}`);
-
       const embed = new EmbedBuilder()
         .setColor('#22c55e')
-        .setTitle('✅ User Unmuted')
+        .setTitle('User Unmuted')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
           { name: 'User', value: `<@${targetUser.id}>`, inline: false },
@@ -107,10 +121,10 @@ module.exports = {
         )
         .setTimestamp();
 
-      await message.reply({ embeds: [embed] });
+      return message.reply({ embeds: [embed] });
     } catch (err) {
       console.error('Unmute command error:', err);
-      await message.reply('Failed to unmute the user.');
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'Failed to unmute the user.')] });
     }
   },
 };
