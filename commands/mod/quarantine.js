@@ -7,6 +7,35 @@ const AUTHORIZED_ROLES = [
   '1431651904269848667'  // director
 ];
 
+const ROLE_LEVELS = {
+  '1432015058959073291': 1, // admin
+  '1432015105045954651': 2, // manager
+  '1431651904269848667': 3, // director
+};
+
+function makeEmbed(color, title, description) {
+  const embed = new EmbedBuilder().setColor(color).setTimestamp();
+  if (title) embed.setTitle(title);
+  if (description) embed.setDescription(description);
+  return embed;
+}
+
+function getQuarantineLevelFromMember(member) {
+  let level = 0;
+
+  for (const roleId of AUTHORIZED_ROLES) {
+    if (member.roles.cache.has(roleId)) {
+      level = Math.max(level, ROLE_LEVELS[roleId] || 0);
+    }
+  }
+
+  if (member.permissions?.has(PermissionFlagsBits.Administrator)) {
+    level = Math.max(level, 1);
+  }
+
+  return level;
+}
+
 module.exports = {
   name: 'quarantine',
   aliases: ['q'],
@@ -17,13 +46,12 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    // Check if user has Administrator OR one of the authorized roles
-    const hasAuthorizedRole = AUTHORIZED_ROLES.some(roleId => 
-      message.member.roles.cache.has(roleId)
-    );
+    const hasAuthorizedRole = AUTHORIZED_ROLES.some(roleId => message.member.roles.cache.has(roleId));
 
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator) && !hasAuthorizedRole) {
-      return message.reply('You do not have permission to use this command.');
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You do not have permission to use this command.')]
+      });
     }
 
     const targetUser =
@@ -31,30 +59,49 @@ module.exports = {
       (args[0] && await client.users.fetch(args[0]).catch(() => null));
 
     if (!targetUser) {
-      return message.reply('Please provide a user mention or ID.');
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Quarantine Failed', 'Please provide a user mention or ID.')]
+      });
+    }
+
+    if (targetUser.id === message.author.id) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine yourself.')]
+      });
     }
 
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member) return message.reply('User not found in this server.');
+    if (!member) {
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Quarantine Failed', 'User not found in this server.')]
+      });
+    }
 
-    // Check DB
+    if (member.roles.cache.has(QUARANTINE_ROLE_ID)) {
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Quarantine Failed', 'This user is already in quarantine.')]
+      });
+    }
+
+    const actorLevel = getQuarantineLevelFromMember(message.member);
+    const targetLevel = getQuarantineLevelFromMember(member);
+
+    if (targetLevel >= actorLevel && message.author.id !== message.guild.ownerId) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine someone at your level or above.')]
+      });
+    }
+
     const dbRow = client.quarantineDB
       .prepare('SELECT roles FROM quarantine WHERE user_id = ?')
       .get(member.id);
 
-    // Already quarantined check
-    if (member.roles.cache.has(QUARANTINE_ROLE_ID)) {
-      return message.reply('This user is already in quarantine.');
-    }
-
-    // If DB exists but role missing, clean DB
     if (dbRow && !member.roles.cache.has(QUARANTINE_ROLE_ID)) {
       client.quarantineDB
         .prepare('DELETE FROM quarantine WHERE user_id = ?')
         .run(member.id);
     }
 
-    // Save roles (excluding @everyone, managed roles, quarantine role)
     const rolesToSave = [];
     member.roles.cache.forEach(role => {
       if (
@@ -66,29 +113,23 @@ module.exports = {
       }
     });
 
-    // Save to DB
     client.quarantineDB.prepare(
       'INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)'
     ).run(member.id, JSON.stringify(rolesToSave));
 
     try {
-      // Preserve managed roles
-      const managedRoles = Array.from(
-        member.roles.cache.filter(r => r.managed).keys()
-      );
-
+      const managedRoles = Array.from(member.roles.cache.filter(r => r.managed).keys());
       await member.roles.set([QUARANTINE_ROLE_ID, ...managedRoles]);
     } catch (err) {
       console.error('Quarantine role set error:', err);
 
-      // Rollback DB
       client.quarantineDB
         .prepare('DELETE FROM quarantine WHERE user_id = ?')
         .run(member.id);
 
-      return message.reply(
-        'Failed to set quarantine role. Check bot permissions and role hierarchy.'
-      );
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'Failed to set quarantine role. Check bot permissions and role hierarchy.')]
+      });
     }
 
     const embed = new EmbedBuilder()
