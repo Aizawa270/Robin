@@ -1,7 +1,13 @@
-// commands/mod/warn.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
-// DB helpers (kept from your file)
+function makeEmbed(color, title, description) {
+  const embed = new EmbedBuilder().setColor(color).setTimestamp();
+  if (title) embed.setTitle(title);
+  if (description) embed.setDescription(description);
+  return embed;
+}
+
+// DB helpers
 function getWarnCountFromDB(client, guildId, userId) {
   try {
     if (!client.automodDB) return 0;
@@ -54,42 +60,59 @@ module.exports = {
   usage: '$warn <@user|userID> <reason>',
   async execute(client, message, args) {
     if (!message.guild) return;
-    if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
-        !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('You need Moderate Members permission.');
+
+    if (
+      !message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
+      !message.member.permissions.has(PermissionFlagsBits.Administrator)
+    ) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Failed', 'You need **Moderate Members** permission.')] });
     }
 
     const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
     if (!args.length) {
-      const usage = new EmbedBuilder()
-        .setColor('#facc15')
-        .setTitle('Warn Command Usage')
-        .setDescription(`**Usage:** \`${prefix}warn <@user|userID> <reason>\`\n\nExamples:\n${prefix}warn @User spamming`);
-      return message.reply({ embeds: [usage] });
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#facc15')
+            .setTitle('Warn Command Usage')
+            .setDescription(`**Usage:** \`${prefix}warn <@user|userID> <reason>\`\n\nExamples:\n${prefix}warn @User spamming`)
+            .setTimestamp(),
+        ],
+      });
     }
 
-    // Resolve target: mention or ID only
+    const targetArg = args.shift();
+
     let targetUser = message.mentions.users.first();
-    if (!targetUser && args[0] && /^\d{17,20}$/.test(args[0])) {
-      targetUser = await client.users.fetch(args[0]).catch(() => null);
+    if (!targetUser && /^\d{17,20}$/.test(targetArg)) {
+      targetUser = await client.users.fetch(targetArg).catch(() => null);
     }
 
-    if (!targetUser) return message.reply('User not found. Mention them or provide a valid user ID.');
+    if (!targetUser) {
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Warn Failed', 'User not found. Mention them or provide a valid user ID.')]
+      });
+    }
 
-    // Remove target arg if used
-    if (args[0] && (args[0].includes(targetUser.id) || args[0].startsWith('<@'))) args.shift();
+    if (targetUser.id === message.author.id) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Failed', 'You cannot warn yourself.')] });
+    }
 
-    const reason = args.join(' ') || 'No reason provided';
+    const reason = args.join(' ').trim() || 'No reason provided';
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member) return message.reply('User not in server.');
+    if (!member) {
+      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Warn Failed', 'User not in server.')] });
+    }
 
-    if (member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply('Cannot warn an administrator.');
+    if (member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Failed', 'Cannot warn an administrator.')] });
+    }
 
-    // Add warn to DB
     const added = addWarnToDB(client, message.guild.id, targetUser.id, message.author.id, reason);
-    if (!added) return message.reply('Failed to add warning to database.');
+    if (!added) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Failed', 'Failed to add warning to database.')] });
+    }
 
-    // log to modstats (dynamic import to avoid cycles)
     try {
       const { logModAction } = require('../../handlers/modstatsHelper');
       logModAction(client, message.guild.id, message.author.id, targetUser.id, 'warn', reason);
@@ -99,28 +122,32 @@ module.exports = {
 
     const warnCount = getWarnCountFromDB(client, message.guild.id, targetUser.id);
 
-    // Auto-ban at 5 warns
     if (warnCount >= 5) {
       try {
         await member.ban({ reason: `Auto-ban: reached 5 warns (${reason})` });
         clearWarnsFromDB(client, message.guild.id, targetUser.id);
+
         try {
           const { logModAction } = require('../../handlers/modstatsHelper');
           logModAction(client, message.guild.id, 'AUTO-BAN-SYSTEM', targetUser.id, 'ban', 'Auto-ban for reaching 5 warnings');
         } catch {}
-        const banEmbed = new EmbedBuilder()
-          .setColor('#ef4444')
-          .setTitle('User Auto-Banned')
-          .addFields(
-            { name: 'User', value: `<@${targetUser.id}>`, inline: false },
-            { name: 'Reason', value: `Reached 5 warnings (Automatic)`, inline: false },
-            { name: 'Warning Count', value: `5/5`, inline: false }
-          )
-          .setTimestamp();
-        return message.reply({ embeds: [banEmbed] });
+
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#ef4444')
+              .setTitle('User Auto-Banned')
+              .addFields(
+                { name: 'User', value: `<@${targetUser.id}>`, inline: false },
+                { name: 'Reason', value: 'Reached 5 warnings (Automatic)', inline: false },
+                { name: 'Warning Count', value: '5/5', inline: false }
+              )
+              .setTimestamp(),
+          ],
+        });
       } catch (banErr) {
         console.error('[Warn] Auto-ban failed:', banErr);
-        return message.reply('User reached 5 warnings but auto-ban failed.');
+        return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Failed', 'User reached 5 warnings but auto-ban failed.')] });
       }
     }
 
