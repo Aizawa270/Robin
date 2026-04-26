@@ -1,53 +1,34 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { logModAction } = require('../../handlers/modstatsHelper');
 
-// Role hierarchy configuration
-const ROLE_HIERARCHY = {
-  TRIAL_MOD: ['1431651114008318002', '1432014943900799097'],
-  MOD: ['1431650911784144967', '1432015132346810499'],
-  ADMIN: ['1431650662076256326', '1432015058959073291']
-};
-
-function canModerateTarget(moderator, target) {
-  if (!target) return false; // Can't mute someone not in server
-
-  const modRoles = moderator.roles.cache;
-  const targetRoles = target.roles.cache;
-
-  // Check if moderator is trial mod
-  const isTrialMod = ROLE_HIERARCHY.TRIAL_MOD.some(roleId => modRoles.has(roleId));
-  
-  // Check if target is mod or admin
-  const targetIsMod = ROLE_HIERARCHY.MOD.some(roleId => targetRoles.has(roleId));
-  const targetIsAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => targetRoles.has(roleId));
-
-  if (isTrialMod && (targetIsMod || targetIsAdmin)) {
-    return false; // Trial mods can't moderate mods or admins
-  }
-
-  // Check if moderator is mod (but not admin)
-  const isMod = ROLE_HIERARCHY.MOD.some(roleId => modRoles.has(roleId));
-  const isAdmin = ROLE_HIERARCHY.ADMIN.some(roleId => modRoles.has(roleId));
-
-  if (isMod && !isAdmin && targetIsAdmin) {
-    return false; // Mods can't moderate admins
-  }
-
-  return true;
+function makeEmbed(color, title, description) {
+  const embed = new EmbedBuilder().setColor(color).setTimestamp();
+  if (title) embed.setTitle(title);
+  if (description) embed.setDescription(description);
+  return embed;
 }
 
-// Parse durations like "10s", "5m", "2h", "1d"
+function getRolePos(member) {
+  return member?.roles?.highest?.position ?? 0;
+}
+
+function isOwner(guild, member) {
+  return !!guild?.ownerId && member?.id === guild.ownerId;
+}
+
 function parseDuration(str) {
   if (!str) return null;
   const regex = /(\d+)\s*(s|m|h|d)/gi;
   let match;
   let totalMs = 0;
   const multipliers = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+
   while ((match = regex.exec(str)) !== null) {
     const v = Number(match[1]);
     const unit = match[2].toLowerCase();
     totalMs += v * (multipliers[unit] || 0);
   }
+
   const max = 28 * 24 * 60 * 60 * 1000;
   if (!totalMs || totalMs > max) return null;
   return totalMs;
@@ -70,80 +51,116 @@ module.exports = {
   category: 'mod',
   usage: '$mute <@user|userID> <duration> [reason]',
   async execute(client, message, args) {
-    if (!message.guild) return;
+    if (!message.guild) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Server only.')] });
+    }
 
     const perms = message.member.permissions;
     if (!perms.has(PermissionFlagsBits.ModerateMembers) && !perms.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('You need **Timeout Members** permission.');
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You need **Timeout Members** permission.')] });
     }
 
     const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
+
     if (!args.length) {
-      const usage = new EmbedBuilder()
-        .setColor('#facc15')
-        .setTitle('Mute Command Usage')
-        .setDescription(
-          `**Usage:** \`${prefix}mute <@user|userID> <duration> [reason]\`\n\n` +
-          `**Examples:**\n${prefix}mute @User 10m spamming\n${prefix}mute 123456789012345678 1h advertising`
-        );
-      return message.reply({ embeds: [usage] });
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            '#facc15',
+            'Mute Command Usage',
+            `**Usage:** \`${prefix}mute <@user|userID> <duration> [reason]\`\n\n**Examples:**\n${prefix}mute @User 10m spamming\n${prefix}mute 123456789012345678 1h advertising`
+          ),
+        ],
+      });
     }
 
-    // Resolve target: mention or ID only
+    const targetToken = args.shift();
     let targetUser = message.mentions.users.first();
-    if (!targetUser && args[0] && /^\d{17,20}$/.test(args[0])) {
-      targetUser = await client.users.fetch(args[0]).catch(() => null);
+
+    if (!targetUser && /^\d{17,20}$/.test(targetToken)) {
+      targetUser = await client.users.fetch(targetToken).catch(() => null);
     }
 
     if (!targetUser) {
-      return message.reply('User not found. Mention them or provide a valid user ID.');
+      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'User not found. Mention them or provide a valid user ID.')] });
     }
-
-    // shift target arg if it was an ID/mention
-    if (args[0] && (args[0].includes(targetUser.id) || args[0].startsWith('<@'))) args.shift();
 
     const durationArg = args.shift();
-    if (!durationArg) return message.reply('Provide a duration (e.g. `10m`, `1h`).');
-
-    const reason = args.join(' ') || 'No reason provided';
-
-    const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member) return message.reply('User not in this server.');
-
-    if (member.id === message.author.id) return message.reply('You cannot mute yourself.');
-    if (member.id === client.user.id) return message.reply('I cannot mute myself.');
-
-    // 🔹 ROLE HIERARCHY CHECK
-    if (!canModerateTarget(message.member, member)) {
-      return message.reply('You cannot mute this user due to role hierarchy restrictions.');
+    if (!durationArg) {
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'Provide a duration like `10m`, `1h30m`, or `2d`.')]
+      });
     }
 
-    if (member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply('Cannot mute an administrator.');
-
     const durationMs = parseDuration(durationArg);
-    if (!durationMs) return message.reply('Invalid duration format. Examples: `10m`, `1h30m`, `2d`.');
+    if (!durationMs) {
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'Invalid duration format. Examples: `10m`, `1h30m`, `2d`.')]
+      });
+    }
 
-    // Check bot permissions
-    const botMember = message.guild.members.me;
+    const reason = args.join(' ').trim() || 'No reason provided';
+    const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
+    const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+
+    if (!member) {
+      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'User not in this server.')] });
+    }
+
+    if (member.id === message.author.id) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You cannot mute yourself.')] });
+    }
+
+    if (member.id === client.user.id) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'I cannot mute myself.')] });
+    }
+
+    if (isOwner(message.guild, member) && !isOwner(message.guild, message.member)) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You cannot mute the server owner.')] });
+    }
+
+    if (!isOwner(message.guild, message.member)) {
+      if (getRolePos(member) >= getRolePos(message.member)) {
+        return message.reply({
+          embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You cannot mute someone with equal or higher role.')]
+        });
+      }
+    }
+
+    if (botMember && getRolePos(member) >= getRolePos(botMember)) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'I cannot mute that user because my role is too low.')]
+      });
+    }
+
+    if (member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Cannot mute an administrator.')] });
+    }
+
     if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
-      return message.reply('I need **Timeout Members** permission to mute users.');
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'I need **Timeout Members** permission to mute users.')] });
     }
 
     if (!member.moderatable) {
-      return message.reply('I cannot mute this user (insufficient permissions or higher role).');
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'I cannot mute this user (insufficient permissions or role hierarchy).')]
+      });
     }
 
-    // Already muted check
     if (member.communicationDisabledUntilTimestamp && member.communicationDisabledUntilTimestamp > Date.now()) {
-      const alreadyEmbed = new EmbedBuilder()
-        .setColor('#facc15')
-        .setTitle('User Already Muted')
-        .setDescription(`<@${member.id}> is already muted.`)
-        .addFields({
-          name: 'Mute ends',
-          value: `<t:${Math.floor(member.communicationDisabledUntilTimestamp / 1000)}:R>`,
-        });
-      return message.reply({ embeds: [alreadyEmbed] });
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#facc15')
+            .setTitle('User Already Muted')
+            .setDescription(`<@${member.id}> is already muted.`)
+            .addFields({
+              name: 'Mute ends',
+              value: `<t:${Math.floor(member.communicationDisabledUntilTimestamp / 1000)}:R>`,
+            })
+            .setTimestamp(),
+        ],
+      });
     }
 
     try {
@@ -161,18 +178,18 @@ module.exports = {
         .setTitle('User Muted')
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
         .addFields(
-          { name: 'User', value: `<@${targetUser.id}>` },
-          { name: 'Muted by', value: `<@${message.author.id}>` },
-          { name: 'Duration', value: `${durationArg} (${formatDuration(durationMs)})` },
-          { name: 'Reason', value: reason },
-          { name: 'Mute ends', value: `<t:${Math.floor(endsAt.getTime() / 1000)}:R>` }
+          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
+          { name: 'Muted by', value: `<@${message.author.id}>`, inline: false },
+          { name: 'Duration', value: `${durationArg} (${formatDuration(durationMs)})`, inline: false },
+          { name: 'Reason', value: reason, inline: false },
+          { name: 'Mute ends', value: `<t:${Math.floor(endsAt.getTime() / 1000)}:R>`, inline: false }
         )
         .setTimestamp();
 
-      await message.reply({ embeds: [embed] });
+      return message.reply({ embeds: [embed] });
     } catch (err) {
       console.error('Mute error:', err);
-      await message.reply('Failed to mute the user.');
+      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Failed to mute the user.')] });
     }
   },
 };
