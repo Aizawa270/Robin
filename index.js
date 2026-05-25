@@ -331,16 +331,6 @@ client.once('ready', async () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  // ===== BOT BLACKLIST GATE =====
-  if (client.botBlacklist?.has(message.author.id)) {
-    const embed = new EmbedBuilder()
-      .setColor('#ff0000')
-      .setAuthor({ name: 'Vanessa' })
-      .setDescription("You're restricted from using Vanessa.")
-      .setFooter({ text: 'Contact the server owner if you think this is a mistake.' });
-    return message.reply({ embeds: [embed] }).catch(() => {});
-  }
-
   await handleMessage(client, message);
 
   try {
