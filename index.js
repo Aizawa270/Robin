@@ -34,6 +34,11 @@ prefixlessDB.prepare('CREATE TABLE IF NOT EXISTS prefixless (user_id TEXT PRIMAR
 client.prefixlessDB = prefixlessDB;
 client.prefixless = new Set(prefixlessDB.prepare('SELECT user_id FROM prefixless').all().map(r => r.user_id));
 
+// Bot Blacklist (same DB, separate table)
+prefixlessDB.prepare('CREATE TABLE IF NOT EXISTS bot_blacklist (user_id TEXT PRIMARY KEY)').run();
+client.botBlacklist = new Set(prefixlessDB.prepare('SELECT user_id FROM bot_blacklist').all().map(r => r.user_id));
+console.log(`[BotBlacklist] Loaded ${client.botBlacklist.size} entries`);
+
 // Quarantine DB
 const quarantineDB = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
 quarantineDB.pragma('journal_mode = WAL');
@@ -326,6 +331,16 @@ client.once('ready', async () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
+  // ===== BOT BLACKLIST GATE =====
+  if (client.botBlacklist?.has(message.author.id)) {
+    const embed = new EmbedBuilder()
+      .setColor('#ff0000')
+      .setAuthor({ name: 'Vanessa' })
+      .setDescription("You're restricted from using Vanessa.")
+      .setFooter({ text: 'Contact the server owner if you think this is a mistake.' });
+    return message.reply({ embeds: [embed] }).catch(() => {});
+  }
+
   await handleMessage(client, message);
 
   try {
@@ -395,7 +410,6 @@ client.on('messageCreate', async (message) => {
 });
 
 // ===== 1v1 BUTTON HANDLER =====
-// This is required for the Accept/Deny buttons on 1v1 challenges to work.
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
