@@ -1,7 +1,7 @@
 const universalHelper = require('./universalHelper');
 const fs = require('fs');
 const path = require('path');
-const { Collection } = require('discord.js');
+const { Collection, EmbedBuilder } = require('discord.js');
 
 /* =========================
    STRIP REPLY TARGET
@@ -75,6 +75,22 @@ function getCurrentPrefix(client, guildId) {
 }
 
 /* =========================
+   BLACKLIST GATE
+========================= */
+async function checkBotBlacklist(client, message) {
+  if (!client.botBlacklist?.has(message.author.id)) return false;
+
+  const embed = new EmbedBuilder()
+    .setColor('#ff0000')
+    .setAuthor({ name: 'Vanessa' })
+    .setDescription("You're restricted from using Vanessa.")
+    .setFooter({ text: 'Contact the server owner if you think this is a mistake.' });
+
+  await message.reply({ embeds: [embed] }).catch(() => {});
+  return true;
+}
+
+/* =========================
    MAIN HANDLER
 ========================= */
 async function handleMessage(client, message) {
@@ -119,6 +135,9 @@ async function handleMessage(client, message) {
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!cmd) return;
 
+    // Blacklist check — only fires when a real command is matched
+    if (await checkBotBlacklist(client, message)) return;
+
     message.prefix = prefix;
     message.commandName = cmd.name;
     message.createEmbed = (opts) =>
@@ -143,6 +162,9 @@ async function handleMessage(client, message) {
 
   const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
   if (!cmd) return;
+
+  // Blacklist check — only fires when a real command is matched
+  if (await checkBotBlacklist(client, message)) return;
 
   message.prefix = prefix;
   message.commandName = cmd.name;
