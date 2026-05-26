@@ -1,52 +1,149 @@
 // commands/misc/spy.js
 const {
-  PermissionFlagsBits,
   EmbedBuilder,
   ChannelType
 } = require('discord.js');
 const { words } = require('../../utils/spyWords');
 
-// Active game timers
+// Active game timers & lobby expiry timers
 const activeGames = new Map();
+const lobbyExpiry = new Map();
 
+// ===============================
+// AUTHORITY CHECK
+// ===============================
+const OWNER_ID = '852839588689870879';
+const AUTHORIZED_ROLES = ['1447894643277561856', '1431650083585396897'];
+
+function isAuthorized(message) {
+  if (message.author.id === OWNER_ID) return true;
+  if (!message.member) return false;
+  return AUTHORIZED_ROLES.some(r => message.member.roles.cache.has(r));
+}
+
+// ===============================
+// HINT WORD MAP
+// ===============================
+const hintMap = {
+  // Nature
+  sun: 'summer', moon: 'night', rain: 'umbrella', snow: 'winter',
+  fire: 'smoke', water: 'ocean', tree: 'forest', flower: 'garden',
+  cloud: 'sky', wind: 'breeze', ice: 'cold', storm: 'thunder',
+  // Food
+  cake: 'flour', bread: 'butter', milk: 'dairy', egg: 'breakfast',
+  apple: 'orchard', pizza: 'cheese', sugar: 'sweet', salt: 'pepper',
+  rice: 'bowl', fish: 'ocean', meat: 'grill', soup: 'spoon',
+  // Objects
+  ring: 'jewel', clock: 'time', door: 'key', book: 'library',
+  chair: 'sit', table: 'wood', phone: 'call', money: 'bank',
+  car: 'road', boat: 'sail', plane: 'flight', train: 'track',
+  ball: 'game', lamp: 'light', mirror: 'glass', sword: 'battle',
+  // Animals
+  dog: 'leash', cat: 'meow', bird: 'feather', fish: 'fins',
+  horse: 'stable', lion: 'mane', wolf: 'pack', bear: 'hibernate',
+  snake: 'scales', eagle: 'talon', shark: 'ocean', rabbit: 'burrow',
+  // People / places
+  king: 'crown', queen: 'throne', castle: 'moat', school: 'class',
+  city: 'streets', beach: 'sand', mountain: 'peak', island: 'ocean',
+  // Abstract
+  dream: 'sleep', love: 'heart', fear: 'dark', hope: 'wish',
+  luck: 'clover', power: 'force', truth: 'lie', shadow: 'dark',
+};
+
+function getHint(word) {
+  const lower = word.toLowerCase();
+  if (hintMap[lower]) return hintMap[lower];
+  // Fallback: first letter + length
+  return `${word[0].toUpperCase()}${'_'.repeat(word.length - 1)} (${word.length} letters)`;
+}
+
+// ===============================
+// LOBBY EXPIRY HELPERS
+// ===============================
+function setLobbyExpiry(client, lobbyId, guildId, channelId) {
+  clearLobbyExpiry(lobbyId);
+  const timer = setTimeout(async () => {
+    const spyDB = client.spyDB;
+    const lobby = spyDB.prepare('SELECT * FROM spy_lobbies WHERE lobby_id = ?').get(lobbyId);
+    if (!lobby || lobby.status !== 'lobby') return;
+
+    spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobbyId);
+    spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobbyId);
+    lobbyExpiry.delete(lobbyId);
+
+    try {
+      const guild = client.guilds.cache.get(guildId);
+      const ch = guild?.channels.cache.get(channelId);
+      if (ch) {
+        const embed = new EmbedBuilder()
+          .setColor('#ff6600')
+          .setTitle('⏰ Lobby Expired')
+          .setDescription('The spy lobby was automatically disbanded after 30 minutes of inactivity.');
+        await ch.send({ embeds: [embed] });
+      }
+    } catch {}
+  }, 30 * 60 * 1000);
+
+  lobbyExpiry.set(lobbyId, timer);
+}
+
+function clearLobbyExpiry(lobbyId) {
+  if (lobbyExpiry.has(lobbyId)) {
+    clearTimeout(lobbyExpiry.get(lobbyId));
+    lobbyExpiry.delete(lobbyId);
+  }
+}
+
+// ===============================
+// WORD DETECTION - EXACT WORD MATCH ONLY
+// ===============================
+function containsExactWord(content, word) {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(?<![a-zA-Z])${escaped}(?![a-zA-Z])`, 'i');
+  return regex.test(content);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ===============================
+// MODULE EXPORT
+// ===============================
 module.exports = {
   name: 'spy',
   description: 'Spy game system',
   category: 'misc',
   usage: 'spy <lobby|join|leave|start|end|hint>',
+
   async execute(client, message, args) {
     if (!message.guild) return;
 
     const spyDB = client.spyDB;
-    const sub = args[0];
+    const sub = args[0]?.toLowerCase();
 
     // ===============================
     // CREATE LOBBY
     // ===============================
     if (sub === 'lobby') {
-      const existing = spyDB
-        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
-        .get(message.guild.id);
-
+      const existing = spyDB.prepare('SELECT * FROM spy_lobbies WHERE guild_id = ?').get(message.guild.id);
       if (existing) {
-        const embed = new EmbedBuilder()
+        return message.reply({ embeds: [new EmbedBuilder()
           .setColor('#ff0000')
           .setTitle('❌ Lobby Already Exists')
-          .setDescription('End the current lobby with `spy end` first.');
-        return message.reply({ embeds: [embed] });
+          .setDescription('End the current lobby with `spy end` first.')] });
       }
 
-      const result = spyDB.prepare(`
-        INSERT INTO spy_lobbies (guild_id, host_id, status)
-        VALUES (?, ?, 'lobby')
-      `).run(message.guild.id, message.author.id);
+      const result = spyDB.prepare(
+        "INSERT INTO spy_lobbies (guild_id, host_id, status) VALUES (?, ?, 'lobby')"
+      ).run(message.guild.id, message.author.id);
 
       const lobbyId = result.lastInsertRowid;
 
-      spyDB.prepare(`
-        INSERT INTO spy_players (lobby_id, user_id)
-        VALUES (?, ?)
-      `).run(lobbyId, message.author.id);
+      spyDB.prepare('INSERT INTO spy_players (lobby_id, user_id) VALUES (?, ?)').run(lobbyId, message.author.id);
+
+      // Start 30-min expiry
+      setLobbyExpiry(client, lobbyId, message.guild.id, message.channel.id);
 
       const embed = new EmbedBuilder()
         .setColor('#ec4899')
@@ -59,12 +156,13 @@ module.exports = {
           `• \`spy join\` - Join the lobby\n` +
           `• \`spy leave\` - Leave the lobby\n` +
           `• \`spy start\` - Start game (min 5 players)\n` +
-          `• \`spy hint\` - Toggle hint word for imposter (host only)\n\n` +
+          `• \`spy hint off\` - Disable hint for spy (host only)\n\n` +
           `**How it works:**\n` +
           `• 2 rounds of turn-based speaking\n` +
           `• Each player gets 15 seconds per turn\n` +
           `• Discussion time after each round (2 mins)\n` +
-          `• Vote to eliminate the spy!`
+          `• Vote to eliminate the spy!\n\n` +
+          `⏰ Lobby auto-disbands in **30 minutes** if not started.`
         )
         .setFooter({ text: `Lobby ID: ${lobbyId} • Need 4 more players` });
 
@@ -72,251 +170,169 @@ module.exports = {
     }
 
     // ===============================
-    // HINT TOGGLE (host only)
+    // HINT TOGGLE
     // ===============================
     if (sub === 'hint') {
-      const lobby = spyDB
-        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
-        .get(message.guild.id);
-
+      const lobby = spyDB.prepare('SELECT * FROM spy_lobbies WHERE guild_id = ?').get(message.guild.id);
       if (!lobby) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ No Lobby Found')
-          .setDescription('Create a lobby with `spy lobby` first.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ No Lobby Found')
+          .setDescription('Create a lobby with `spy lobby` first.')] });
       }
 
-      if (lobby.host_id !== message.author.id) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Not the Host')
-          .setDescription('Only the host can toggle hints!');
-        return message.reply({ embeds: [embed] });
+      if (lobby.host_id !== message.author.id && !isAuthorized(message)) {
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ No Permission')
+          .setDescription('Only the host or admins can toggle hints!')] });
       }
 
       if (lobby.status !== 'lobby') {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Game Already Started')
-          .setDescription('Hints can only be toggled before the game starts.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Game Already Started')
+          .setDescription('Hints can only be toggled before the game starts.')] });
       }
 
-      // Toggle hint_enabled (stored as 0/1 in the DB)
-      // We'll store it in a simple way: use a Map keyed by lobbyId
-      // since spy_lobbies doesn't have a hint_enabled column by default,
-      // we use client-side storage for this session
-      if (!client.spyHintEnabled) client.spyHintEnabled = new Map();
-      const current = client.spyHintEnabled.get(lobby.lobby_id) || false;
-      const newVal = !current;
-      client.spyHintEnabled.set(lobby.lobby_id, newVal);
+      if (!client.spyHintDisabled) client.spyHintDisabled = new Set();
 
-      const embed = new EmbedBuilder()
-        .setColor(newVal ? '#00ff00' : '#ffaa00')
-        .setTitle(newVal ? '✅ Hint Enabled' : '❌ Hint Disabled')
-        .setDescription(
-          newVal
-            ? `The imposter will receive a **vague hint** about the secret word in their DM.`
-            : `The imposter will receive **no hint** about the secret word.`
-        )
-        .setFooter({ text: `Lobby ID: ${lobby.lobby_id}` });
+      const action = args[1]?.toLowerCase();
 
-      return message.reply({ embeds: [embed] });
+      if (action === 'off') {
+        client.spyHintDisabled.add(lobby.lobby_id);
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ffaa00').setTitle('❌ Hints Disabled')
+          .setDescription('The spy will **not** receive a hint word this game.')
+          .setFooter({ text: 'Hints are on by default for new games.' })] });
+      } else {
+        client.spyHintDisabled.delete(lobby.lobby_id);
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#00ff00').setTitle('✅ Hints Enabled')
+          .setDescription('The spy will receive a related hint word in their DM.')
+          .setFooter({ text: 'This is the default setting.' })] });
+      }
     }
 
     // ===============================
     // JOIN LOBBY
     // ===============================
     if (sub === 'join') {
-      const lobby = spyDB
-        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
-        .get(message.guild.id);
-
+      const lobby = spyDB.prepare('SELECT * FROM spy_lobbies WHERE guild_id = ?').get(message.guild.id);
       if (!lobby) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ No Lobby Found')
-          .setDescription('Create a lobby with `spy lobby` first.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ No Lobby Found')
+          .setDescription('Create a lobby with `spy lobby` first.')] });
       }
-
       if (lobby.status !== 'lobby') {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Game Already Started')
-          .setDescription('Wait for the current game to end.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Game Already Started')
+          .setDescription('Wait for the current game to end.')] });
       }
 
-      const already = spyDB.prepare(`
-        SELECT * FROM spy_players WHERE lobby_id = ? AND user_id = ?
-      `).get(lobby.lobby_id, message.author.id);
-
+      const already = spyDB.prepare('SELECT * FROM spy_players WHERE lobby_id = ? AND user_id = ?').get(lobby.lobby_id, message.author.id);
       if (already) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Already Joined')
-          .setDescription('You are already in the lobby!');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Already Joined')
+          .setDescription('You are already in the lobby!')] });
       }
 
-      spyDB.prepare(`
-        INSERT INTO spy_players (lobby_id, user_id)
-        VALUES (?, ?)
-      `).run(lobby.lobby_id, message.author.id);
+      spyDB.prepare('INSERT INTO spy_players (lobby_id, user_id) VALUES (?, ?)').run(lobby.lobby_id, message.author.id);
 
-      const playerCount = spyDB.prepare(`
-        SELECT COUNT(*) as count FROM spy_players WHERE lobby_id = ?
-      `).get(lobby.lobby_id).count;
-
+      const playerCount = spyDB.prepare('SELECT COUNT(*) as count FROM spy_players WHERE lobby_id = ?').get(lobby.lobby_id).count;
       const needed = Math.max(0, 5 - playerCount);
 
-      const embed = new EmbedBuilder()
-        .setColor('#00ff00')
-        .setTitle('✅ Joined Lobby')
+      return message.reply({ embeds: [new EmbedBuilder()
+        .setColor('#00ff00').setTitle('✅ Joined Lobby')
         .setDescription(
           `${message.author} joined the game!\n\n` +
           `**Players:** ${playerCount}/∞\n` +
           `**Status:** ${needed > 0 ? `Need ${needed} more to start` : 'Ready to start!'}`
         )
-        .setFooter({ text: `Lobby ID: ${lobby.lobby_id}` });
-
-      return message.reply({ embeds: [embed] });
+        .setFooter({ text: `Lobby ID: ${lobby.lobby_id}` })] });
     }
 
     // ===============================
     // LEAVE LOBBY
     // ===============================
     if (sub === 'leave') {
-      const lobby = spyDB
-        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
-        .get(message.guild.id);
-
+      const lobby = spyDB.prepare('SELECT * FROM spy_lobbies WHERE guild_id = ?').get(message.guild.id);
       if (!lobby) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ No Lobby Found')
-          .setDescription('There is no active lobby.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ No Lobby Found')
+          .setDescription('There is no active lobby.')] });
       }
-
       if (lobby.status !== 'lobby') {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Cannot Leave')
-          .setDescription('Game already started! You cannot leave now.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Cannot Leave')
+          .setDescription('Game already started! You cannot leave now.')] });
       }
 
-      const player = spyDB.prepare(`
-        SELECT * FROM spy_players WHERE lobby_id = ? AND user_id = ?
-      `).get(lobby.lobby_id, message.author.id);
-
+      const player = spyDB.prepare('SELECT * FROM spy_players WHERE lobby_id = ? AND user_id = ?').get(lobby.lobby_id, message.author.id);
       if (!player) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Not in Lobby')
-          .setDescription('You are not in the lobby.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Not in Lobby')
+          .setDescription('You are not in the lobby.')] });
       }
-
       if (lobby.host_id === message.author.id) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Host Cannot Leave')
-          .setDescription('You are the host! Use `spy end` to close the lobby.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Host Cannot Leave')
+          .setDescription('You are the host! Use `spy end` to close the lobby.')] });
       }
 
-      spyDB.prepare(`
-        DELETE FROM spy_players WHERE lobby_id = ? AND user_id = ?
-      `).run(lobby.lobby_id, message.author.id);
+      spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ? AND user_id = ?').run(lobby.lobby_id, message.author.id);
+      const playerCount = spyDB.prepare('SELECT COUNT(*) as count FROM spy_players WHERE lobby_id = ?').get(lobby.lobby_id).count;
 
-      const playerCount = spyDB.prepare(`
-        SELECT COUNT(*) as count FROM spy_players WHERE lobby_id = ?
-      `).get(lobby.lobby_id).count;
-
-      const embed = new EmbedBuilder()
-        .setColor('#ffaa00')
-        .setTitle('👋 Left Lobby')
-        .setDescription(
-          `${message.author} left the lobby.\n\n` +
-          `**Remaining Players:** ${playerCount}`
-        );
-
-      return message.reply({ embeds: [embed] });
+      return message.reply({ embeds: [new EmbedBuilder()
+        .setColor('#ffaa00').setTitle('👋 Left Lobby')
+        .setDescription(`${message.author} left the lobby.\n\n**Remaining Players:** ${playerCount}`)] });
     }
 
     // ===============================
     // START GAME
     // ===============================
     if (sub === 'start') {
-      const lobby = spyDB
-        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
-        .get(message.guild.id);
-
+      const lobby = spyDB.prepare('SELECT * FROM spy_lobbies WHERE guild_id = ?').get(message.guild.id);
       if (!lobby) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ No Lobby Found')
-          .setDescription('Create a lobby with `spy lobby` first.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ No Lobby Found')
+          .setDescription('Create a lobby with `spy lobby` first.')] });
       }
-
-      if (lobby.host_id !== message.author.id) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Not the Host')
-          .setDescription('Only the host can start the game!');
-        return message.reply({ embeds: [embed] });
+      if (lobby.host_id !== message.author.id && !isAuthorized(message)) {
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Not the Host')
+          .setDescription('Only the host can start the game!')] });
       }
-
       if (lobby.status !== 'lobby') {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Game Already Started')
-          .setDescription('The game is already running!');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Game Already Started')
+          .setDescription('The game is already running!')] });
       }
 
-      const players = spyDB.prepare(`
-        SELECT user_id FROM spy_players WHERE lobby_id = ?
-      `).all(lobby.lobby_id);
-
+      const players = spyDB.prepare('SELECT user_id FROM spy_players WHERE lobby_id = ?').all(lobby.lobby_id);
       if (players.length < 5) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Not Enough Players')
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Not Enough Players')
           .setDescription(
             `Need at least 5 players to start!\n\n` +
             `**Current:** ${players.length}/5\n` +
             `**Needed:** ${5 - players.length} more`
-          );
-        return message.reply({ embeds: [embed] });
+          )] });
       }
 
-      // LOCK THE LOBBY
-      spyDB.prepare(`
-        UPDATE spy_lobbies SET status = 'starting' WHERE lobby_id = ?
-      `).run(lobby.lobby_id);
+      // Cancel expiry timer — game is starting
+      clearLobbyExpiry(lobby.lobby_id);
 
-      const startEmbed = new EmbedBuilder()
-        .setColor('#ffaa00')
-        .setTitle('🎮 Starting Game...')
-        .setDescription('Creating private channel and sending DMs...');
+      spyDB.prepare("UPDATE spy_lobbies SET status = 'starting' WHERE lobby_id = ?").run(lobby.lobby_id);
 
-      await message.reply({ embeds: [startEmbed] });
+      // Acknowledge then move on — no await on this reply so it doesn't block
+      message.reply({ embeds: [new EmbedBuilder()
+        .setColor('#ffaa00').setTitle('🎮 Starting Game...')
+        .setDescription('Creating private channel and sending DMs...')] }).catch(() => {});
 
       // Create spy channel
       const channel = await message.guild.channels.create({
         name: '🕵️-spy-game',
         type: ChannelType.GuildText,
         permissionOverwrites: [
-          {
-            id: message.guild.roles.everyone.id,
-            deny: ['ViewChannel'],
-          },
+          { id: message.guild.roles.everyone.id, deny: ['ViewChannel'] },
           ...players.map(p => ({
             id: p.user_id,
             allow: ['ViewChannel', 'ReadMessageHistory'],
@@ -325,38 +341,27 @@ module.exports = {
         ],
       });
 
-      spyDB.prepare(`
-        UPDATE spy_lobbies
-        SET channel_id = ?, spy_channel_id = ?, status = 'playing'
-        WHERE lobby_id = ?
-      `).run(channel.id, channel.id, lobby.lobby_id);
+      spyDB.prepare('UPDATE spy_lobbies SET channel_id = ?, spy_channel_id = ?, status = ? WHERE lobby_id = ?')
+        .run(channel.id, channel.id, 'playing', lobby.lobby_id);
 
-      // Determine spy count
       const spyCount = players.length >= 10 ? 2 : 1;
       const shuffled = [...players].sort(() => Math.random() - 0.5);
       const spies = shuffled.slice(0, spyCount);
 
-      // Pick secret word
       const secretWord = words[Math.floor(Math.random() * words.length)];
+      spyDB.prepare('UPDATE spy_lobbies SET secret_word = ? WHERE lobby_id = ?').run(secretWord, lobby.lobby_id);
 
-      spyDB.prepare(`
-        UPDATE spy_lobbies SET secret_word = ? WHERE lobby_id = ?
-      `).run(secretWord, lobby.lobby_id);
-
-      // Mark spies in database
       for (const spy of spies) {
-        spyDB.prepare(`
-          UPDATE spy_players SET is_spy = 1 WHERE lobby_id = ? AND user_id = ?
-        `).run(lobby.lobby_id, spy.user_id);
+        spyDB.prepare('UPDATE spy_players SET is_spy = 1 WHERE lobby_id = ? AND user_id = ?').run(lobby.lobby_id, spy.user_id);
       }
 
-      // Generate a vague hint for the spy (category/length/first letter)
-      const hintEnabled = client.spyHintEnabled?.get(lobby.lobby_id) || false;
-      const spyHint = hintEnabled ? generateHint(secretWord) : null;
+      // Hints ON by default; only off if host explicitly disabled
+      const hintsOff = client.spyHintDisabled?.has(lobby.lobby_id) || false;
+      const spyHint = hintsOff ? null : getHint(secretWord);
 
-      // Send DMs to all players
+      // Send DMs
       let dmSuccess = 0;
-      let dmFailed = [];
+      const dmFailed = [];
 
       for (const player of players) {
         try {
@@ -373,7 +378,7 @@ module.exports = {
                   `👂 Listen carefully to others\n` +
                   `🎭 Try to blend in and guess the word\n` +
                   `⚠️ Don't get caught!\n\n` +
-                  (spyHint ? `💡 **Hint:** ${spyHint}\n\n` : '') +
+                  (spyHint ? `💡 **Hint word:** \`${spyHint}\`\n\n` : `*(No hint this game)*\n\n`) +
                   `💡 **Tip:** During voting, you can guess the word to win instantly!`
                 : `**Your secret word is:**\n# ${secretWord.toUpperCase()}\n\n` +
                   `🕵️ There ${spyCount === 1 ? 'is **1 spy**' : 'are **2 spies**'} among you\n` +
@@ -393,61 +398,56 @@ module.exports = {
         }
       }
 
-      // Announce in spy channel
       const playerPings = players.map(p => `<@${p.user_id}>`).join(' ');
 
-      const announceEmbed = new EmbedBuilder()
-        .setColor('#00ff00')
-        .setTitle('🎮 SPY GAME STARTED!')
-        .setDescription(
-          `**Players:** ${players.length}\n` +
-          `**Spies:** ${spyCount}\n` +
-          `**DMs Sent:** ${dmSuccess}/${players.length}\n` +
-          `**Hint for spy:** ${hintEnabled ? 'Yes' : 'No'}\n\n` +
-          `${dmFailed.length > 0 ? `⚠️ **Failed DMs:** ${dmFailed.map(id => `<@${id}>`).join(', ')}\nMake sure DMs are enabled!\n\n` : ''}` +
-          `**📋 Game Rules:**\n` +
-          `• Check your DMs for your role\n` +
-          `• 2 rounds of turn-based speaking (randomized order)\n` +
-          `• Each player gets 15 seconds per turn\n` +
-          `• 2 minutes discussion after each round\n` +
-          `• Vote to eliminate suspects\n\n` +
-          `🚨 **If anyone says the secret word exactly, spies win instantly!**`
-        )
-        .setFooter({ text: 'Game starting in 5 seconds...' })
-        .setTimestamp();
+      await channel.send({
+        content: playerPings,
+        embeds: [new EmbedBuilder()
+          .setColor('#00ff00')
+          .setTitle('🎮 SPY GAME STARTED!')
+          .setDescription(
+            `**Players:** ${players.length}\n` +
+            `**Spies:** ${spyCount}\n` +
+            `**DMs Sent:** ${dmSuccess}/${players.length}\n` +
+            `**Spy hint:** ${hintsOff ? 'Off' : 'On'}\n\n` +
+            `${dmFailed.length > 0 ? `⚠️ **Failed DMs:** ${dmFailed.map(id => `<@${id}>`).join(', ')}\nMake sure DMs are enabled!\n\n` : ''}` +
+            `**📋 Game Rules:**\n` +
+            `• Check your DMs for your role\n` +
+            `• 2 rounds of turn-based speaking (randomized order)\n` +
+            `• Each player gets 15 seconds per turn\n` +
+            `• 2 minutes discussion after each round\n` +
+            `• Vote to eliminate suspects\n\n` +
+            `🚨 **If anyone says the secret word exactly, spies win instantly!**`
+          )
+          .setFooter({ text: 'Game starting in 5 seconds...' })
+          .setTimestamp()],
+      });
 
-      await channel.send({ content: playerPings, embeds: [announceEmbed] });
-
-      // Clean up hint toggle for this lobby
-      client.spyHintEnabled?.delete(lobby.lobby_id);
+      // Clean up hint flag (resets for next game)
+      client.spyHintDisabled?.delete(lobby.lobby_id);
 
       await sleep(5000);
       await runGameLoop(client, lobby.lobby_id, channel, players, secretWord);
+      return;
     }
 
     // ===============================
     // END GAME
     // ===============================
     if (sub === 'end') {
-      const lobby = spyDB
-        .prepare(`SELECT * FROM spy_lobbies WHERE guild_id = ?`)
-        .get(message.guild.id);
-
+      const lobby = spyDB.prepare('SELECT * FROM spy_lobbies WHERE guild_id = ?').get(message.guild.id);
       if (!lobby) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ No Lobby Found')
-          .setDescription('There is no active lobby.');
-        return message.reply({ embeds: [embed] });
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ No Lobby Found')
+          .setDescription('There is no active lobby.')] });
+      }
+      if (lobby.host_id !== message.author.id && !isAuthorized(message)) {
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ff0000').setTitle('❌ Not the Host')
+          .setDescription('Only the host or admins can end the game!')] });
       }
 
-      if (lobby.host_id !== message.author.id) {
-        const embed = new EmbedBuilder()
-          .setColor('#ff0000')
-          .setTitle('❌ Not the Host')
-          .setDescription('Only the host can end the game!');
-        return message.reply({ embeds: [embed] });
-      }
+      clearLobbyExpiry(lobby.lobby_id);
 
       if (activeGames.has(lobby.lobby_id)) {
         const timers = activeGames.get(lobby.lobby_id);
@@ -458,33 +458,39 @@ module.exports = {
       if (lobby.spy_channel_id) {
         const spyChannel = message.guild.channels.cache.get(lobby.spy_channel_id);
         if (spyChannel) {
-          const closeEmbed = new EmbedBuilder()
-            .setColor('#ff6600')
-            .setTitle('🛑 Game Ended by Host')
-            .setDescription('The game has been manually ended by the host.\n\nThis channel will be deleted in 5 seconds...')
-            .setTimestamp();
+          // Reveal spies on force-end
+          const spyPlayers = spyDB.prepare('SELECT user_id FROM spy_players WHERE lobby_id = ? AND is_spy = 1').all(lobby.lobby_id);
+          const spyMentions = spyPlayers.length > 0
+            ? spyPlayers.map(p => `<@${p.user_id}>`).join(', ')
+            : 'Unknown';
 
-          await spyChannel.send({ embeds: [closeEmbed] }).catch(() => {});
-          await sleep(5000);
+          await spyChannel.send({ embeds: [new EmbedBuilder()
+            .setColor('#ff6600')
+            .setTitle('🛑 Game Force Ended')
+            .setDescription(
+              `The game was ended early by the host/admin.\n\n` +
+              `🕵️ **The ${spyPlayers.length > 1 ? 'spies were' : 'spy was'}:** ${spyMentions}\n\n` +
+              `This channel will be deleted in 10 seconds...`
+            )
+            .setTimestamp()] }).catch(() => {});
+
+          await sleep(10000);
           await spyChannel.delete().catch(() => {});
         }
       }
 
-      spyDB.prepare(`DELETE FROM spy_players WHERE lobby_id = ?`).run(lobby.lobby_id);
-      spyDB.prepare(`DELETE FROM spy_lobbies WHERE lobby_id = ?`).run(lobby.lobby_id);
+      spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobby.lobby_id);
+      spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobby.lobby_id);
 
-      const embed = new EmbedBuilder()
-        .setColor('#00ff00')
-        .setTitle('✅ Lobby Ended')
-        .setDescription('The spy game lobby has been closed and all data cleared.');
-
-      return message.reply({ embeds: [embed] });
+      return message.reply({ embeds: [new EmbedBuilder()
+        .setColor('#00ff00').setTitle('✅ Lobby Ended')
+        .setDescription('The spy game lobby has been closed and all data cleared.')] });
     }
 
     // ===============================
     // FALLBACK HELP
     // ===============================
-    const helpEmbed = new EmbedBuilder()
+    return message.reply({ embeds: [new EmbedBuilder()
       .setColor('#ec4899')
       .setTitle('🕵️ Spy Game Commands')
       .setDescription(
@@ -492,92 +498,60 @@ module.exports = {
         '• `spy lobby` - Create a new lobby\n' +
         '• `spy join` - Join existing lobby\n' +
         '• `spy leave` - Leave the lobby\n' +
-        '• `spy hint` - Toggle hint word for imposter (host only, before start)\n' +
-        '• `spy start` - Start game (host only, min 5 players)\n' +
-        '• `spy end` - End game and close lobby (host only)'
+        '• `spy hint off` - Disable hint for spy this game (host/admin only)\n' +
+        '• `spy hint on` - Re-enable hint (host/admin only)\n' +
+        '• `spy start` - Start game (host/admin only, min 5 players)\n' +
+        '• `spy end` - End game and close lobby (host/admin only)\n\n' +
+        '💡 Spy hints are **on by default** every game.'
       )
-      .setFooter({ text: 'Have fun finding the spy!' });
-
-    return message.reply({ embeds: [helpEmbed] });
+      .setFooter({ text: 'Have fun finding the spy!' })] });
   },
 };
 
 // ===============================
-// HINT GENERATOR
-// ===============================
-function generateHint(word) {
-  const len = word.length;
-  const firstLetter = word[0].toUpperCase();
-  // Vague hint: first letter + word length only, no category
-  return `Starts with **${firstLetter}** • **${len}** letters`;
-}
-
-// ===============================
-// WORD DETECTION - EXACT WORD MATCH ONLY
-// ===============================
-function containsExactWord(content, word) {
-  // Use word boundary regex so "ring" doesn't match inside "suffering"
-  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const regex = new RegExp(`(?<![a-zA-Z])${escaped}(?![a-zA-Z])`, 'i');
-  return regex.test(content);
-}
-
-// ===============================
-// GAME LOOP FUNCTION
+// GAME LOOP
 // ===============================
 async function runGameLoop(client, lobbyId, channel, players, secretWord) {
   const spyDB = client.spyDB;
   const timers = [];
   activeGames.set(lobbyId, timers);
 
-  // Message listener for exact word detection
   const messageCollector = channel.createMessageCollector();
 
   messageCollector.on('collect', async (msg) => {
     if (msg.author.bot) return;
+    if (!containsExactWord(msg.content, secretWord)) return;
 
-    if (containsExactWord(msg.content, secretWord)) {
-      messageCollector.stop();
-      timers.forEach(t => clearTimeout(t));
+    messageCollector.stop();
+    timers.forEach(t => clearTimeout(t));
 
-      const embed = new EmbedBuilder()
-        .setColor('#ff0000')
-        .setTitle('🚨 SECRET WORD SAID!')
-        .setDescription(
-          `**${msg.author}** said the secret word: \`${secretWord}\`\n\n` +
-          `**🕵️ SPIES WIN!**\n\n` +
-          `Channel closing in 10 seconds...`
-        )
-        .setTimestamp();
+    await channel.send({ embeds: [new EmbedBuilder()
+      .setColor('#ff0000')
+      .setTitle('🚨 SECRET WORD SAID!')
+      .setDescription(
+        `**${msg.author}** said the secret word: \`${secretWord}\`\n\n` +
+        `**🕵️ SPIES WIN!**\n\n` +
+        `Channel closing in 10 seconds...`
+      )
+      .setTimestamp()] });
 
-      await channel.send({ embeds: [embed] });
-
-      setTimeout(async () => {
-        await channel.delete().catch(() => {});
-        spyDB.prepare(`DELETE FROM spy_players WHERE lobby_id = ?`).run(lobbyId);
-        spyDB.prepare(`DELETE FROM spy_lobbies WHERE lobby_id = ?`).run(lobbyId);
-        activeGames.delete(lobbyId);
-      }, 10000);
-
-      return;
-    }
+    setTimeout(async () => {
+      await channel.delete().catch(() => {});
+      spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobbyId);
+      spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobbyId);
+      activeGames.delete(lobbyId);
+    }, 10000);
   });
 
-  let alivePlayers = spyDB.prepare(`
-    SELECT user_id, is_spy FROM spy_players WHERE lobby_id = ? AND alive = 1
-  `).all(lobbyId);
-
+  let alivePlayers = spyDB.prepare('SELECT user_id, is_spy FROM spy_players WHERE lobby_id = ? AND alive = 1').all(lobbyId);
   let currentRound = 1;
   const totalSpies = alivePlayers.filter(p => p.is_spy === 1).length;
 
-  // ---- CHANGED: 2 rounds instead of 3 ----
   while (currentRound <= 2 && alivePlayers.filter(p => p.is_spy === 1).length > 0) {
-    // Randomize speaking order each round
     const speakingOrder = [...alivePlayers].sort(() => Math.random() - 0.5);
-
     const orderList = speakingOrder.map((p, i) => `${i + 1}. <@${p.user_id}>`).join('\n');
 
-    const roundEmbed = new EmbedBuilder()
+    await channel.send({ embeds: [new EmbedBuilder()
       .setColor('#00aaff')
       .setTitle(`🎯 ROUND ${currentRound}/2`)
       .setDescription(
@@ -586,52 +560,35 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
         `🔒 Chat is locked except for the current player.\n\n` +
         `**Speaking order this round:**\n${orderList}`
       )
-      .setFooter({ text: 'Get ready!' });
+      .setFooter({ text: 'Get ready!' })] });
 
-    await channel.send({ embeds: [roundEmbed] });
     await sleep(5000);
 
-    // Turn-based speaking with randomized order
     for (const player of speakingOrder) {
-      const user = await client.users.fetch(player.user_id).catch(() => null);
-      if (!user) continue;
-
       // Lock everyone
       for (const p of alivePlayers) {
-        await channel.permissionOverwrites.edit(p.user_id, {
-          SendMessages: false,
-        });
+        await channel.permissionOverwrites.edit(p.user_id, { SendMessages: false });
       }
+      // Unlock current
+      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: true });
 
-      // Unlock current player
-      await channel.permissionOverwrites.edit(player.user_id, {
-        SendMessages: true,
-      });
-
-      const turnEmbed = new EmbedBuilder()
+      await channel.send({ embeds: [new EmbedBuilder()
         .setColor('#ffaa00')
         .setTitle('🎤 Your Turn!')
         .setDescription(`<@${player.user_id}>, you have **15 seconds** to describe!`)
-        .setFooter({ text: 'Say one thing about the word' });
-
-      await channel.send({ embeds: [turnEmbed] });
+        .setFooter({ text: 'Say one thing about the word' })] });
 
       await sleep(15000);
 
-      // Lock again
-      await channel.permissionOverwrites.edit(player.user_id, {
-        SendMessages: false,
-      });
+      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: false });
     }
 
-    // Discussion phase - 2 minutes
+    // Unlock all for discussion
     for (const player of alivePlayers) {
-      await channel.permissionOverwrites.edit(player.user_id, {
-        SendMessages: true,
-      });
+      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: true });
     }
 
-    const discussEmbed = new EmbedBuilder()
+    await channel.send({ embeds: [new EmbedBuilder()
       .setColor('#00ff00')
       .setTitle('💬 DISCUSSION TIME')
       .setDescription(
@@ -639,44 +596,38 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
         `🔓 Chat unlocked for **2 minutes**.\n` +
         `Discuss who you think the spy is!`
       )
-      .setFooter({ text: 'Discussion ends in 2 minutes' });
+      .setFooter({ text: 'Discussion ends in 2 minutes' })] });
 
-    await channel.send({ embeds: [discussEmbed] });
     await sleep(120000);
-
     currentRound++;
   }
 
-  // Lock chat for voting
+  // Lock for voting
   for (const player of alivePlayers) {
-    await channel.permissionOverwrites.edit(player.user_id, {
-      SendMessages: false,
-    });
+    await channel.permissionOverwrites.edit(player.user_id, { SendMessages: false });
   }
 
   await handleVoting(client, lobbyId, channel, alivePlayers, secretWord, totalSpies, messageCollector);
 }
 
 // ===============================
-// VOTING FUNCTION
+// VOTING
 // ===============================
 async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, totalSpies, messageCollector) {
   const spyDB = client.spyDB;
+  const numberEmojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
-  const voteEmbed = new EmbedBuilder()
+  const voteMsg = await channel.send({ embeds: [new EmbedBuilder()
     .setColor('#ff6600')
     .setTitle('🗳️ VOTING TIME')
     .setDescription(
       `**Vote for who you think is the spy!**\n\n` +
-      alivePlayers.map((p, i) => `${i + 1}️⃣ <@${p.user_id}>`).join('\n') +
+      alivePlayers.map((p, i) => `${numberEmojis[i]} <@${p.user_id}>`).join('\n') +
       `\n\nReact with the number of your suspect!\n` +
       `You have **30 seconds** to vote.`
     )
-    .setFooter({ text: 'Majority vote eliminates the suspect' });
+    .setFooter({ text: 'Majority vote eliminates the suspect' })] });
 
-  const voteMsg = await channel.send({ embeds: [voteEmbed] });
-
-  const numberEmojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
   for (let i = 0; i < Math.min(alivePlayers.length, 10); i++) {
     await voteMsg.react(numberEmojis[i]);
   }
@@ -685,7 +636,6 @@ async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, 
 
   const reactions = voteMsg.reactions.cache;
   const votes = new Map();
-
   reactions.forEach((reaction, emoji) => {
     const index = numberEmojis.indexOf(emoji);
     if (index !== -1 && index < alivePlayers.length) {
@@ -695,109 +645,75 @@ async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, 
 
   let maxVotes = 0;
   let eliminatedIndex = 0;
-
   votes.forEach((count, index) => {
-    if (count > maxVotes) {
-      maxVotes = count;
-      eliminatedIndex = index;
-    }
+    if (count > maxVotes) { maxVotes = count; eliminatedIndex = index; }
   });
 
   const eliminated = alivePlayers[eliminatedIndex];
   const isSpy = eliminated.is_spy === 1;
 
-  spyDB.prepare(`
-    UPDATE spy_players SET alive = 0 WHERE lobby_id = ? AND user_id = ?
-  `).run(lobbyId, eliminated.user_id);
+  spyDB.prepare('UPDATE spy_players SET alive = 0 WHERE lobby_id = ? AND user_id = ?').run(lobbyId, eliminated.user_id);
 
   const remainingSpies = alivePlayers.filter(p => p.is_spy === 1 && p.user_id !== eliminated.user_id).length;
 
-  let resultEmbed;
-
   if (isSpy && (totalSpies === 1 || remainingSpies === 0)) {
-    resultEmbed = new EmbedBuilder()
-      .setColor('#00ff00')
-      .setTitle('✅ PLAYERS WIN!')
+    await channel.send({ embeds: [new EmbedBuilder()
+      .setColor('#00ff00').setTitle('✅ PLAYERS WIN!')
       .setDescription(
         `<@${eliminated.user_id}> was **THE SPY!**\n\n` +
         `🎉 Congratulations to all regular players!\n\n` +
         `**The secret word was:** \`${secretWord}\``
-      )
-      .setTimestamp();
+      ).setTimestamp()] });
 
-    await channel.send({ embeds: [resultEmbed] });
+    await channel.send({ embeds: [new EmbedBuilder()
+      .setColor('#5865F2').setTitle('🎮 Game Over')
+      .setDescription('This channel will be deleted in **10 seconds**...')
+      .setFooter({ text: 'GG WP!' }).setTimestamp()] });
 
-    const endEmbed = new EmbedBuilder()
-      .setColor('#5865F2')
-      .setTitle('🎮 Game Successfully Ended')
-      .setDescription(`Thanks for playing Spy!\n\nThis channel will be deleted in 15 seconds...`)
-      .setFooter({ text: 'GG WP!' })
-      .setTimestamp();
-
-    await channel.send({ embeds: [endEmbed] });
     messageCollector.stop();
-
     setTimeout(async () => {
       await channel.delete().catch(() => {});
-      spyDB.prepare(`DELETE FROM spy_players WHERE lobby_id = ?`).run(lobbyId);
-      spyDB.prepare(`DELETE FROM spy_lobbies WHERE lobby_id = ?`).run(lobbyId);
+      spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobbyId);
+      spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobbyId);
       activeGames.delete(lobbyId);
-    }, 15000);
+    }, 10000);
 
   } else if (isSpy && totalSpies === 2 && remainingSpies === 1) {
-    resultEmbed = new EmbedBuilder()
-      .setColor('#ffaa00')
-      .setTitle('⚠️ SPY ELIMINATED')
+    await channel.send({ embeds: [new EmbedBuilder()
+      .setColor('#ffaa00').setTitle('⚠️ SPY ELIMINATED')
       .setDescription(
         `<@${eliminated.user_id}> was **A SPY!**\n\n` +
         `But there's still **1 spy remaining**...\n\n` +
         `Starting another 2 rounds in 5 seconds!`
-      )
-      .setTimestamp();
+      ).setTimestamp()] });
 
-    await channel.send({ embeds: [resultEmbed] });
     await sleep(5000);
 
-    const newAlivePlayers = spyDB.prepare(`
-      SELECT user_id, is_spy FROM spy_players WHERE lobby_id = ? AND alive = 1
-    `).all(lobbyId);
-
+    const newAlivePlayers = spyDB.prepare('SELECT user_id, is_spy FROM spy_players WHERE lobby_id = ? AND alive = 1').all(lobbyId);
     await runGameLoop(client, lobbyId, channel, newAlivePlayers, secretWord);
 
   } else {
     const spyList = alivePlayers.filter(p => p.is_spy === 1).map(p => `<@${p.user_id}>`).join(', ');
 
-    resultEmbed = new EmbedBuilder()
-      .setColor('#ff0000')
-      .setTitle('SPIES WIN!')
+    await channel.send({ embeds: [new EmbedBuilder()
+      .setColor('#ff0000').setTitle('🕵️ SPIES WIN!')
       .setDescription(
         `<@${eliminated.user_id}> was **NOT A SPY!**\n\n` +
         `The ${totalSpies === 1 ? 'spy was' : 'spies were'}: ${spyList}\n\n` +
         `**The secret word was:** \`${secretWord}\``
-      )
-      .setTimestamp();
+      ).setTimestamp()] });
 
-    await channel.send({ embeds: [resultEmbed] });
+    await channel.send({ embeds: [new EmbedBuilder()
+      .setColor('#5865F2').setTitle('🎮 Game Over')
+      .setDescription('This channel will be deleted in **10 seconds**...')
+      .setFooter({ text: 'GG WP!' }).setTimestamp()] });
 
-    const endEmbed = new EmbedBuilder()
-      .setColor('#5865F2')
-      .setTitle('Game Successfully Ended')
-      .setDescription(`Thanks for playing Spy!\n\nThis channel will be deleted in 15 seconds...`)
-      .setFooter({ text: 'GG WP!' })
-      .setTimestamp();
-
-    await channel.send({ embeds: [endEmbed] });
     messageCollector.stop();
-
     setTimeout(async () => {
       await channel.delete().catch(() => {});
-      spyDB.prepare(`DELETE FROM spy_players WHERE lobby_id = ?`).run(lobbyId);
-      spyDB.prepare(`DELETE FROM spy_lobbies WHERE lobby_id = ?`).run(lobbyId);
+      spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobbyId);
+      spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobbyId);
       activeGames.delete(lobbyId);
-    }, 15000);
+    }, 10000);
   }
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
