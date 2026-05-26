@@ -52,9 +52,17 @@ module.exports = {
     }
 
     const targetToken = args[0];
+
+    const isMention = /^<@!?\d{17,20}>$/.test(targetToken);
+    const isRawId = /^\d{17,20}$/.test(targetToken);
+
+    if (!isMention && !isRawId) {
+      return message.reply({ embeds: [buildUsage(prefix)] });
+    }
+
     let targetUser = message.mentions.users.first();
 
-    if (!targetUser && /^\d{17,20}$/.test(targetToken)) {
+    if (!targetUser && isRawId) {
       targetUser = await client.users.fetch(targetToken).catch(() => null);
     }
 
