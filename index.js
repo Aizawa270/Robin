@@ -9,6 +9,9 @@ const Database = require('better-sqlite3');
 const birthdayService = require('./handlers/birthdayService');
 const welcomeHandler = require('./handlers/welcomeHandler');
 
+// 🔥 AFK MODULE
+const afkModule = require('./commands/utility/afk');
+
 // ===== CLIENT =====
 const client = new Client({
   intents: [
@@ -275,6 +278,9 @@ client.once('ready', async () => {
   birthdayService(client);
   welcomeHandler(client);
 
+  // Restore AFK statuses from DB
+  afkModule.restoreAfk(client);
+
   // Hydrate blacklist cache
   try {
     const guilds = automodDB.prepare(`
@@ -330,6 +336,9 @@ client.once('ready', async () => {
 // ===== MESSAGE EVENT =====
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
+
+  // AFK system — must run before command handler so $afk command itself isn't blocked
+  await afkModule.handleMessage(client, message);
 
   await handleMessage(client, message);
 
