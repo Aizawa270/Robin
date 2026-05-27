@@ -1,28 +1,57 @@
 // utils/spyWords.js
-// Single "average" pool — common-medium nouns/words for the spy game.
 module.exports = {
   words: [
-    'apple','banana','car','train','bus','school','teacher','student','phone','computer',
-    'internet','house','home','kitchen','pillow','blanket','window','door','garden','flower',
-    'tree','forest','river','lake','beach','ocean','mountain','city','village','market',
-    'store','shop','restaurant','coffee','tea','bottle','glass','plate','fork','spoon',
-    'chair','table','bed','lamp','clock','watch','book','pen','pencil','paper',
-    'letter','envelope','bag','wallet','key','lock','camera','photo','movie','music',
-    'guitar','drum','piano','song','dance','stage','actor','actress','artist','painting',
-    'museum','library','theater','stadium','sport','ball','game','match','team','player',
-    'doctor','nurse','hospital','clinic','lawyer','court','judge','police','detective','prison',
-    'bank','money','coin','check','credit','card','ticket','passport','plane','airport',
-    'station','platform','hotel','room','bedroom','bathroom','kitchen','chef','cook','recipe',
-    'bread','rice','pasta','soup','salad','fruit','vegetable','meat','fish','cheese',
-    'butter','salt','sugar','pepper','chocolate','cake','cookie','icecream','dessert','snack',
-    'shirt','pants','dress','skirt','shoe','sock','hat','cap','jacket','coat',
-    'glasses','watch','ring','necklace','bracelet','mirror','makeup','shampoo','soap','towel',
-    'carpet','floor','ceiling','wall','roof','window','balcony','garden','park','path',
-    'bridge','road','street','lane','corner','traffic','light','sign','map','guide',
-    'island','desert','jungle','cave','tunnel','bridge','boat','ship','sail','ocean',
-    'sun','moon','star','planet','space','rocket','astronaut','meteor','cloud','rain',
-    'snow','storm','wind','fire','smoke','earth','soil','rock','stone','metal',
-    'glass','wood','paper','plastic','fabric','thread','needle','machine','engine','battery',
-    'computer','keyboard','mouse','screen','monitor','printer','router','server','network','data'
+    // Food & drink
+    'apple', 'banana', 'mango', 'avocado', 'pineapple', 'watermelon', 'strawberry', 'blueberry',
+    'bread', 'pasta', 'pizza', 'burger', 'sushi', 'taco', 'waffle', 'pancake',
+    'soup', 'salad', 'sandwich', 'noodles', 'dumpling', 'curry', 'steak', 'bacon',
+    'cheese', 'butter', 'chocolate', 'cookie', 'icecream', 'cake', 'popcorn', 'pretzel',
+    'coffee', 'tea', 'smoothie', 'lemonade', 'milkshake', 'juice',
+
+    // Household & objects
+    'pillow', 'blanket', 'mattress', 'curtain', 'carpet', 'lamp', 'candle', 'mirror',
+    'fridge', 'microwave', 'kettle', 'toaster', 'blender', 'vacuum', 'broom', 'bucket',
+    'scissors', 'stapler', 'envelope', 'drawer', 'cabinet', 'shelf', 'hanger', 'basket',
+    'umbrella', 'lighter', 'battery', 'charger', 'remote', 'headphones', 'speaker', 'camera',
+
+    // Places
+    'airport', 'station', 'harbour', 'lighthouse', 'cemetery', 'cathedral', 'mosque', 'temple',
+    'stadium', 'gymnasium', 'aquarium', 'warehouse', 'factory', 'rooftop', 'basement', 'attic',
+    'bakery', 'pharmacy', 'laundromat', 'barbershop', 'nightclub', 'casino', 'campsite', 'greenhouse',
+
+    // Nature & weather
+    'volcano', 'glacier', 'waterfall', 'canyon', 'swamp', 'meadow', 'coral', 'dune',
+    'avalanche', 'tornado', 'hurricane', 'blizzard', 'drought', 'fog', 'hail', 'lightning',
+    'tidal wave', 'earthquake', 'quicksand', 'lava', 'geyser', 'aurora',
+
+    // Animals
+    'penguin', 'flamingo', 'chameleon', 'platypus', 'narwhal', 'hamster', 'ferret', 'otter',
+    'panther', 'cheetah', 'hyena', 'gorilla', 'koala', 'porcupine', 'armadillo', 'iguana',
+    'piranha', 'seahorse', 'jellyfish', 'lobster', 'octopus', 'squid', 'stingray', 'barracuda',
+    'falcon', 'vulture', 'parrot', 'toucan', 'pelican', 'peacock', 'swan', 'crow',
+
+    // People & roles
+    'surgeon', 'architect', 'mechanic', 'librarian', 'lifeguard', 'referee', 'bouncer', 'bartender',
+    'astronaut', 'pilot', 'conductor', 'magician', 'comedian', 'journalist', 'hacker', 'sculptor',
+
+    // Tech & modern
+    'satellite', 'submarine', 'helicopter', 'drone', 'telescope', 'microscope', 'generator', 'compass',
+    'algorithm', 'database', 'browser', 'password', 'firewall', 'notification', 'shortcut', 'download',
+
+    // Sports & games
+    'marathon', 'tournament', 'penalty', 'knockout', 'scoreboard', 'trophy', 'referee', 'champion',
+    'archery', 'fencing', 'surfing', 'paragliding', 'wrestling', 'bobsled', 'lacrosse', 'polo',
+
+    // Clothing & accessories
+    'hoodie', 'trenchcoat', 'tuxedo', 'kimono', 'poncho', 'beret', 'beanie', 'gloves',
+    'sneakers', 'sandals', 'stilettos', 'loafers', 'bracelet', 'anklet', 'brooch', 'monocle',
+
+    // Abstract / concepts
+    'deadline', 'rumour', 'tradition', 'ceremony', 'superstition', 'conspiracy', 'alibi', 'blackout',
+    'rebellion', 'negotiation', 'quarantine', 'inheritance', 'rivalry', 'tribute', 'embargo', 'verdict',
+
+    // Misc fun
+    'trapdoor', 'booby trap', 'disguise', 'ransom', 'hostage', 'ambush', 'decoy', 'smuggler',
+    'treasure', 'shipwreck', 'pirate', 'bounty', 'expedition', 'artifact', 'prophecy', 'riddle',
   ]
 };
