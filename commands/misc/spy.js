@@ -1,4 +1,3 @@
-// commands/misc/spy.js
 const {
   EmbedBuilder,
   ChannelType
@@ -22,39 +21,43 @@ function isAuthorized(message) {
 }
 
 // ===============================
-// HINT WORD MAP
+// NERFED HINT SYSTEM
+// Hints are now vague — category/theme only, never close to the word itself
 // ===============================
-const hintMap = {
-  // Nature
-  sun: 'summer', moon: 'night', rain: 'umbrella', snow: 'winter',
-  fire: 'smoke', water: 'ocean', tree: 'forest', flower: 'garden',
-  cloud: 'sky', wind: 'breeze', ice: 'cold', storm: 'thunder',
-  // Food
-  cake: 'flour', bread: 'butter', milk: 'dairy', egg: 'breakfast',
-  apple: 'orchard', pizza: 'cheese', sugar: 'sweet', salt: 'pepper',
-  rice: 'bowl', fish: 'ocean', meat: 'grill', soup: 'spoon',
-  // Objects
-  ring: 'jewel', clock: 'time', door: 'key', book: 'library',
-  chair: 'sit', table: 'wood', phone: 'call', money: 'bank',
-  car: 'road', boat: 'sail', plane: 'flight', train: 'track',
-  ball: 'game', lamp: 'light', mirror: 'glass', sword: 'battle',
-  // Animals
-  dog: 'leash', cat: 'meow', bird: 'feather', fish: 'fins',
-  horse: 'stable', lion: 'mane', wolf: 'pack', bear: 'hibernate',
-  snake: 'scales', eagle: 'talon', shark: 'ocean', rabbit: 'burrow',
-  // People / places
-  king: 'crown', queen: 'throne', castle: 'moat', school: 'class',
-  city: 'streets', beach: 'sand', mountain: 'peak', island: 'ocean',
-  // Abstract
-  dream: 'sleep', love: 'heart', fear: 'dark', hope: 'wish',
-  luck: 'clover', power: 'force', truth: 'lie', shadow: 'dark',
-};
+const hintCategories = [
+  // [matcher fn, vague hint]
+  [w => ['apple','banana','mango','avocado','pineapple','watermelon','strawberry','blueberry','fruit'].includes(w), 'something edible'],
+  [w => ['bread','pasta','pizza','burger','sushi','taco','waffle','pancake','soup','salad','sandwich','noodles','dumpling','curry','steak','bacon'].includes(w), 'something edible'],
+  [w => ['cheese','butter','chocolate','cookie','icecream','cake','popcorn','pretzel'].includes(w), 'something edible'],
+  [w => ['coffee','tea','smoothie','lemonade','milkshake','juice'].includes(w), 'something drinkable'],
+  [w => ['pillow','blanket','mattress','curtain','carpet','lamp','candle','mirror','fridge','microwave','kettle','toaster','blender','vacuum','broom','bucket'].includes(w), 'found indoors'],
+  [w => ['scissors','stapler','envelope','drawer','cabinet','shelf','hanger','basket'].includes(w), 'an everyday object'],
+  [w => ['umbrella','lighter','battery','charger','remote','headphones','speaker','camera'].includes(w), 'a portable object'],
+  [w => ['airport','station','harbour','lighthouse','stadium','gymnasium','aquarium','warehouse','factory','rooftop','basement','attic'].includes(w), 'a location'],
+  [w => ['bakery','pharmacy','laundromat','barbershop','nightclub','casino','campsite','greenhouse'].includes(w), 'a place people go'],
+  [w => ['cemetery','cathedral','mosque','temple'].includes(w), 'a place with history'],
+  [w => ['volcano','glacier','waterfall','canyon','swamp','meadow','coral','dune','quicksand','lava','geyser','aurora'].includes(w), 'found in nature'],
+  [w => ['avalanche','tornado','hurricane','blizzard','drought','fog','hail','lightning','tidal wave','earthquake'].includes(w), 'a natural event'],
+  [w => ['penguin','flamingo','chameleon','platypus','narwhal','hamster','ferret','otter','panther','cheetah','hyena','gorilla','koala','porcupine','armadillo','iguana'].includes(w), 'a living creature'],
+  [w => ['piranha','seahorse','jellyfish','lobster','octopus','squid','stingray','barracuda'].includes(w), 'a living creature'],
+  [w => ['falcon','vulture','parrot','toucan','pelican','peacock','swan','crow'].includes(w), 'a living creature'],
+  [w => ['surgeon','architect','mechanic','librarian','lifeguard','referee','bouncer','bartender','astronaut','pilot','conductor','magician','comedian','journalist','hacker','sculptor'].includes(w), 'a type of person'],
+  [w => ['satellite','submarine','helicopter','drone','telescope','microscope','generator','compass'].includes(w), 'a piece of equipment'],
+  [w => ['algorithm','database','browser','password','firewall','notification','shortcut','download'].includes(w), 'related to technology'],
+  [w => ['marathon','tournament','penalty','knockout','scoreboard','trophy','champion','archery','fencing','surfing','paragliding','wrestling','bobsled','lacrosse','polo'].includes(w), 'related to competition'],
+  [w => ['hoodie','trenchcoat','tuxedo','kimono','poncho','beret','beanie','gloves','sneakers','sandals','stilettos','loafers'].includes(w), 'something worn'],
+  [w => ['bracelet','anklet','brooch','monocle'].includes(w), 'something worn'],
+  [w => ['deadline','rumour','tradition','ceremony','superstition','conspiracy','alibi','blackout','rebellion','negotiation','quarantine','inheritance','rivalry','tribute','embargo','verdict'].includes(w), 'an abstract concept'],
+  [w => ['trapdoor','booby trap','disguise','ransom','hostage','ambush','decoy','smuggler','treasure','shipwreck','pirate','bounty','expedition','artifact','prophecy','riddle'].includes(w), 'something mysterious'],
+];
 
 function getHint(word) {
   const lower = word.toLowerCase();
-  if (hintMap[lower]) return hintMap[lower];
-  // Fallback: first letter + length
-  return `${word[0].toUpperCase()}${'_'.repeat(word.length - 1)} (${word.length} letters)`;
+  for (const [matcher, hint] of hintCategories) {
+    if (matcher(lower)) return hint;
+  }
+  // Absolute fallback — just length, no letter
+  return `${word.length} letters long`;
 }
 
 // ===============================
@@ -75,11 +78,10 @@ function setLobbyExpiry(client, lobbyId, guildId, channelId) {
       const guild = client.guilds.cache.get(guildId);
       const ch = guild?.channels.cache.get(channelId);
       if (ch) {
-        const embed = new EmbedBuilder()
+        await ch.send({ embeds: [new EmbedBuilder()
           .setColor('#ff6600')
           .setTitle('⏰ Lobby Expired')
-          .setDescription('The spy lobby was automatically disbanded after 30 minutes of inactivity.');
-        await ch.send({ embeds: [embed] });
+          .setDescription('The spy lobby was automatically disbanded after 30 minutes of inactivity.')] });
       }
     } catch {}
   }, 30 * 60 * 1000);
@@ -95,7 +97,7 @@ function clearLobbyExpiry(lobbyId) {
 }
 
 // ===============================
-// WORD DETECTION - EXACT WORD MATCH ONLY
+// WORD DETECTION
 // ===============================
 function containsExactWord(content, word) {
   const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -105,6 +107,20 @@ function containsExactWord(content, word) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ===============================
+// CLEANUP HELPER
+// ===============================
+async function cleanupGame(client, lobbyId, channel) {
+  try {
+    await channel.delete().catch(() => {});
+  } catch {}
+  try {
+    client.spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobbyId);
+    client.spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobbyId);
+  } catch {}
+  activeGames.delete(lobbyId);
 }
 
 // ===============================
@@ -139,11 +155,10 @@ module.exports = {
       ).run(message.guild.id, message.author.id);
 
       const lobbyId = result.lastInsertRowid;
-
       spyDB.prepare('INSERT INTO spy_players (lobby_id, user_id) VALUES (?, ?)').run(lobbyId, message.author.id);
-
-      // Start 30-min expiry
       setLobbyExpiry(client, lobbyId, message.guild.id, message.channel.id);
+
+      const hintsOff = client.spyHintGlobal === false;
 
       const embed = new EmbedBuilder()
         .setColor('#ec4899')
@@ -151,17 +166,19 @@ module.exports = {
         .setDescription(
           `**Host:** ${message.author}\n` +
           `**Players:** 1/∞\n` +
-          `**Status:** Waiting for players\n\n` +
+          `**Status:** Waiting for players\n` +
+          `**Spy hint:** ${hintsOff ? 'Off (globally disabled)' : 'On'}\n\n` +
           `**Commands:**\n` +
           `• \`spy join\` - Join the lobby\n` +
           `• \`spy leave\` - Leave the lobby\n` +
           `• \`spy start\` - Start game (min 5 players)\n` +
-          `• \`spy hint off\` - Disable hint for spy (host only)\n\n` +
+          `• \`spy hint off\` - Disable hint globally (admin only)\n\n` +
           `**How it works:**\n` +
           `• 2 rounds of turn-based speaking\n` +
           `• Each player gets 15 seconds per turn\n` +
           `• Discussion time after each round (2 mins)\n` +
-          `• Vote to eliminate the spy!\n\n` +
+          `• Vote to eliminate the spy!\n` +
+          `• Wrong vote? One more bonus round before spies win.\n\n` +
           `⏰ Lobby auto-disbands in **30 minutes** if not started.`
         )
         .setFooter({ text: `Lobby ID: ${lobbyId} • Need 4 more players` });
@@ -170,44 +187,34 @@ module.exports = {
     }
 
     // ===============================
-    // HINT TOGGLE
+    // HINT TOGGLE — GLOBAL
     // ===============================
     if (sub === 'hint') {
-      const lobby = spyDB.prepare('SELECT * FROM spy_lobbies WHERE guild_id = ?').get(message.guild.id);
-      if (!lobby) {
-        return message.reply({ embeds: [new EmbedBuilder()
-          .setColor('#ff0000').setTitle('❌ No Lobby Found')
-          .setDescription('Create a lobby with `spy lobby` first.')] });
-      }
-
-      if (lobby.host_id !== message.author.id && !isAuthorized(message)) {
+      if (!isAuthorized(message)) {
         return message.reply({ embeds: [new EmbedBuilder()
           .setColor('#ff0000').setTitle('❌ No Permission')
-          .setDescription('Only the host or admins can toggle hints!')] });
+          .setDescription('Only admins can toggle hints globally!')] });
       }
-
-      if (lobby.status !== 'lobby') {
-        return message.reply({ embeds: [new EmbedBuilder()
-          .setColor('#ff0000').setTitle('❌ Game Already Started')
-          .setDescription('Hints can only be toggled before the game starts.')] });
-      }
-
-      if (!client.spyHintDisabled) client.spyHintDisabled = new Set();
 
       const action = args[1]?.toLowerCase();
 
       if (action === 'off') {
-        client.spyHintDisabled.add(lobby.lobby_id);
+        client.spyHintGlobal = false;
         return message.reply({ embeds: [new EmbedBuilder()
-          .setColor('#ffaa00').setTitle('❌ Hints Disabled')
-          .setDescription('The spy will **not** receive a hint word this game.')
-          .setFooter({ text: 'Hints are on by default for new games.' })] });
-      } else {
-        client.spyHintDisabled.delete(lobby.lobby_id);
+          .setColor('#ffaa00').setTitle('❌ Hints Disabled Globally')
+          .setDescription('The spy will **not** receive a hint in **any** game until re-enabled.\n\nUse `spy hint on` to re-enable.')
+          .setFooter({ text: 'This setting persists until changed.' })] });
+      } else if (action === 'on') {
+        client.spyHintGlobal = true;
         return message.reply({ embeds: [new EmbedBuilder()
-          .setColor('#00ff00').setTitle('✅ Hints Enabled')
-          .setDescription('The spy will receive a related hint word in their DM.')
+          .setColor('#00ff00').setTitle('✅ Hints Enabled Globally')
+          .setDescription('The spy will receive a vague hint word in **all** games.')
           .setFooter({ text: 'This is the default setting.' })] });
+      } else {
+        const current = client.spyHintGlobal === false ? 'Off' : 'On';
+        return message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#5865F2').setTitle('💡 Hint Setting')
+          .setDescription(`Current global hint setting: **${current}**\n\nUse \`spy hint off\` or \`spy hint on\`.'`)] });
       }
     }
 
@@ -235,7 +242,6 @@ module.exports = {
       }
 
       spyDB.prepare('INSERT INTO spy_players (lobby_id, user_id) VALUES (?, ?)').run(lobby.lobby_id, message.author.id);
-
       const playerCount = spyDB.prepare('SELECT COUNT(*) as count FROM spy_players WHERE lobby_id = ?').get(lobby.lobby_id).count;
       const needed = Math.max(0, 5 - playerCount);
 
@@ -317,29 +323,35 @@ module.exports = {
           )] });
       }
 
-      // Cancel expiry timer — game is starting
       clearLobbyExpiry(lobby.lobby_id);
-
       spyDB.prepare("UPDATE spy_lobbies SET status = 'starting' WHERE lobby_id = ?").run(lobby.lobby_id);
 
-      // Acknowledge then move on — no await on this reply so it doesn't block
-      message.reply({ embeds: [new EmbedBuilder()
-        .setColor('#ffaa00').setTitle('🎮 Starting Game...')
-        .setDescription('Creating private channel and sending DMs...')] }).catch(() => {});
+      // Reply first, then proceed — prevents "something went wrong" on interaction timeout
+      try {
+        await message.reply({ embeds: [new EmbedBuilder()
+          .setColor('#ffaa00').setTitle('🎮 Starting Game...')
+          .setDescription('Creating private channel and sending DMs...')] });
+      } catch {}
 
       // Create spy channel
-      const channel = await message.guild.channels.create({
-        name: '🕵️-spy-game',
-        type: ChannelType.GuildText,
-        permissionOverwrites: [
-          { id: message.guild.roles.everyone.id, deny: ['ViewChannel'] },
-          ...players.map(p => ({
-            id: p.user_id,
-            allow: ['ViewChannel', 'ReadMessageHistory'],
-            deny: ['SendMessages'],
-          })),
-        ],
-      });
+      let channel;
+      try {
+        channel = await message.guild.channels.create({
+          name: '🕵️-spy-game',
+          type: ChannelType.GuildText,
+          permissionOverwrites: [
+            { id: message.guild.roles.everyone.id, deny: ['ViewChannel'] },
+            ...players.map(p => ({
+              id: p.user_id,
+              allow: ['ViewChannel', 'ReadMessageHistory'],
+              deny: ['SendMessages'],
+            })),
+          ],
+        });
+      } catch (err) {
+        console.error('[Spy] Failed to create channel:', err);
+        return;
+      }
 
       spyDB.prepare('UPDATE spy_lobbies SET channel_id = ?, spy_channel_id = ?, status = ? WHERE lobby_id = ?')
         .run(channel.id, channel.id, 'playing', lobby.lobby_id);
@@ -355,8 +367,7 @@ module.exports = {
         spyDB.prepare('UPDATE spy_players SET is_spy = 1 WHERE lobby_id = ? AND user_id = ?').run(lobby.lobby_id, spy.user_id);
       }
 
-      // Hints ON by default; only off if host explicitly disabled
-      const hintsOff = client.spyHintDisabled?.has(lobby.lobby_id) || false;
+      const hintsOff = client.spyHintGlobal === false;
       const spyHint = hintsOff ? null : getHint(secretWord);
 
       // Send DMs
@@ -378,7 +389,7 @@ module.exports = {
                   `👂 Listen carefully to others\n` +
                   `🎭 Try to blend in and guess the word\n` +
                   `⚠️ Don't get caught!\n\n` +
-                  (spyHint ? `💡 **Hint word:** \`${spyHint}\`\n\n` : `*(No hint this game)*\n\n`) +
+                  (spyHint ? `💡 **Hint:** \`${spyHint}\`\n\n` : '') +
                   `💡 **Tip:** During voting, you can guess the word to win instantly!`
                 : `**Your secret word is:**\n# ${secretWord.toUpperCase()}\n\n` +
                   `🕵️ There ${spyCount === 1 ? 'is **1 spy**' : 'are **2 spies**'} among you\n` +
@@ -409,25 +420,28 @@ module.exports = {
             `**Players:** ${players.length}\n` +
             `**Spies:** ${spyCount}\n` +
             `**DMs Sent:** ${dmSuccess}/${players.length}\n` +
-            `**Spy hint:** ${hintsOff ? 'Off' : 'On'}\n\n` +
+            `**Spy hint:** ${hintsOff ? 'Off' : 'On (vague)'}\n\n` +
             `${dmFailed.length > 0 ? `⚠️ **Failed DMs:** ${dmFailed.map(id => `<@${id}>`).join(', ')}\nMake sure DMs are enabled!\n\n` : ''}` +
             `**📋 Game Rules:**\n` +
             `• Check your DMs for your role\n` +
             `• 2 rounds of turn-based speaking (randomized order)\n` +
             `• Each player gets 15 seconds per turn\n` +
             `• 2 minutes discussion after each round\n` +
-            `• Vote to eliminate suspects\n\n` +
+            `• Vote to eliminate suspects\n` +
+            `• Wrong vote? One bonus round, then vote again — spies win if wrong again!\n\n` +
             `🚨 **If anyone says the secret word exactly, spies win instantly!**`
           )
           .setFooter({ text: 'Game starting in 5 seconds...' })
           .setTimestamp()],
       });
 
-      // Clean up hint flag (resets for next game)
-      client.spyHintDisabled?.delete(lobby.lobby_id);
-
       await sleep(5000);
-      await runGameLoop(client, lobby.lobby_id, channel, players, secretWord);
+
+      // Wrap game loop so any crash doesn't bubble up as interaction error
+      runGameLoop(client, lobby.lobby_id, channel, players, secretWord, false).catch(err => {
+        console.error('[Spy] Game loop error:', err);
+      });
+
       return;
     }
 
@@ -458,7 +472,6 @@ module.exports = {
       if (lobby.spy_channel_id) {
         const spyChannel = message.guild.channels.cache.get(lobby.spy_channel_id);
         if (spyChannel) {
-          // Reveal spies on force-end
           const spyPlayers = spyDB.prepare('SELECT user_id FROM spy_players WHERE lobby_id = ? AND is_spy = 1').all(lobby.lobby_id);
           const spyMentions = spyPlayers.length > 0
             ? spyPlayers.map(p => `<@${p.user_id}>`).join(', ')
@@ -498,11 +511,11 @@ module.exports = {
         '• `spy lobby` - Create a new lobby\n' +
         '• `spy join` - Join existing lobby\n' +
         '• `spy leave` - Leave the lobby\n' +
-        '• `spy hint off` - Disable hint for spy this game (host/admin only)\n' +
-        '• `spy hint on` - Re-enable hint (host/admin only)\n' +
+        '• `spy hint off` - Disable spy hint globally (admin only)\n' +
+        '• `spy hint on` - Re-enable spy hint globally (admin only)\n' +
         '• `spy start` - Start game (host/admin only, min 5 players)\n' +
         '• `spy end` - End game and close lobby (host/admin only)\n\n' +
-        '💡 Spy hints are **on by default** every game.'
+        '💡 Spy hints are **on by default** — vague category hints only.'
       )
       .setFooter({ text: 'Have fun finding the spy!' })] });
   },
@@ -510,12 +523,14 @@ module.exports = {
 
 // ===============================
 // GAME LOOP
+// isFinalChance: true = this is the bonus round after a wrong vote; one more wrong vote = spies win
 // ===============================
-async function runGameLoop(client, lobbyId, channel, players, secretWord) {
+async function runGameLoop(client, lobbyId, channel, players, secretWord, isFinalChance) {
   const spyDB = client.spyDB;
   const timers = [];
   activeGames.set(lobbyId, timers);
 
+  // Set up secret word detection collector
   const messageCollector = channel.createMessageCollector();
 
   messageCollector.on('collect', async (msg) => {
@@ -536,41 +551,44 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
       .setTimestamp()] });
 
     setTimeout(async () => {
-      await channel.delete().catch(() => {});
-      spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobbyId);
-      spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobbyId);
-      activeGames.delete(lobbyId);
+      await cleanupGame(client, lobbyId, channel);
     }, 10000);
   });
 
   let alivePlayers = spyDB.prepare('SELECT user_id, is_spy FROM spy_players WHERE lobby_id = ? AND alive = 1').all(lobbyId);
-  let currentRound = 1;
   const totalSpies = alivePlayers.filter(p => p.is_spy === 1).length;
 
-  while (currentRound <= 2 && alivePlayers.filter(p => p.is_spy === 1).length > 0) {
+  // Run 2 rounds (or just 1 if this is the bonus round)
+  const roundsToRun = isFinalChance ? 1 : 2;
+
+  for (let currentRound = 1; currentRound <= roundsToRun; currentRound++) {
+    const roundLabel = isFinalChance ? 'BONUS ROUND' : `ROUND ${currentRound}/2`;
     const speakingOrder = [...alivePlayers].sort(() => Math.random() - 0.5);
     const orderList = speakingOrder.map((p, i) => `${i + 1}. <@${p.user_id}>`).join('\n');
 
     await channel.send({ embeds: [new EmbedBuilder()
-      .setColor('#00aaff')
-      .setTitle(`🎯 ROUND ${currentRound}/2`)
+      .setColor(isFinalChance ? '#ff6600' : '#00aaff')
+      .setTitle(`🎯 ${roundLabel}`)
       .setDescription(
-        `**Turn-based speaking begins!**\n\n` +
-        `Each player gets **15 seconds** to describe the word.\n` +
-        `🔒 Chat is locked except for the current player.\n\n` +
-        `**Speaking order this round:**\n${orderList}`
+        isFinalChance
+          ? `**Last chance!** Players voted out a non-spy last round.\n\n` +
+            `Find the real spy this time — one more wrong vote and spies win!\n\n` +
+            `Each player gets **15 seconds** to speak.\n\n` +
+            `**Speaking order:**\n${orderList}`
+          : `**Turn-based speaking begins!**\n\n` +
+            `Each player gets **15 seconds** to describe the word.\n` +
+            `🔒 Chat is locked except for the current player.\n\n` +
+            `**Speaking order this round:**\n${orderList}`
       )
       .setFooter({ text: 'Get ready!' })] });
 
     await sleep(5000);
 
     for (const player of speakingOrder) {
-      // Lock everyone
       for (const p of alivePlayers) {
-        await channel.permissionOverwrites.edit(p.user_id, { SendMessages: false });
+        await channel.permissionOverwrites.edit(p.user_id, { SendMessages: false }).catch(() => {});
       }
-      // Unlock current
-      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: true });
+      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: true }).catch(() => {});
 
       await channel.send({ embeds: [new EmbedBuilder()
         .setColor('#ffaa00')
@@ -580,40 +598,39 @@ async function runGameLoop(client, lobbyId, channel, players, secretWord) {
 
       await sleep(15000);
 
-      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: false });
+      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: false }).catch(() => {});
     }
 
     // Unlock all for discussion
     for (const player of alivePlayers) {
-      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: true });
+      await channel.permissionOverwrites.edit(player.user_id, { SendMessages: true }).catch(() => {});
     }
 
     await channel.send({ embeds: [new EmbedBuilder()
       .setColor('#00ff00')
       .setTitle('💬 DISCUSSION TIME')
       .setDescription(
-        `Round ${currentRound} complete!\n\n` +
+        `${roundLabel} complete!\n\n` +
         `🔓 Chat unlocked for **2 minutes**.\n` +
         `Discuss who you think the spy is!`
       )
       .setFooter({ text: 'Discussion ends in 2 minutes' })] });
 
     await sleep(120000);
-    currentRound++;
   }
 
   // Lock for voting
   for (const player of alivePlayers) {
-    await channel.permissionOverwrites.edit(player.user_id, { SendMessages: false });
+    await channel.permissionOverwrites.edit(player.user_id, { SendMessages: false }).catch(() => {});
   }
 
-  await handleVoting(client, lobbyId, channel, alivePlayers, secretWord, totalSpies, messageCollector);
+  await handleVoting(client, lobbyId, channel, alivePlayers, secretWord, totalSpies, messageCollector, isFinalChance);
 }
 
 // ===============================
 // VOTING
 // ===============================
-async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, totalSpies, messageCollector) {
+async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, totalSpies, messageCollector, isFinalChance) {
   const spyDB = client.spyDB;
   const numberEmojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
@@ -624,7 +641,8 @@ async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, 
       `**Vote for who you think is the spy!**\n\n` +
       alivePlayers.map((p, i) => `${numberEmojis[i]} <@${p.user_id}>`).join('\n') +
       `\n\nReact with the number of your suspect!\n` +
-      `You have **30 seconds** to vote.`
+      `You have **30 seconds** to vote.\n\n` +
+      (isFinalChance ? `⚠️ **This is the final vote. Wrong answer = spies win!**` : '')
     )
     .setFooter({ text: 'Majority vote eliminates the suspect' })] });
 
@@ -656,7 +674,10 @@ async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, 
 
   const remainingSpies = alivePlayers.filter(p => p.is_spy === 1 && p.user_id !== eliminated.user_id).length;
 
+  // ── SPY(S) CAUGHT ──
   if (isSpy && (totalSpies === 1 || remainingSpies === 0)) {
+    messageCollector.stop();
+
     await channel.send({ embeds: [new EmbedBuilder()
       .setColor('#00ff00').setTitle('✅ PLAYERS WIN!')
       .setDescription(
@@ -670,15 +691,12 @@ async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, 
       .setDescription('This channel will be deleted in **10 seconds**...')
       .setFooter({ text: 'GG WP!' }).setTimestamp()] });
 
-    messageCollector.stop();
-    setTimeout(async () => {
-      await channel.delete().catch(() => {});
-      spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobbyId);
-      spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobbyId);
-      activeGames.delete(lobbyId);
-    }, 10000);
+    setTimeout(() => cleanupGame(client, lobbyId, channel), 10000);
+    return;
+  }
 
-  } else if (isSpy && totalSpies === 2 && remainingSpies === 1) {
+  // ── ONE OF TWO SPIES CAUGHT ──
+  if (isSpy && totalSpies === 2 && remainingSpies === 1) {
     await channel.send({ embeds: [new EmbedBuilder()
       .setColor('#ffaa00').setTitle('⚠️ SPY ELIMINATED')
       .setDescription(
@@ -687,33 +705,54 @@ async function handleVoting(client, lobbyId, channel, alivePlayers, secretWord, 
         `Starting another 2 rounds in 5 seconds!`
       ).setTimestamp()] });
 
+    messageCollector.stop();
     await sleep(5000);
 
     const newAlivePlayers = spyDB.prepare('SELECT user_id, is_spy FROM spy_players WHERE lobby_id = ? AND alive = 1').all(lobbyId);
-    await runGameLoop(client, lobbyId, channel, newAlivePlayers, secretWord);
+    await runGameLoop(client, lobbyId, channel, newAlivePlayers, secretWord, false);
+    return;
+  }
 
-  } else {
-    const spyList = alivePlayers.filter(p => p.is_spy === 1).map(p => `<@${p.user_id}>`).join(', ');
+  // ── NON-SPY VOTED OUT ──
+  if (!isSpy) {
+    if (isFinalChance) {
+      // Already had their bonus round — spies win now
+      messageCollector.stop();
 
-    await channel.send({ embeds: [new EmbedBuilder()
-      .setColor('#ff0000').setTitle('🕵️ SPIES WIN!')
-      .setDescription(
-        `<@${eliminated.user_id}> was **NOT A SPY!**\n\n` +
-        `The ${totalSpies === 1 ? 'spy was' : 'spies were'}: ${spyList}\n\n` +
-        `**The secret word was:** \`${secretWord}\``
-      ).setTimestamp()] });
+      const spyList = alivePlayers.filter(p => p.is_spy === 1 && p.user_id !== eliminated.user_id).map(p => `<@${p.user_id}>`).join(', ');
 
-    await channel.send({ embeds: [new EmbedBuilder()
-      .setColor('#5865F2').setTitle('🎮 Game Over')
-      .setDescription('This channel will be deleted in **10 seconds**...')
-      .setFooter({ text: 'GG WP!' }).setTimestamp()] });
+      await channel.send({ embeds: [new EmbedBuilder()
+        .setColor('#ff0000').setTitle('🕵️ SPIES WIN!')
+        .setDescription(
+          `<@${eliminated.user_id}> was **NOT A SPY!** Again...\n\n` +
+          `The ${totalSpies === 1 ? 'spy was' : 'spies were'}: ${spyList}\n\n` +
+          `**The secret word was:** \`${secretWord}\``
+        ).setTimestamp()] });
 
-    messageCollector.stop();
-    setTimeout(async () => {
-      await channel.delete().catch(() => {});
-      spyDB.prepare('DELETE FROM spy_players WHERE lobby_id = ?').run(lobbyId);
-      spyDB.prepare('DELETE FROM spy_lobbies WHERE lobby_id = ?').run(lobbyId);
-      activeGames.delete(lobbyId);
-    }, 10000);
+      await channel.send({ embeds: [new EmbedBuilder()
+        .setColor('#5865F2').setTitle('🎮 Game Over')
+        .setDescription('This channel will be deleted in **10 seconds**...')
+        .setFooter({ text: 'GG WP!' }).setTimestamp()] });
+
+      setTimeout(() => cleanupGame(client, lobbyId, channel), 10000);
+
+    } else {
+      // First wrong vote — give a bonus round
+      await channel.send({ embeds: [new EmbedBuilder()
+        .setColor('#ff6600').setTitle('❌ WRONG VOTE!')
+        .setDescription(
+          `<@${eliminated.user_id}> was **NOT a spy!**\n\n` +
+          `The spy is still among you...\n\n` +
+          `🔄 **One bonus round** before the final vote!\n` +
+          `⚠️ If you vote wrong again, the spies win!\n\n` +
+          `Starting bonus round in 5 seconds...`
+        ).setTimestamp()] });
+
+      messageCollector.stop();
+      await sleep(5000);
+
+      const newAlivePlayers = spyDB.prepare('SELECT user_id, is_spy FROM spy_players WHERE lobby_id = ? AND alive = 1').all(lobbyId);
+      await runGameLoop(client, lobbyId, channel, newAlivePlayers, secretWord, true);
+    }
   }
 }
