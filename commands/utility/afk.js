@@ -14,7 +14,6 @@ db.prepare(`
   )
 `).run();
 
-// Track how many messages each user has sent since going AFK (in-memory is fine)
 const returnBuffer = new Map(); // userId -> count
 
 module.exports = {
@@ -26,18 +25,16 @@ module.exports = {
   async execute(client, message, args) {
     const reason = args.join(' ') || 'No reason provided';
 
-    // Save to DB
     db.prepare(`
       INSERT OR REPLACE INTO afk (user_id, reason, since)
       VALUES (?, ?, ?)
     `).run(message.author.id, reason, Date.now());
 
-    // Also keep in memory for fast lookups
     if (!client.afk) client.afk = new Map();
     client.afk.set(message.author.id, { reason, since: Date.now() });
 
     const embed = new EmbedBuilder()
-      .setColor(colors.afk || '#1e3a5f')
+      .setColor(colors.afk || '#ec4899')
       .setTitle('AFK Status')
       .setDescription(`🌙 | You are now AFK. Reason: ${reason}`)
       .setThumbnail(message.author.displayAvatarURL({ size: 256 }));
@@ -45,11 +42,6 @@ module.exports = {
     await message.reply({ embeds: [embed] });
   },
 
-  /**
-   * Restore AFKs from DB into client.afk on bot startup.
-   * Call this in your index.js/ready event:
-   *   require('./commands/utility/afk').restoreAfk(client);
-   */
   restoreAfk(client) {
     if (!client.afk) client.afk = new Map();
     const rows = db.prepare('SELECT * FROM afk').all();
@@ -59,10 +51,6 @@ module.exports = {
     console.log(`[AFK] Restored ${rows.length} AFK entries from DB.`);
   },
 
-  /**
-   * Handle AFK logic on every message.
-   * Call this in your messageCreate event handler.
-   */
   handleMessage: async (client, message) => {
     if (message.author.bot || !client.afk) return;
 
@@ -72,10 +60,7 @@ module.exports = {
 
       if (count < 3) {
         returnBuffer.set(message.author.id, count);
-        // Optional: let them know how many messages left
-        // await message.channel.send(`You have ${3 - count} message(s) left before your AFK is cleared.`);
       } else {
-        // Clear AFK
         client.afk.delete(message.author.id);
         returnBuffer.delete(message.author.id);
         db.prepare('DELETE FROM afk WHERE user_id = ?').run(message.author.id);
@@ -88,7 +73,7 @@ module.exports = {
           ]
         });
       }
-      return; // Don't ping-check messages from the AFK user themselves
+      return;
     }
 
     // --- Notify when a pinged user is AFK ---
@@ -111,12 +96,14 @@ module.exports = {
       timeStr += `${seconds}s`;
 
       const embed = new EmbedBuilder()
-        .setColor(colors.afk || '#1e3a5f')
+        .setColor(colors.afk || '#ec4899')   // same pink as set-AFK embed
         .setTitle('AFK Status')
         .setDescription(`🌙 | **${user.username}** is AFK. Reason: ${afkData.reason}`)
         .setThumbnail(user.displayAvatarURL({ size: 256 }))
         .setFooter({ text: `AFK for ${timeStr}` });
 
+      // suppress the original message, send our embed instead
+      await message.suppressEmbeds(true).catch(() => {});
       await message.channel.send({ embeds: [embed] });
     }
   },
