@@ -1,8 +1,10 @@
 // commands/utility/afk.js
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
-const { colors } = require('../../config');
+
+const AFK_COLOR = '#ec4899';
+const SUCCESS_COLOR = '#22c55e';
 
 // SQLite setup
 const db = new Database(path.join(__dirname, '../../data/afk.db'));
@@ -14,7 +16,7 @@ db.prepare(`
   )
 `).run();
 
-const returnBuffer = new Map(); // userId -> count
+const returnBuffer = new Map();
 
 module.exports = {
   name: 'afk',
@@ -25,16 +27,14 @@ module.exports = {
   async execute(client, message, args) {
     const reason = args.join(' ') || 'No reason provided';
 
-    db.prepare(`
-      INSERT OR REPLACE INTO afk (user_id, reason, since)
-      VALUES (?, ?, ?)
-    `).run(message.author.id, reason, Date.now());
+    db.prepare(`INSERT OR REPLACE INTO afk (user_id, reason, since) VALUES (?, ?, ?)`)
+      .run(message.author.id, reason, Date.now());
 
     if (!client.afk) client.afk = new Map();
     client.afk.set(message.author.id, { reason, since: Date.now() });
 
     const embed = new EmbedBuilder()
-      .setColor(colors.afk || '#ec4899')
+      .setColor(AFK_COLOR)
       .setTitle('AFK Status')
       .setDescription(`🌙 | You are now AFK. Reason: ${reason}`)
       .setThumbnail(message.author.displayAvatarURL({ size: 256 }));
@@ -68,7 +68,7 @@ module.exports = {
         await message.reply({
           embeds: [
             new EmbedBuilder()
-              .setColor(colors.success || '#22c55e')
+              .setColor(SUCCESS_COLOR)
               .setDescription(`✅ Welcome back! Your AFK status has been removed.`)
           ]
         });
@@ -96,14 +96,12 @@ module.exports = {
       timeStr += `${seconds}s`;
 
       const embed = new EmbedBuilder()
-        .setColor(colors.afk || '#ec4899')   // same pink as set-AFK embed
+        .setColor(AFK_COLOR)
         .setTitle('AFK Status')
         .setDescription(`🌙 | **${user.username}** is AFK. Reason: ${afkData.reason}`)
         .setThumbnail(user.displayAvatarURL({ size: 256 }))
         .setFooter({ text: `AFK for ${timeStr}` });
 
-      // suppress the original message, send our embed instead
-      await message.suppressEmbeds(true).catch(() => {});
       await message.channel.send({ embeds: [embed] });
     }
   },
