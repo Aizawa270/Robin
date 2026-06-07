@@ -3,9 +3,6 @@ const fs = require('fs');
 const path = require('path');
 const { Collection, EmbedBuilder } = require('discord.js');
 
-/* =========================
-   STRIP REPLY TARGET
-========================= */
 function stripReplyMentions(message) {
   if (!message.reference) return;
   const repliedUserId = message.mentions?.repliedUser?.id;
@@ -14,9 +11,6 @@ function stripReplyMentions(message) {
   message.mentions.members?.delete(repliedUserId);
 }
 
-/* =========================
-   LOAD COMMANDS
-========================= */
 function loadCommands(client) {
   client.commands = new Collection();
   client.aliases = new Collection();
@@ -67,16 +61,10 @@ function registerCommand(client, command) {
   }
 }
 
-/* =========================
-   PREFIX HELPER
-========================= */
 function getCurrentPrefix(client, guildId) {
   return client.getPrefix(guildId) || '!';
 }
 
-/* =========================
-   BLACKLIST GATE
-========================= */
 async function checkBotBlacklist(client, message) {
   if (!client.botBlacklist?.has(message.author.id)) return false;
 
@@ -90,9 +78,6 @@ async function checkBotBlacklist(client, message) {
   return true;
 }
 
-/* =========================
-   MAIN HANDLER
-========================= */
 async function handleMessage(client, message) {
   if (message.author.bot) return;
 
@@ -101,29 +86,7 @@ async function handleMessage(client, message) {
   const content = message.content?.trim();
   if (!content) return;
 
-  /* ===== AFK REMOVAL ===== */
-  if (client.afk?.has(message.author.id)) {
-    client.afk.delete(message.author.id);
-    try {
-      await message.reply(
-        `Welcome back, <@${message.author.id}>. I removed your AFK status.`
-      );
-    } catch {}
-  }
-
-  /* ===== AFK MENTION CHECK ===== */
-  if (message.mentions.users.size && client.afk) {
-    for (const [, user] of message.mentions.users) {
-      const data = client.afk.get(user.id);
-      if (data) {
-        try {
-          await message.reply(
-            `<@${user.id}> is AFK: **${data.reason}** (since <t:${Math.floor(data.since / 1000)}:R>)`
-          );
-        } catch {}
-      }
-    }
-  }
+  // NOTE: AFK logic is handled entirely in afk.js handleMessage — do NOT add it here
 
   const prefix = getCurrentPrefix(client, message.guild?.id);
   const isPrefixed = content.startsWith(prefix);
@@ -135,7 +98,6 @@ async function handleMessage(client, message) {
     const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!cmd) return;
 
-    // Blacklist check — only fires when a real command is matched
     if (await checkBotBlacklist(client, message)) return;
 
     message.prefix = prefix;
@@ -163,7 +125,6 @@ async function handleMessage(client, message) {
   const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
   if (!cmd) return;
 
-  // Blacklist check — only fires when a real command is matched
   if (await checkBotBlacklist(client, message)) return;
 
   message.prefix = prefix;
