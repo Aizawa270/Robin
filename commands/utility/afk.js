@@ -1,12 +1,11 @@
 // commands/utility/afk.js
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { EmbedBuilder } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
 
 const AFK_COLOR = '#ec4899';
 const SUCCESS_COLOR = '#22c55e';
 
-// SQLite setup
 const db = new Database(path.join(__dirname, '../../data/afk.db'));
 db.prepare(`
   CREATE TABLE IF NOT EXISTS afk (
@@ -73,13 +72,20 @@ module.exports = {
           ]
         });
       }
-      return;
+      return; // always return early — AFK user's own messages never trigger ping checks
     }
 
     // --- Notify when a pinged user is AFK ---
     if (!message.mentions.users.size) return;
 
+    // Skip the user being replied to — replying to someone doesn't count as pinging them for AFK
+    const repliedUserId = message.mentions?.repliedUser?.id;
+
     for (const [id, user] of message.mentions.users) {
+      if (id === message.author.id) continue;       // ignore self-mentions
+      if (id === repliedUserId) continue;            // ignore reply targets
+      if (id === client.user.id) continue;           // ignore bot mentions
+
       const afkData = client.afk.get(id);
       if (!afkData) continue;
 
