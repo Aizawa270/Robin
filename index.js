@@ -270,7 +270,7 @@ client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
   client.user.setPresence({
-    activities: [{ name: '.gg/hanging', type: ActivityType.Playing }],
+    activities: [{ name: '😈', type: ActivityType.Playing }],
     status: 'dnd'
   });
   console.log('[Status] Set to: .gg/hanging');
