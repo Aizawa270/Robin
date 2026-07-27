@@ -1,96 +1,150 @@
-// handlers/welcomeHandler.js
-const { EmbedBuilder } = require('discord.js');
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require('discord.js');
 
-// Channel IDs
-const WELCOME_CHANNEL_ID = '1431855676367573012';
-const CHAT_CHANNEL_ID = '1440412904364179647';
+const {
+  getSettings,
+} = require('./welcomeStore');
 
-// Channel mentions
-const CHANNELS = {
-  roles: '1432440696542855412',
-  chat: '1440412904364179647',
-  rules: '1431675851568840765',
-  faq: '1431680409048977448'
-};
+function spaced(text) {
+  return String(text).toUpperCase().split('').join(' ');
+}
 
-// Images
-const WELCOME_IMAGE = 'https://cdn.discordapp.com/attachments/1441397646462812182/1449707001830445218/1219b96e46828c443fe606b661d065d7.png';
-const ANNOUNCEMENT_IMAGE = 'https://cdn.discordapp.com/attachments/1441397646462812182/1449719860501155912/20251214_170753.jpg';
-
-function getOrdinalSuffix(num) {
+function ordinal(num) {
   const j = num % 10;
   const k = num % 100;
-  if (j === 1 && k !== 11) return num + 'st';
-  if (j === 2 && k !== 12) return num + 'nd';
-  if (j === 3 && k !== 13) return num + 'rd';
-  return num + 'th';
+  if (j === 1 && k !== 11) return `${num}st`;
+  if (j === 2 && k !== 12) return `${num}nd`;
+  if (j === 3 && k !== 13) return `${num}rd`;
+  return `${num}th`;
+}
+
+function buildMainWelcomeEmbed(member, settings) {
+  const guild = member.guild;
+  const serverIcon = guild.iconURL({ dynamic: true, size: 256 });
+
+  const rules = settings.rules_channel_id ? `<#${settings.rules_channel_id}>` : '#rules';
+  const info = settings.info_channel_id ? `<#${settings.info_channel_id}>` : '#info';
+  const chat = settings.chat_channel_id ? `<#${settings.chat_channel_id}>` : '#chat';
+
+  const embed = new EmbedBuilder()
+    .setColor('#8b2e2e')
+    .setThumbnail(serverIcon || member.user.displayAvatarURL({ dynamic: true, size: 256 }))
+    .setDescription(
+`╭━━━━━⚚━━━━━∙⋆⋅⋆∙━━━━━⚚━━━━━╮
+ㅤㅤㅤㅤㅤ𝓦𝓮𝓵𝓬𝓸𝓶𝓮 𝓣𝓸
+ㅤㅤㅤㅤㅤ『 ${spaced(guild.name)} 』
+
+ㅤ☈ Make sure to read the
+⁠✧┇${rules}
+
+ㅤ☈ Read The following for info
+⁠✦┇${info}
+
+ㅤ☈ Feel free to speak in
+⁠✧┇${chat}
+
+╰━━━━━⚚━━━━━∙⋆⋅⋆∙━━━━━⚚━━━━━╯
+
+You are the **${ordinal(guild.memberCount)}** member of the server!`
+    )
+    .setTimestamp();
+
+  if (settings.welcome_image_url) {
+    embed.setImage(settings.welcome_image_url);
+  }
+
+  return embed;
+}
+
+function buildChatWelcomeEmbed(member) {
+  const guild = member.guild;
+  const memberAvatar = member.user.displayAvatarURL({ dynamic: true, size: 256 });
+
+  return new EmbedBuilder()
+    .setColor('#8b2e2e')
+    .setAuthor({
+      name: `${member.user.username} has entered ${guild.name}!`,
+      iconURL: memberAvatar,
+    })
+    .setTitle(`${guild.name} | Welcome`)
+    .setDescription(
+      `Welcome to **${guild.name}**, ${member}!\n\n` +
+      `You are our **${ordinal(guild.memberCount)}** member!\n\n` +
+      `Today at **${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date())}**\n\n` +
+      `Click the buttons below to get started.`
+    )
+    .setThumbnail(memberAvatar)
+    .setTimestamp();
+}
+
+function buildButtons(guild, settings) {
+  const buttons = [];
+
+  const pushButton = (label, channelId) => {
+    if (!channelId) return;
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel) return;
+
+    buttons.push(
+      new ButtonBuilder()
+        .setLabel(label)
+        .setStyle(ButtonStyle.Link)
+        .setURL(`https://discord.com/channels/${guild.id}/${channel.id}`)
+    );
+  };
+
+  pushButton('Roles', settings.redirect_roles_channel_id);
+  pushButton('Intro', settings.redirect_intro_channel_id);
+  pushButton('Commands', settings.redirect_commands_channel_id);
+  pushButton('Giveaways', settings.redirect_giveaways_channel_id);
+  pushButton('VC', settings.redirect_vc_channel_id);
+  pushButton('Ping', settings.ping_channel_id);
+
+  if (!buttons.length) return [];
+
+  return [new ActionRowBuilder().addComponents(buttons.slice(0, 5))];
 }
 
 module.exports = (client) => {
   client.on('guildMemberAdd', async (member) => {
     try {
+      const settings = getSettings(member.guild.id);
+      if (!settings) return;
+
       const guild = member.guild;
-      const memberCount = guild.memberCount;
-      const memberPosition = getOrdinalSuffix(memberCount);
 
-      // Main welcome embed (sent to welcome channel)
-      const welcomeChannel = guild.channels.cache.get(WELCOME_CHANNEL_ID);
-      if (welcomeChannel) {
-        const welcomeEmbed = new EmbedBuilder()
-          .setColor('#9b59b6')
-          .setAuthor({
-            name: member.user.username,
-            iconURL: member.user.displayAvatarURL({ dynamic: true, size: 128 })
-          })
-          .setTitle('「 ✦ 𝐕𝐘𝐍𝐎𝐑𝐀 ✦ 」')
-          .setDescription(
-            `**...................................................**\n` +
-            `ᶻᶻ   ﹒ welcome to Vynora ${member}  ‹3\n` +
-            `    ♡  ﹕ <#${CHANNELS.roles}>   ﹕♡\n` +
-            `    ♡  ﹕ <#${CHANNELS.chat}>    ﹕♡\n` +
-            `    ♡  ﹕ <#${CHANNELS.rules}>     ﹕♡\n` +
-            `    ♡  ﹕ <#${CHANNELS.faq}>   ﹕♡\n\n` +
-            `  You're the **${memberPosition}** member of the server!\n` +
-            `  >﹏﹐please enjoy your stay.~!\n` +
-            `**...................................................**`
-          )
-          .setImage(WELCOME_IMAGE)
-          .setFooter({ text: '✧˖ .gg/hanging ° ' })
-          .setTimestamp();
-
-        await welcomeChannel.send({ embeds: [welcomeEmbed] });
+      if (settings.welcome_channel_id) {
+        const welcomeChannel = guild.channels.cache.get(settings.welcome_channel_id);
+        if (welcomeChannel) {
+          const embed = buildMainWelcomeEmbed(member, settings);
+          await welcomeChannel.send({ embeds: [embed] }).catch(() => {});
+        }
       }
 
-      // Announcement embed (sent to chat channel)
-      const chatChannel = guild.channels.cache.get(CHAT_CHANNEL_ID);
-      if (chatChannel) {
-        const announcementEmbed = new EmbedBuilder()
-          .setColor('#9b59b6')
-          .setAuthor({
-            name: `${member.user.username} has entered Vynora!`,
-            iconURL: member.user.displayAvatarURL({ dynamic: true, size: 128 })
-          })
-          .setDescription(
-            `ᶻᶻ   ﹒ welcome to Vynora ${member}  ‹3\n` +
-            `    ♡  ﹕ <#${CHANNELS.roles}>   ﹕♡\n` +
-            `    ♡  ﹕ <#${CHANNELS.chat}>    ﹕♡\n` +
-            `    ♡  ﹕ <#${CHANNELS.rules}>     ﹕♡\n` +
-            `    ♡  ﹕ <#${CHANNELS.faq}>   ﹕♡\n\n` +
-            `You're the **${memberPosition}** member of the server!\n\n` +
-            `**We hope you enjoy your stay here!**`
-          )
-          .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
-          .setImage(ANNOUNCEMENT_IMAGE)
-          .setTimestamp();
+      if (settings.welcome_chat_channel_id) {
+        const chatChannel = guild.channels.cache.get(settings.welcome_chat_channel_id);
+        if (chatChannel) {
+          const embed = buildChatWelcomeEmbed(member, settings);
+          const components = buildButtons(guild, settings);
 
-        await chatChannel.send({ embeds: [announcementEmbed] });
+          await chatChannel.send({
+            content: `${member}`,
+            allowedMentions: { users: [member.id] },
+            embeds: [embed],
+            components,
+          }).catch(() => {});
+        }
       }
 
-      console.log(`✅ Welcome message sent for ${member.user.tag} (Member #${memberCount})`);
+      console.log(`[Welcome] Sent for ${member.user.tag} in ${guild.name}`);
     } catch (error) {
-      console.error('Welcome system error:', error);
+      console.error('[Welcome] Error:', error);
     }
   });
 
-  console.log('🎉 Welcome system initialized');
+  console.log('🎉 Configurable welcome system initialized');
 };
