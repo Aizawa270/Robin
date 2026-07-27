@@ -10,9 +10,9 @@ const {
 } = require('../../handlers/welcomeStore');
 
 /*
-==================================================
-PERMISSION CHECK
-==================================================
+|--------------------------------------------------------------------------
+| PERMISSION
+|--------------------------------------------------------------------------
 */
 
 function hasManageGuild(message) {
@@ -27,41 +27,39 @@ function hasManageGuild(message) {
 }
 
 /*
-==================================================
-CHANNEL RESOLVER
-==================================================
+|--------------------------------------------------------------------------
+| CHANNEL RESOLVER
+|--------------------------------------------------------------------------
 */
 
 function resolveTextChannel(message, input) {
-  if (!input || !message.guild) {
-    return null;
-  }
+  if (!input) return null;
 
-  // First try a channel mention
-  const mentionedChannel =
+  // Try channel mention first
+  const mention =
     message.mentions?.channels?.first();
 
   if (
-    mentionedChannel &&
+    mention &&
     (
-      mentionedChannel.type === ChannelType.GuildText ||
-      mentionedChannel.type === ChannelType.GuildAnnouncement
+      mention.type === ChannelType.GuildText ||
+      mention.type === ChannelType.GuildAnnouncement
     )
   ) {
-    return mentionedChannel;
+    return mention;
   }
 
-  // Remove Discord mention formatting
-  const raw = String(input)
-    .replace(/[<#>]/g, '')
-    .trim();
+  // Remove # < >
+  const raw =
+    input
+      .replace(/[<#>]/g, '')
+      .trim();
 
-  if (!raw) {
-    return null;
-  }
+  if (!raw) return null;
 
-  // Try channel ID
-  const byId = message.guild.channels.cache.get(raw);
+  // Channel ID
+  const byId =
+    message.guild.channels.cache.get(raw);
 
   if (
     byId &&
@@ -73,142 +71,94 @@ function resolveTextChannel(message, input) {
     return byId;
   }
 
-  // Try channel name
-  const byName = message.guild.channels.cache.find(
-    channel =>
-      (
-        channel.type === ChannelType.GuildText ||
-        channel.type === ChannelType.GuildAnnouncement
-      ) &&
-      channel.name.toLowerCase() ===
+  // Channel name
+  const byName =
+    message.guild.channels.cache.find(
+      channel =>
+        (
+          channel.type === ChannelType.GuildText ||
+          channel.type === ChannelType.GuildAnnouncement
+        ) &&
+        channel.name.toLowerCase() ===
         raw.toLowerCase()
-  );
+    );
 
   return byName || null;
 }
 
 /*
-==================================================
-HELP EMBED
-==================================================
+|--------------------------------------------------------------------------
+| HELP EMBED
+|--------------------------------------------------------------------------
 */
 
 function buildHelpEmbed(prefix) {
   return new EmbedBuilder()
     .setColor('#8b2e2e')
-    .setTitle('Welcome System')
+    .setTitle('Welcome System Help')
     .setDescription(
-`Configure your server's welcome system.
+      [
+        `**${prefix}welcomeset #channel**`,
+        `Sets the channel where the main aesthetic welcome embed gets sent.`,
 
-━━━━━━━━━━━━━━━━━━━━
+        `**${prefix}welcomeset rules #channel**`,
+        `Sets the rules channel shown inside the main welcome embed.`,
 
-**MAIN WELCOME**
+        `**${prefix}welcomeset info #channel**`,
+        `Sets the info channel shown inside the main welcome embed.`,
 
-\`${prefix}welcomeset #channel\`
+        `**${prefix}welcomeset chat #channel**`,
+        `Sets the chat channel shown inside the main welcome embed.`,
 
-Sets where the main aesthetic welcome embed will be sent.
+        `**${prefix}welcomeset off**`,
+        `Disables the main welcome embed.`,
 
-The main welcome contains:
-• Server icon
-• Server name
-• Rules channel
-• Info channel
-• Chat channel
-• Configured bottom image
+        `**${prefix}welcomeimageset**`,
+        `Attach an image to set the bottom welcome image.`,
 
-━━━━━━━━━━━━━━━━━━━━
+        `**${prefix}welcomeimageset remove**`,
+        `Removes the bottom welcome image.`,
 
-**MAIN WELCOME CHANNELS**
+        `**${prefix}welcomechatset #channel**`,
+        `Sets the chat welcome channel.`,
 
-\`${prefix}welcomeset rules #channel\`
+        `**${prefix}welcomechatset redirect roles #channel**`,
+        `Sets the Roles button.`,
 
-Sets the clickable Rules channel.
+        `**${prefix}welcomechatset redirect intro #channel**`,
+        `Sets the Intro button.`,
 
-\`${prefix}welcomeset info #channel\`
+        `**${prefix}welcomechatset redirect commands #channel**`,
+        `Sets the Commands button.`,
 
-Sets the clickable Info channel.
+        `**${prefix}welcomechatset redirect giveaways #channel**`,
+        `Sets the Giveaways button.`,
 
-\`${prefix}welcomeset chat #channel\`
+        `**${prefix}welcomechatset redirect vc #channel**`,
+        `Sets the VC button.`,
 
-Sets the clickable Chat channel.
+        `**${prefix}welcomechatset ping #channel**`,
+        `Sets the Ping button.`,
 
-━━━━━━━━━━━━━━━━━━━━
+        `**${prefix}welcomechatset off**`,
+        `Disables the chat welcome embed.`,
 
-**WELCOME IMAGE**
+        `**${prefix}welcomeconfig**`,
+        `Shows the current welcome setup.`,
 
-\`${prefix}welcomeimageset\`
-
-Attach an image to the command to set the bottom image of the main welcome embed.
-
-\`${prefix}welcomeimageset remove\`
-
-Removes the bottom image.
-
-━━━━━━━━━━━━━━━━━━━━
-
-**CHAT WELCOME**
-
-\`${prefix}welcomechatset #channel\`
-
-Sets where the second welcome embed will be sent.
-
-This welcome:
-• Actually pings the new member
-• Shows their avatar
-• Shows the server name
-• Uses the red welcome theme
-
-━━━━━━━━━━━━━━━━━━━━
-
-**CHAT REDIRECT**
-
-\`${prefix}welcomechatset redirect #channel\`
-
-Sets the channel opened by the **Go to Channel** button.
-
-━━━━━━━━━━━━━━━━━━━━
-
-**PING CHANNEL**
-
-\`${prefix}welcomechatset ping #channel\`
-
-Sets the channel opened by the **Ping Channel** button.
-
-━━━━━━━━━━━━━━━━━━━━
-
-**DISABLE**
-
-\`${prefix}welcomeset off\`
-
-Disables the main welcome.
-
-\`${prefix}welcomechatset off\`
-
-Disables the chat welcome.
-
-━━━━━━━━━━━━━━━━━━━━
-
-**VIEW CONFIG**
-
-\`${prefix}welcomeconfig\`
-
-Shows your current welcome configuration.
-
-━━━━━━━━━━━━━━━━━━━━
-
-**PERMISSIONS**
-
-You need **Manage Server** or **Administrator** to configure the welcome system.`
+        `**${prefix}welcomehelp**`,
+        `Shows this help menu.`,
+      ].join('\n\n')
     )
     .setFooter({
-      text: 'Welcome System',
+      text: 'Manage Server permission required for setup commands',
     });
 }
 
 /*
-==================================================
-CONFIG EMBED
-==================================================
+|--------------------------------------------------------------------------
+| CONFIG EMBED
+|--------------------------------------------------------------------------
 */
 
 function buildConfigEmbed(
@@ -219,58 +169,92 @@ function buildConfigEmbed(
   return new EmbedBuilder()
     .setColor('#8b2e2e')
     .setTitle(
-      `Welcome Config | ${guild.name}`
+      `Welcome Config for ${guild.name}`
     )
     .setDescription(
-`**Main Welcome**
-${settings.welcome_channel_id
-  ? `<#${settings.welcome_channel_id}>`
-  : '`Not configured`'}
+      [
+        `**Main Welcome Channel:** ${
+          settings.welcome_channel_id
+            ? `<#${settings.welcome_channel_id}>`
+            : '`Not set`'
+        }`,
 
-**Rules**
-${settings.rules_channel_id
-  ? `<#${settings.rules_channel_id}>`
-  : '`Not configured`'}
+        `**Rules Channel:** ${
+          settings.rules_channel_id
+            ? `<#${settings.rules_channel_id}>`
+            : '`Not set`'
+        }`,
 
-**Info**
-${settings.info_channel_id
-  ? `<#${settings.info_channel_id}>`
-  : '`Not configured`'}
+        `**Info Channel:** ${
+          settings.info_channel_id
+            ? `<#${settings.info_channel_id}>`
+            : '`Not set`'
+        }`,
 
-**Chat shown inside Main Welcome**
-${settings.chat_channel_id
-  ? `<#${settings.chat_channel_id}>`
-  : '`Not configured`'}
+        `**Chat Channel:** ${
+          settings.chat_channel_id
+            ? `<#${settings.chat_channel_id}>`
+            : '`Not set`'
+        }`,
 
-**Bottom Welcome Image**
-${settings.welcome_image_url
-  ? '`Configured`'
-  : '`Not configured`'}
+        `**Bottom Welcome Image:** ${
+          settings.welcome_image_url
+            ? '`Set`'
+            : '`Not set`'
+        }`,
 
-**Chat Welcome**
-${settings.welcome_chat_channel_id
-  ? `<#${settings.welcome_chat_channel_id}>`
-  : '`Not configured`'}
+        `**Chat Welcome Channel:** ${
+          settings.welcome_chat_channel_id
+            ? `<#${settings.welcome_chat_channel_id}>`
+            : '`Not set`'
+        }`,
 
-**Redirect Button**
-${settings.redirect_channel_id
-  ? `<#${settings.redirect_channel_id}>`
-  : '`Not configured`'}
+        `**Redirect - Roles:** ${
+          settings.redirect_roles_channel_id
+            ? `<#${settings.redirect_roles_channel_id}>`
+            : '`Not set`'
+        }`,
 
-**Ping Button**
-${settings.ping_channel_id
-  ? `<#${settings.ping_channel_id}>`
-  : '`Not configured`'}`
+        `**Redirect - Intro:** ${
+          settings.redirect_intro_channel_id
+            ? `<#${settings.redirect_intro_channel_id}>`
+            : '`Not set`'
+        }`,
+
+        `**Redirect - Commands:** ${
+          settings.redirect_commands_channel_id
+            ? `<#${settings.redirect_commands_channel_id}>`
+            : '`Not set`'
+        }`,
+
+        `**Redirect - Giveaways:** ${
+          settings.redirect_giveaways_channel_id
+            ? `<#${settings.redirect_giveaways_channel_id}>`
+            : '`Not set`'
+        }`,
+
+        `**Redirect - VC:** ${
+          settings.redirect_vc_channel_id
+            ? `<#${settings.redirect_vc_channel_id}>`
+            : '`Not set`'
+        }`,
+
+        `**Ping Button:** ${
+          settings.ping_channel_id
+            ? `<#${settings.ping_channel_id}>`
+            : '`Not set`'
+        }`,
+      ].join('\n')
     )
     .setFooter({
-      text: `Use ${prefix}welcomehelp for help`,
+      text: `Use ${prefix}welcomehelp for setup instructions`,
     });
 }
 
 /*
-==================================================
-COMMAND
-==================================================
+|--------------------------------------------------------------------------
+| COMMAND
+|--------------------------------------------------------------------------
 */
 
 module.exports = {
@@ -284,58 +268,65 @@ module.exports = {
     'welcomeconfig',
   ],
 
-  category: 'Utility',
-
   description:
     'Configure the server welcome system.',
 
-  async execute(client, message, args) {
-
-    /*
-    ==============================================
-    SERVER ONLY
-    ==============================================
-    */
-
+  async execute(
+    client,
+    message,
+    args
+  ) {
     if (!message.guild) {
       return message.reply(
-        '❌ This command can only be used inside a server.'
+        'This command can only be used inside a server.'
       );
     }
 
-    const guildId = message.guild.id;
-
     const prefix =
-      client.getPrefix(guildId);
+      client.getPrefix(
+        message.guild.id
+      );
 
     /*
-    ==============================================
-    DETECT WHICH ALIAS WAS USED
-    ==============================================
+    |--------------------------------------------------------------------------
+    | IMPORTANT:
+    | Get the exact command that was typed.
+    |--------------------------------------------------------------------------
     */
 
-    const rawContent =
-      message.content.trim();
+    const content =
+      message.content
+        .trim()
+        .split(/\s+/);
 
-    const contentWithoutPrefix =
-      rawContent.startsWith(prefix)
-        ? rawContent.slice(prefix.length).trim()
-        : rawContent;
+    let trigger =
+      content[0]
+        ?.toLowerCase();
 
-    const trigger =
-      contentWithoutPrefix
-        .split(/\s+/)[0]
-        .toLowerCase();
+    // Remove prefix
+    if (
+      trigger &&
+      trigger.startsWith(prefix.toLowerCase())
+    ) {
+      trigger =
+        trigger
+          .slice(prefix.length)
+          .toLowerCase();
+    }
+
+    const settings =
+      getSettings(
+        message.guild.id
+      );
 
     /*
-    ==============================================
-    HELP
-    ==============================================
+    |--------------------------------------------------------------------------
+    | WELCOMEHELP ONLY SHOWS HELP
+    |--------------------------------------------------------------------------
     */
 
     if (
-      trigger === 'welcomehelp' ||
-      trigger === 'welcome'
+      trigger === 'welcomehelp'
     ) {
       return message.reply({
         embeds: [
@@ -345,15 +336,14 @@ module.exports = {
     }
 
     /*
-    ==============================================
-    CONFIG
-    ==============================================
+    |--------------------------------------------------------------------------
+    | WELCOMECONFIG
+    |--------------------------------------------------------------------------
     */
 
-    if (trigger === 'welcomeconfig') {
-      const settings =
-        getSettings(guildId);
-
+    if (
+      trigger === 'welcomeconfig'
+    ) {
       return message.reply({
         embeds: [
           buildConfigEmbed(
@@ -366,57 +356,77 @@ module.exports = {
     }
 
     /*
-    ==============================================
-    PERMISSION
-    ==============================================
+    |--------------------------------------------------------------------------
+    | PERMISSION CHECK
+    |--------------------------------------------------------------------------
     */
 
     if (!hasManageGuild(message)) {
       return message.reply(
-        '❌ You need **Manage Server** permission to configure the welcome system.'
+        '❌ You need **Manage Server** permission to configure welcome settings.'
       );
     }
 
     /*
-    ==============================================
-    MAIN WELCOME SETUP
-    ==============================================
+    |--------------------------------------------------------------------------
+    | WELCOME
+    |--------------------------------------------------------------------------
+    |
+    | IMPORTANT:
+    | $welcome #channel
+    | NOW SETS THE MAIN WELCOME CHANNEL.
+    |
+    | It does NOT show the help menu anymore.
+    |
     */
 
-    if (trigger === 'welcomeset') {
+    if (
+      trigger === 'welcome'
+    ) {
+      const channel =
+        resolveTextChannel(
+          message,
+          args[0]
+        );
 
+      if (!channel) {
+        return message.reply(
+          `❌ Please provide a valid text channel.\n\nExample:\n\`${prefix}welcome #welcome\`\n\nUse \`${prefix}welcomehelp\` for all commands.`
+        );
+      }
+
+      setSetting(
+        message.guild.id,
+        'welcome_channel_id',
+        channel.id
+      );
+
+      return message.reply(
+        `✅ Main welcome embed will now be sent in ${channel}.`
+      );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | WELCOMESET
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+      trigger === 'welcomeset'
+    ) {
       if (!args[0]) {
         return message.reply(
-`Usage:
-
-\`${prefix}welcomeset #channel\`
-Set the main welcome channel.
-
-\`${prefix}welcomeset rules #channel\`
-Set the Rules channel.
-
-\`${prefix}welcomeset info #channel\`
-Set the Info channel.
-
-\`${prefix}welcomeset chat #channel\`
-Set the Chat channel.
-
-\`${prefix}welcomeset off\`
-Disable the main welcome.`
+          `Usage:\n\`${prefix}welcomeset #channel\`\n\`${prefix}welcomeset rules #channel\`\n\`${prefix}welcomeset info #channel\`\n\`${prefix}welcomeset chat #channel\`\n\`${prefix}welcomeset off\``
         );
       }
 
       const mode =
         args[0].toLowerCase();
 
-      /*
-      Disable
-      */
-
       if (mode === 'off') {
-
         setSetting(
-          guildId,
+          message.guild.id,
           'welcome_channel_id',
           null
         );
@@ -426,16 +436,11 @@ Disable the main welcome.`
         );
       }
 
-      /*
-      Rules / Info / Chat
-      */
-
       if (
         mode === 'rules' ||
         mode === 'info' ||
         mode === 'chat'
       ) {
-
         const channel =
           resolveTextChannel(
             message,
@@ -449,18 +454,13 @@ Disable the main welcome.`
         }
 
         const map = {
-          rules:
-            'rules_channel_id',
-
-          info:
-            'info_channel_id',
-
-          chat:
-            'chat_channel_id',
+          rules: 'rules_channel_id',
+          info: 'info_channel_id',
+          chat: 'chat_channel_id',
         };
 
         setSetting(
-          guildId,
+          message.guild.id,
           map[mode],
           channel.id
         );
@@ -469,10 +469,6 @@ Disable the main welcome.`
           `✅ Main welcome **${mode}** channel set to ${channel}.`
         );
       }
-
-      /*
-      Main welcome channel
-      */
 
       const channel =
         resolveTextChannel(
@@ -487,7 +483,7 @@ Disable the main welcome.`
       }
 
       setSetting(
-        guildId,
+        message.guild.id,
         'welcome_channel_id',
         channel.id
       );
@@ -498,29 +494,25 @@ Disable the main welcome.`
     }
 
     /*
-    ==============================================
-    WELCOME IMAGE
-    ==============================================
+    |--------------------------------------------------------------------------
+    | WELCOME IMAGE
+    |--------------------------------------------------------------------------
     */
 
     if (
       trigger === 'welcomeimageset'
     ) {
-
       const mode =
-        (args[0] || '').toLowerCase();
-
-      /*
-      Remove image
-      */
+        (
+          args[0] || ''
+        ).toLowerCase();
 
       if (
         mode === 'remove' ||
         mode === 'off'
       ) {
-
         setSetting(
-          guildId,
+          message.guild.id,
           'welcome_image_url',
           null
         );
@@ -530,21 +522,8 @@ Disable the main welcome.`
         );
       }
 
-      /*
-      Attachment
-      */
-
       const attachment =
         message.attachments.first();
-
-      if (
-        attachment &&
-        !attachment.contentType?.startsWith('image/')
-      ) {
-        return message.reply(
-          '❌ The attached file must be an image.'
-        );
-      }
 
       const imageUrl =
         attachment?.url ||
@@ -552,18 +531,12 @@ Disable the main welcome.`
 
       if (!imageUrl) {
         return message.reply(
-`❌ Attach an image to the command.
-
-Example:
-
-\`${prefix}welcomeimageset\`
-
-Then attach your welcome image to the same message.`
+          `❌ Attach an image to the command or provide a direct image URL.\n\nExample:\n\`${prefix}welcomeimageset\` + attach your image`
         );
       }
 
       setSetting(
-        guildId,
+        message.guild.id,
         'welcome_image_url',
         imageUrl
       );
@@ -574,44 +547,26 @@ Then attach your welcome image to the same message.`
     }
 
     /*
-    ==============================================
-    CHAT WELCOME SETUP
-    ==============================================
+    |--------------------------------------------------------------------------
+    | CHAT WELCOME
+    |--------------------------------------------------------------------------
     */
 
     if (
       trigger === 'welcomechatset'
     ) {
-
       if (!args[0]) {
         return message.reply(
-`Usage:
-
-\`${prefix}welcomechatset #channel\`
-Set the chat welcome channel.
-
-\`${prefix}welcomechatset redirect #channel\`
-Set the redirect button channel.
-
-\`${prefix}welcomechatset ping #channel\`
-Set the ping button channel.
-
-\`${prefix}welcomechatset off\`
-Disable the chat welcome.`
+          `Usage:\n\`${prefix}welcomechatset #channel\`\n\`${prefix}welcomechatset redirect roles #channel\`\n\`${prefix}welcomechatset ping #channel\`\n\`${prefix}welcomechatset off\``
         );
       }
 
       const mode =
         args[0].toLowerCase();
 
-      /*
-      Disable
-      */
-
       if (mode === 'off') {
-
         setSetting(
-          guildId,
+          message.guild.id,
           'welcome_chat_channel_id',
           null
         );
@@ -621,45 +576,69 @@ Disable the chat welcome.`
         );
       }
 
-      /*
-      Redirect
-      */
-
       if (
         mode === 'redirect'
       ) {
+        const key =
+          (
+            args[1] || ''
+          ).toLowerCase();
 
         const channel =
           resolveTextChannel(
             message,
-            args[1]
+            args[2]
           );
 
-        if (!channel) {
+        if (
+          !key ||
+          !channel
+        ) {
           return message.reply(
-            `❌ Usage: \`${prefix}welcomechatset redirect #channel\``
+            `❌ Usage:\n\`${prefix}welcomechatset redirect roles #channel\`\n\`${prefix}welcomechatset redirect intro #channel\`\n\`${prefix}welcomechatset redirect commands #channel\`\n\`${prefix}welcomechatset redirect giveaways #channel\`\n\`${prefix}welcomechatset redirect vc #channel\``
+          );
+        }
+
+        const map = {
+          roles:
+            'redirect_roles_channel_id',
+
+          intro:
+            'redirect_intro_channel_id',
+
+          commands:
+            'redirect_commands_channel_id',
+
+          giveaways:
+            'redirect_giveaways_channel_id',
+
+          vc:
+            'redirect_vc_channel_id',
+        };
+
+        const column =
+          map[key];
+
+        if (!column) {
+          return message.reply(
+            '❌ Valid redirect keys are: roles, intro, commands, giveaways, vc.'
           );
         }
 
         setSetting(
-          guildId,
-          'redirect_channel_id',
+          message.guild.id,
+          column,
           channel.id
         );
 
         return message.reply(
-          `✅ Chat welcome redirect set to ${channel}.`
+          `✅ Chat welcome redirect **${key}** set to ${channel}.`
         );
       }
-
-      /*
-      Ping
-      */
 
       if (
         mode === 'ping'
       ) {
-
         const channel =
           resolveTextChannel(
             message,
@@ -668,24 +647,20 @@ Disable the chat welcome.`
 
         if (!channel) {
           return message.reply(
-            `❌ Usage: \`${prefix}welcomechatset ping #channel\``
+            '❌ Please provide a valid text channel for ping.'
           );
         }
 
         setSetting(
-          guildId,
+          message.guild.id,
           'ping_channel_id',
           channel.id
         );
 
         return message.reply(
-          `✅ Chat welcome ping channel set to ${channel}.`
+          `✅ Chat welcome ping button set to ${channel}.`
         );
       }
-
-      /*
-      Chat welcome channel
-      */
 
       const channel =
         resolveTextChannel(
@@ -700,7 +675,7 @@ Disable the chat welcome.`
       }
 
       setSetting(
-        guildId,
+        message.guild.id,
         'welcome_chat_channel_id',
         channel.id
       );
@@ -711,15 +686,13 @@ Disable the chat welcome.`
     }
 
     /*
-    ==============================================
-    FALLBACK
-    ==============================================
+    |--------------------------------------------------------------------------
+    | UNKNOWN
+    |--------------------------------------------------------------------------
     */
 
-    return message.reply({
-      embeds: [
-        buildHelpEmbed(prefix),
-      ],
-    });
+    return message.reply(
+      `❌ Unknown welcome command. Use \`${prefix}welcomehelp\` for the setup commands.`
+    );
   },
 };
