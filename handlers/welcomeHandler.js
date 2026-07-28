@@ -11,7 +11,14 @@ const {
 } = require('./welcomeStore');
 
 function spaced(text) {
-  return String(text).toUpperCase().split('').join(' ');
+  // Array.from() (not .split('')) is required here: .split('') splits
+  // by UTF-16 code unit, which breaks any character that's a surrogate
+  // pair (e.g. stylized/fancy Unicode fonts, which take 2 units) into
+  // two invalid lone halves — join(' ') then inserts a space between
+  // them, corrupting or deleting the character entirely. Array.from()
+  // iterates by real Unicode code point, so multi-unit characters like
+  // fancy server names stay whole.
+  return Array.from(String(text).toUpperCase()).join(' ');
 }
 
 function ordinal(num) {
