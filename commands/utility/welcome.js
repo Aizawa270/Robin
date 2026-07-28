@@ -189,10 +189,18 @@ function buildConfigEmbed(guild, settings, prefix) {
 module.exports = {
   name: 'welcome',
 
-  // IMPORTANT:
-  // DO NOT add welcomehelp, welcomeconfig, welcomeset, etc. here.
-  // They are separate command aliases handled by commandHandler.
-  aliases: [],
+  // IMPORTANT: these MUST be listed here or commandHandler.js will
+  // never route $welcomehelp / $welcomeconfig / $welcomeset / etc.
+  // to this file's execute(). registerCommand() only maps a command
+  // under its `name` plus whatever is in `aliases` — nothing else.
+  aliases: [
+    'welcomehelp',
+    'welcomeconfig',
+    'welcomeset',
+    'welcomeimageset',
+    'welcomechatset',
+    'welcomechat',
+  ],
 
   description: 'Configure the server welcome system.',
 
@@ -248,7 +256,30 @@ module.exports = {
 
     /*
     ============================================================
+    UNKNOWN / BARE $welcome
+    Bail out BEFORE the permission check so a non-mod typing
+    $welcome or a typo gets "unknown command", not a confusing
+    "you need permission" message.
+    ============================================================
+    */
+
+    const validSetupCommands = [
+      'welcomeset',
+      'welcomeimageset',
+      'welcomechatset',
+      'welcomechat',
+    ];
+
+    if (!validSetupCommands.includes(rawCommand)) {
+      return message.reply(
+        `❌ Unknown welcome command. Use \`${prefix}welcomehelp\` for the setup commands.`
+      );
+    }
+
+    /*
+    ============================================================
     PERMISSION CHECK
+    Only reached for the real setup subcommands above.
     ============================================================
     */
 
@@ -457,8 +488,6 @@ module.exports = {
     MULTI-REDIRECT SETUP
     ============================================================
 
-    NEW COMMAND:
-
     $welcomechat redirect #roles #intro #commands
 
     The first channel becomes Roles.
@@ -625,26 +654,5 @@ module.exports = {
         ].join('\n')
       );
     }
-
-    /*
-    ============================================================
-    $welcome
-    ============================================================
-
-    Intentionally does NOTHING useful.
-
-    It is NOT an alias for welcomehelp.
-    ============================================================
-    */
-
-    if (rawCommand === 'welcome') {
-      return message.reply(
-        `❌ Unknown welcome command. Use \`${prefix}welcomehelp\` for the setup commands.`
-      );
-    }
-
-    return message.reply(
-      `❌ Unknown welcome command. Use \`${prefix}welcomehelp\` for the setup commands.`
-    );
   },
 };
