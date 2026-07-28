@@ -9,88 +9,40 @@ const {
   setSetting,
 } = require('../../handlers/welcomeStore');
 
-/*
-|--------------------------------------------------------------------------
-| PERMISSION
-|--------------------------------------------------------------------------
-*/
-
 function hasManageGuild(message) {
   return (
-    message.member?.permissions?.has(
-      PermissionFlagsBits.ManageGuild
-    ) ||
-    message.member?.permissions?.has(
-      PermissionFlagsBits.Administrator
-    )
+    message.member?.permissions?.has(PermissionFlagsBits.ManageGuild) ||
+    message.member?.permissions?.has(PermissionFlagsBits.Administrator)
   );
 }
-
-/*
-|--------------------------------------------------------------------------
-| CHANNEL RESOLVER
-|--------------------------------------------------------------------------
-*/
 
 function resolveTextChannel(message, input) {
   if (!input) return null;
 
-  // Try channel mention first
-  const mention =
-    message.mentions?.channels?.first();
-
-  if (
-    mention &&
-    (
+  const mention = message.mentions?.channels?.first();
+  if (mention) {
+    if (
       mention.type === ChannelType.GuildText ||
       mention.type === ChannelType.GuildAnnouncement
-    )
-  ) {
-    return mention;
+    ) return mention;
   }
 
-  // Remove # < >
-  const raw =
-    input
-      .replace(/[<#>]/g, '')
-      .trim();
-
+  const raw = input.replace(/[<#>]/g, '').trim();
   if (!raw) return null;
 
-  // Channel ID
-  const byId =
-    message.guild.channels.cache.get(raw);
-
+  const byId = message.guild.channels.cache.get(raw);
   if (
     byId &&
-    (
-      byId.type === ChannelType.GuildText ||
-      byId.type === ChannelType.GuildAnnouncement
-    )
-  ) {
-    return byId;
-  }
+    (byId.type === ChannelType.GuildText || byId.type === ChannelType.GuildAnnouncement)
+  ) return byId;
 
-  // Channel name
-  const byName =
-    message.guild.channels.cache.find(
-      channel =>
-        (
-          channel.type === ChannelType.GuildText ||
-          channel.type === ChannelType.GuildAnnouncement
-        ) &&
-        channel.name.toLowerCase() ===
-        raw.toLowerCase()
-    );
+  const byName = message.guild.channels.cache.find(ch =>
+    (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildAnnouncement) &&
+    ch.name.toLowerCase() === raw.toLowerCase()
+  );
 
   return byName || null;
 }
-
-/*
-|--------------------------------------------------------------------------
-| HELP EMBED
-|--------------------------------------------------------------------------
-*/
 
 function buildHelpEmbed(prefix) {
   return new EmbedBuilder()
@@ -122,23 +74,17 @@ function buildHelpEmbed(prefix) {
         `**${prefix}welcomechatset #channel**`,
         `Sets the chat welcome channel.`,
 
-        `**${prefix}welcomechatset redirect roles #channel**`,
-        `Sets the Roles button.`,
+        `**${prefix}welcomechatset redirect #channel1 #channel2 #channel3**`,
+        `Sets multiple redirect channels at once. Those channels become buttons in the chat welcome.`,
 
-        `**${prefix}welcomechatset redirect intro #channel**`,
-        `Sets the Intro button.`,
-
-        `**${prefix}welcomechatset redirect commands #channel**`,
-        `Sets the Commands button.`,
-
-        `**${prefix}welcomechatset redirect giveaways #channel**`,
-        `Sets the Giveaways button.`,
-
-        `**${prefix}welcomechatset redirect vc #channel**`,
-        `Sets the VC button.`,
+        `**${prefix}welcomechatset redirect off**`,
+        `Clears all redirect buttons.`,
 
         `**${prefix}welcomechatset ping #channel**`,
         `Sets the Ping button.`,
+
+        `**${prefix}welcomechatset ping off**`,
+        `Clears the Ping button.`,
 
         `**${prefix}welcomechatset off**`,
         `Disables the chat welcome embed.`,
@@ -155,95 +101,29 @@ function buildHelpEmbed(prefix) {
     });
 }
 
-/*
-|--------------------------------------------------------------------------
-| CONFIG EMBED
-|--------------------------------------------------------------------------
-*/
+function buildConfigEmbed(guild, settings, prefix) {
+  let redirectList = '`Not set`';
 
-function buildConfigEmbed(
-  guild,
-  settings,
-  prefix
-) {
+  try {
+    const ids = JSON.parse(settings.redirect_channel_ids || '[]');
+    if (Array.isArray(ids) && ids.length) {
+      redirectList = ids.map(id => `<#${id}>`).join(', ');
+    }
+  } catch {}
+
   return new EmbedBuilder()
     .setColor('#8b2e2e')
-    .setTitle(
-      `Welcome Config for ${guild.name}`
-    )
+    .setTitle(`Welcome Config for ${guild.name}`)
     .setDescription(
       [
-        `**Main Welcome Channel:** ${
-          settings.welcome_channel_id
-            ? `<#${settings.welcome_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Rules Channel:** ${
-          settings.rules_channel_id
-            ? `<#${settings.rules_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Info Channel:** ${
-          settings.info_channel_id
-            ? `<#${settings.info_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Chat Channel:** ${
-          settings.chat_channel_id
-            ? `<#${settings.chat_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Bottom Welcome Image:** ${
-          settings.welcome_image_url
-            ? '`Set`'
-            : '`Not set`'
-        }`,
-
-        `**Chat Welcome Channel:** ${
-          settings.welcome_chat_channel_id
-            ? `<#${settings.welcome_chat_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Redirect - Roles:** ${
-          settings.redirect_roles_channel_id
-            ? `<#${settings.redirect_roles_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Redirect - Intro:** ${
-          settings.redirect_intro_channel_id
-            ? `<#${settings.redirect_intro_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Redirect - Commands:** ${
-          settings.redirect_commands_channel_id
-            ? `<#${settings.redirect_commands_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Redirect - Giveaways:** ${
-          settings.redirect_giveaways_channel_id
-            ? `<#${settings.redirect_giveaways_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Redirect - VC:** ${
-          settings.redirect_vc_channel_id
-            ? `<#${settings.redirect_vc_channel_id}>`
-            : '`Not set`'
-        }`,
-
-        `**Ping Button:** ${
-          settings.ping_channel_id
-            ? `<#${settings.ping_channel_id}>`
-            : '`Not set`'
-        }`,
+        `**Main Welcome Channel:** ${settings.welcome_channel_id ? `<#${settings.welcome_channel_id}>` : '`Not set`'}`,
+        `**Rules Channel:** ${settings.rules_channel_id ? `<#${settings.rules_channel_id}>` : '`Not set`'}`,
+        `**Info Channel:** ${settings.info_channel_id ? `<#${settings.info_channel_id}>` : '`Not set`'}`,
+        `**Chat Channel:** ${settings.chat_channel_id ? `<#${settings.chat_channel_id}>` : '`Not set`'}`,
+        `**Bottom Welcome Image:** ${settings.welcome_image_url ? '`Set`' : '`Not set`'}`,
+        `**Chat Welcome Channel:** ${settings.welcome_chat_channel_id ? `<#${settings.welcome_chat_channel_id}>` : '`Not set`'}`,
+        `**Redirect Channels:** ${redirectList}`,
+        `**Ping Button:** ${settings.ping_channel_id ? `<#${settings.ping_channel_id}>` : '`Not set`'}`,
       ].join('\n')
     )
     .setFooter({
@@ -251,207 +131,61 @@ function buildConfigEmbed(
     });
 }
 
-/*
-|--------------------------------------------------------------------------
-| COMMAND
-|--------------------------------------------------------------------------
-*/
-
 module.exports = {
-  name: 'welcome',
-
+  name: 'welcomeset',
   aliases: [
-    'welcomeset',
+    'welcomehelp',
     'welcomeimageset',
     'welcomechatset',
-    'welcomehelp',
     'welcomeconfig',
   ],
-
-  description:
-    'Configure the server welcome system.',
-
-  async execute(
-    client,
-    message,
-    args
-  ) {
+  description: 'Configure the server welcome system.',
+  async execute(client, message, args) {
     if (!message.guild) {
-      return message.reply(
-        'This command can only be used inside a server.'
-      );
+      return message.reply('This command can only be used inside a server.');
     }
 
-    const prefix =
-      client.getPrefix(
-        message.guild.id
-      );
+    const prefix = client.getPrefix(message.guild.id);
+    const trigger = message.content.slice(prefix.length).trim().split(/\s+/)[0].toLowerCase();
+    const settings = getSettings(message.guild.id);
 
-    /*
-    |--------------------------------------------------------------------------
-    | IMPORTANT:
-    | Get the exact command that was typed.
-    |--------------------------------------------------------------------------
-    */
-
-    const content =
-      message.content
-        .trim()
-        .split(/\s+/);
-
-    let trigger =
-      content[0]
-        ?.toLowerCase();
-
-    // Remove prefix
-    if (
-      trigger &&
-      trigger.startsWith(prefix.toLowerCase())
-    ) {
-      trigger =
-        trigger
-          .slice(prefix.length)
-          .toLowerCase();
+    if (trigger === 'welcomehelp') {
+      return message.reply({ embeds: [buildHelpEmbed(prefix)] });
     }
 
-    const settings =
-      getSettings(
-        message.guild.id
-      );
-
-    /*
-    |--------------------------------------------------------------------------
-    | WELCOMEHELP ONLY SHOWS HELP
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-      trigger === 'welcomehelp'
-    ) {
+    if (trigger === 'welcomeconfig') {
       return message.reply({
-        embeds: [
-          buildHelpEmbed(prefix),
-        ],
+        embeds: [buildConfigEmbed(message.guild, settings, prefix)],
       });
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | WELCOMECONFIG
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-      trigger === 'welcomeconfig'
-    ) {
-      return message.reply({
-        embeds: [
-          buildConfigEmbed(
-            message.guild,
-            settings,
-            prefix
-          ),
-        ],
-      });
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | PERMISSION CHECK
-    |--------------------------------------------------------------------------
-    */
 
     if (!hasManageGuild(message)) {
-      return message.reply(
-        '❌ You need **Manage Server** permission to configure welcome settings.'
-      );
+      return message.reply('❌ You need **Manage Server** permission to configure welcome settings.');
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | WELCOME
-    |--------------------------------------------------------------------------
-    |
-    | IMPORTANT:
-    | $welcome #channel
-    | NOW SETS THE MAIN WELCOME CHANNEL.
-    |
-    | It does NOT show the help menu anymore.
-    |
-    */
-
-    if (
-      trigger === 'welcome'
-    ) {
-      const channel =
-        resolveTextChannel(
-          message,
-          args[0]
-        );
-
-      if (!channel) {
-        return message.reply(
-          `❌ Please provide a valid text channel.\n\nExample:\n\`${prefix}welcome #welcome\`\n\nUse \`${prefix}welcomehelp\` for all commands.`
-        );
-      }
-
-      setSetting(
-        message.guild.id,
-        'welcome_channel_id',
-        channel.id
-      );
-
-      return message.reply(
-        `✅ Main welcome embed will now be sent in ${channel}.`
-      );
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | WELCOMESET
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-      trigger === 'welcomeset'
-    ) {
+    // IMPORTANT: $welcome is NOT an alias and does nothing here.
+    if (trigger === 'welcomeset') {
       if (!args[0]) {
         return message.reply(
-          `Usage:\n\`${prefix}welcomeset #channel\`\n\`${prefix}welcomeset rules #channel\`\n\`${prefix}welcomeset info #channel\`\n\`${prefix}welcomeset chat #channel\`\n\`${prefix}welcomeset off\``
+          `Usage:\n` +
+          `\`${prefix}welcomeset #channel\`\n` +
+          `\`${prefix}welcomeset rules #channel\`\n` +
+          `\`${prefix}welcomeset info #channel\`\n` +
+          `\`${prefix}welcomeset chat #channel\`\n` +
+          `\`${prefix}welcomeset off\``
         );
       }
 
-      const mode =
-        args[0].toLowerCase();
+      const mode = args[0].toLowerCase();
 
       if (mode === 'off') {
-        setSetting(
-          message.guild.id,
-          'welcome_channel_id',
-          null
-        );
-
-        return message.reply(
-          '✅ Main welcome embed disabled.'
-        );
+        setSetting(message.guild.id, 'welcome_channel_id', null);
+        return message.reply('✅ Main welcome embed disabled.');
       }
 
-      if (
-        mode === 'rules' ||
-        mode === 'info' ||
-        mode === 'chat'
-      ) {
-        const channel =
-          resolveTextChannel(
-            message,
-            args[1]
-          );
-
-        if (!channel) {
-          return message.reply(
-            '❌ Please provide a valid text channel.'
-          );
-        }
+      if (mode === 'rules' || mode === 'info' || mode === 'chat') {
+        const channel = resolveTextChannel(message, args[1]);
+        if (!channel) return message.reply('❌ Please provide a valid text channel.');
 
         const map = {
           rules: 'rules_channel_id',
@@ -459,75 +193,27 @@ module.exports = {
           chat: 'chat_channel_id',
         };
 
-        setSetting(
-          message.guild.id,
-          map[mode],
-          channel.id
-        );
-
-        return message.reply(
-          `✅ Main welcome **${mode}** channel set to ${channel}.`
-        );
+        setSetting(message.guild.id, map[mode], channel.id);
+        return message.reply(`✅ Main welcome **${mode}** channel set to ${channel}.`);
       }
 
-      const channel =
-        resolveTextChannel(
-          message,
-          args[0]
-        );
+      const channel = resolveTextChannel(message, args[0]);
+      if (!channel) return message.reply('❌ Please provide a valid text channel.');
 
-      if (!channel) {
-        return message.reply(
-          '❌ Please provide a valid text channel.'
-        );
-      }
-
-      setSetting(
-        message.guild.id,
-        'welcome_channel_id',
-        channel.id
-      );
-
-      return message.reply(
-        `✅ Main welcome embed will now be sent in ${channel}.`
-      );
+      setSetting(message.guild.id, 'welcome_channel_id', channel.id);
+      return message.reply(`✅ Main welcome embed will now be sent in ${channel}.`);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | WELCOME IMAGE
-    |--------------------------------------------------------------------------
-    */
+    if (trigger === 'welcomeimageset') {
+      const mode = (args[0] || '').toLowerCase();
 
-    if (
-      trigger === 'welcomeimageset'
-    ) {
-      const mode =
-        (
-          args[0] || ''
-        ).toLowerCase();
-
-      if (
-        mode === 'remove' ||
-        mode === 'off'
-      ) {
-        setSetting(
-          message.guild.id,
-          'welcome_image_url',
-          null
-        );
-
-        return message.reply(
-          '✅ Bottom welcome image removed.'
-        );
+      if (mode === 'remove' || mode === 'off') {
+        setSetting(message.guild.id, 'welcome_image_url', null);
+        return message.reply('✅ Bottom welcome image removed.');
       }
 
-      const attachment =
-        message.attachments.first();
-
-      const imageUrl =
-        attachment?.url ||
-        args[0];
+      const attachment = message.attachments.first();
+      const imageUrl = attachment?.url || args[0];
 
       if (!imageUrl) {
         return message.reply(
@@ -535,161 +221,87 @@ module.exports = {
         );
       }
 
-      setSetting(
-        message.guild.id,
-        'welcome_image_url',
-        imageUrl
-      );
-
-      return message.reply(
-        '✅ Bottom welcome image updated.'
-      );
+      setSetting(message.guild.id, 'welcome_image_url', imageUrl);
+      return message.reply('✅ Bottom welcome image updated.');
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | CHAT WELCOME
-    |--------------------------------------------------------------------------
-    */
-
-    if (
-      trigger === 'welcomechatset'
-    ) {
+    if (trigger === 'welcomechatset') {
       if (!args[0]) {
         return message.reply(
-          `Usage:\n\`${prefix}welcomechatset #channel\`\n\`${prefix}welcomechatset redirect roles #channel\`\n\`${prefix}welcomechatset ping #channel\`\n\`${prefix}welcomechatset off\``
+          `Usage:\n` +
+          `\`${prefix}welcomechatset #channel\`\n` +
+          `\`${prefix}welcomechatset redirect #channel1 #channel2 #channel3\`\n` +
+          `\`${prefix}welcomechatset redirect off\`\n` +
+          `\`${prefix}welcomechatset ping #channel\`\n` +
+          `\`${prefix}welcomechatset ping off\`\n` +
+          `\`${prefix}welcomechatset off\``
         );
       }
 
-      const mode =
-        args[0].toLowerCase();
+      const mode = args[0].toLowerCase();
 
       if (mode === 'off') {
-        setSetting(
-          message.guild.id,
-          'welcome_chat_channel_id',
-          null
-        );
-
-        return message.reply(
-          '✅ Chat welcome embed disabled.'
-        );
+        setSetting(message.guild.id, 'welcome_chat_channel_id', null);
+        return message.reply('✅ Chat welcome embed disabled.');
       }
 
-      if (
-        mode === 'redirect'
-      ) {
-        const key =
-          (
-            args[1] || ''
-          ).toLowerCase();
+      // Reset / set multiple redirect channels at once
+      if (mode === 'redirect') {
+        const sub = (args[1] || '').toLowerCase();
 
-        const channel =
-          resolveTextChannel(
-            message,
-            args[2]
-          );
+        if (sub === 'off' || sub === 'clear' || sub === 'remove') {
+          setSetting(message.guild.id, 'redirect_channel_ids', JSON.stringify([]));
+          return message.reply('✅ Redirect buttons cleared.');
+        }
 
-        if (
-          !key ||
-          !channel
-        ) {
+        const rawChannels = args.slice(1);
+        if (!rawChannels.length) {
           return message.reply(
-            `❌ Usage:\n\`${prefix}welcomechatset redirect roles #channel\`\n\`${prefix}welcomechatset redirect intro #channel\`\n\`${prefix}welcomechatset redirect commands #channel\`\n\`${prefix}welcomechatset redirect giveaways #channel\`\n\`${prefix}welcomechatset redirect vc #channel\``
+            `❌ Usage:\n\`${prefix}welcomechatset redirect #channel1 #channel2 #channel3\``
           );
         }
 
-        const map = {
-          roles:
-            'redirect_roles_channel_id',
+        const resolved = rawChannels
+          .map(token => resolveTextChannel(message, token))
+          .filter(Boolean);
 
-          intro:
-            'redirect_intro_channel_id',
-
-          commands:
-            'redirect_commands_channel_id',
-
-          giveaways:
-            'redirect_giveaways_channel_id',
-
-          vc:
-            'redirect_vc_channel_id',
-        };
-
-        const column =
-          map[key];
-
-        if (!column) {
-          return message.reply(
-            '❌ Valid redirect keys are: roles, intro, commands, giveaways, vc.'
-          );
+        if (!resolved.length) {
+          return message.reply('❌ I could not find any valid text channels in that command.');
         }
 
-        setSetting(
-          message.guild.id,
-          column,
-          channel.id
-        );
+        const uniqueIds = [...new Set(resolved.map(ch => ch.id))];
+        setSetting(message.guild.id, 'redirect_channel_ids', JSON.stringify(uniqueIds));
 
         return message.reply(
-          `✅ Chat welcome redirect **${key}** set to ${channel}.`
+          `✅ Redirect buttons updated for ${uniqueIds.length} channel(s).`
         );
       }
 
-      if (
-        mode === 'ping'
-      ) {
-        const channel =
-          resolveTextChannel(
-            message,
-            args[1]
-          );
+      if (mode === 'ping') {
+        const sub = (args[1] || '').toLowerCase();
 
+        if (sub === 'off' || sub === 'clear' || sub === 'remove') {
+          setSetting(message.guild.id, 'ping_channel_id', null);
+          return message.reply('✅ Ping button cleared.');
+        }
+
+        const channel = resolveTextChannel(message, args[1]);
         if (!channel) {
-          return message.reply(
-            '❌ Please provide a valid text channel for ping.'
-          );
+          return message.reply('❌ Please provide a valid text channel for ping.');
         }
 
-        setSetting(
-          message.guild.id,
-          'ping_channel_id',
-          channel.id
-        );
-
-        return message.reply(
-          `✅ Chat welcome ping button set to ${channel}.`
-        );
+        setSetting(message.guild.id, 'ping_channel_id', channel.id);
+        return message.reply(`✅ Chat welcome Ping button set to ${channel}.`);
       }
 
-      const channel =
-        resolveTextChannel(
-          message,
-          args[0]
-        );
-
+      const channel = resolveTextChannel(message, args[0]);
       if (!channel) {
-        return message.reply(
-          '❌ Please provide a valid text channel.'
-        );
+        return message.reply('❌ Please provide a valid text channel.');
       }
 
-      setSetting(
-        message.guild.id,
-        'welcome_chat_channel_id',
-        channel.id
-      );
-
-      return message.reply(
-        `✅ Chat welcome embed will now be sent in ${channel}.`
-      );
+      setSetting(message.guild.id, 'welcome_chat_channel_id', channel.id);
+      return message.reply(`✅ Chat welcome embed will now be sent in ${channel}.`);
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | UNKNOWN
-    |--------------------------------------------------------------------------
-    */
 
     return message.reply(
       `❌ Unknown welcome command. Use \`${prefix}welcomehelp\` for the setup commands.`
