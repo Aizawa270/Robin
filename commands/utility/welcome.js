@@ -102,6 +102,9 @@ function buildHelpEmbed(prefix) {
         `**${prefix}welcomechat ping #channel**`,
         `Sets the Ping button.`,
 
+        `**${prefix}welcomechat ping off**`,
+        `Removes the Ping button.`,
+
         `**${prefix}welcomechat off**`,
         `Disables the chat welcome embed.`,
 
@@ -113,10 +116,6 @@ function buildHelpEmbed(prefix) {
 }
 
 function buildConfigEmbed(guild, settings, prefix) {
-  // Redirects now live in the single redirect_channel_ids JSON column.
-  // The old redirect_roles_channel_id / redirect_intro_channel_id / etc.
-  // columns don't exist in the DB at all — reading them here previously
-  // silently produced "None" always. This reads the real data.
   const redirectIds = parseChannelIdList(settings.redirect_channel_ids);
 
   const redirects = redirectIds.length
@@ -203,11 +202,6 @@ module.exports = {
 
     const prefix = client.getPrefix(message.guild.id);
 
-    // Only strip the prefix if it's actually there. In prefixless mode
-    // (client.prefixless has the user) message.content has no prefix at
-    // all, so blindly slicing prefix.length off the front ate the first
-    // real character of the command (e.g. "welcomehelp" -> "elcomehelp"),
-    // which never matched anything below.
     const stripped = message.content.startsWith(prefix)
       ? message.content.slice(prefix.length)
       : message.content;
@@ -217,23 +211,11 @@ module.exports = {
       .split(/\s+/)[0]
       .toLowerCase();
 
-    /*
-    ============================================================
-    HELP
-    ============================================================
-    */
-
     if (rawCommand === 'welcomehelp') {
       return message.reply({
         embeds: [buildHelpEmbed(prefix)],
       });
     }
-
-    /*
-    ============================================================
-    CONFIG
-    ============================================================
-    */
 
     if (rawCommand === 'welcomeconfig') {
       const settings = getSettings(message.guild.id);
@@ -249,12 +231,6 @@ module.exports = {
       });
     }
 
-    /*
-    ============================================================
-    UNKNOWN / BARE welcome
-    ============================================================
-    */
-
     const validSetupCommands = [
       'welcomeset',
       'welcomeimageset',
@@ -268,23 +244,11 @@ module.exports = {
       );
     }
 
-    /*
-    ============================================================
-    PERMISSION CHECK
-    ============================================================
-    */
-
     if (!hasManageGuild(message)) {
       return message.reply(
         '❌ You need **Manage Server** permission to configure the welcome system.'
       );
     }
-
-    /*
-    ============================================================
-    MAIN WELCOME SETUP
-    ============================================================
-    */
 
     if (rawCommand === 'welcomeset') {
       if (!args[0]) {
@@ -369,12 +333,6 @@ module.exports = {
       );
     }
 
-    /*
-    ============================================================
-    WELCOME IMAGE
-    ============================================================
-    */
-
     if (rawCommand === 'welcomeimageset') {
       const mode = (args[0] || '').toLowerCase();
 
@@ -420,12 +378,6 @@ module.exports = {
         '✅ Bottom welcome image updated.'
       );
     }
-
-    /*
-    ============================================================
-    CHAT WELCOME SETUP
-    ============================================================
-    */
 
     if (rawCommand === 'welcomechatset') {
       if (!args[0]) {
@@ -474,26 +426,10 @@ module.exports = {
       );
     }
 
-    /*
-    ============================================================
-    MULTI-REDIRECT SETUP
-    ============================================================
-
-    $welcomechat redirect #roles #intro #commands
-
-    Stores an ordered list of up to 5 channel IDs as JSON in the
-    single redirect_channel_ids column (the only redirect column
-    that actually exists in welcome_settings / is whitelisted in
-    welcomeStore's ALLOWED_COLUMNS).
-    ============================================================
-    */
-
     if (rawCommand === 'welcomechat') {
       const mode = (args[0] || '').toLowerCase();
 
       if (mode === 'redirect') {
-
-        // Reset all redirect buttons
         if (
           args[1]?.toLowerCase() === 'off'
         ) {
@@ -549,11 +485,23 @@ module.exports = {
         );
       }
 
-      /*
-      Ping button
-      */
-
+      // Ping button — set with $welcomechat ping #channel,
+      // remove with $welcomechat ping off/remove.
       if (mode === 'ping') {
+        const sub = (args[1] || '').toLowerCase();
+
+        if (sub === 'off' || sub === 'remove') {
+          setSetting(
+            message.guild.id,
+            'ping_channel_id',
+            null
+          );
+
+          return message.reply(
+            '✅ Ping button removed.'
+          );
+        }
+
         const channel = resolveTextChannel(
           message,
           args[1]
@@ -561,7 +509,7 @@ module.exports = {
 
         if (!channel) {
           return message.reply(
-            '❌ Please provide a valid text channel for the Ping button.'
+            '❌ Please provide a valid text channel for the Ping button, or use `off` to remove it.'
           );
         }
 
@@ -575,10 +523,6 @@ module.exports = {
           `✅ Ping button set to ${channel}.`
         );
       }
-
-      /*
-      Disable chat welcome
-      */
 
       if (mode === 'off') {
         setSetting(
