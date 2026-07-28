@@ -7,6 +7,7 @@ const {
 const {
   getSettings,
   setSetting,
+  parseChannelIdList,
 } = require('../../handlers/welcomeStore');
 
 function hasManageGuild(message) {
@@ -26,11 +27,6 @@ function isValidTextChannel(channel) {
   );
 }
 
-/**
- * Gets every channel mentioned in the message.
- * Example:
- * $welcomechat redirect #roles #intro #commands
- */
 function getMentionedChannels(message) {
   return message.mentions.channels
     .filter(channel => isValidTextChannel(channel))
@@ -40,7 +36,6 @@ function getMentionedChannels(message) {
 function resolveTextChannel(message, input) {
   if (!input) return null;
 
-  // Channel mention
   const mention = message.mentions.channels.first();
   if (mention && isValidTextChannel(mention)) {
     return mention;
@@ -49,13 +44,11 @@ function resolveTextChannel(message, input) {
   const raw = input.replace(/[<#>]/g, '').trim();
   if (!raw) return null;
 
-  // Channel ID
   const byId = message.guild.channels.cache.get(raw);
   if (isValidTextChannel(byId)) {
     return byId;
   }
 
-  // Channel name
   const byName = message.guild.channels.cache.find(channel =>
     isValidTextChannel(channel) &&
     channel.name.toLowerCase() === raw.toLowerCase()
@@ -120,16 +113,17 @@ function buildHelpEmbed(prefix) {
 }
 
 function buildConfigEmbed(guild, settings, prefix) {
-  const redirects = [
-    ['Roles', settings.redirect_roles_channel_id],
-    ['Intro', settings.redirect_intro_channel_id],
-    ['Commands', settings.redirect_commands_channel_id],
-    ['Giveaways', settings.redirect_giveaways_channel_id],
-    ['VC', settings.redirect_vc_channel_id],
-  ]
-    .filter(([, id]) => id)
-    .map(([name, id]) => `${name}: <#${id}>`)
-    .join('\n') || '`None`';
+  // Redirects now live in the single redirect_channel_ids JSON column.
+  // The old redirect_roles_channel_id / redirect_intro_channel_id / etc.
+  // columns don't exist in the DB at all — reading them here previously
+  // silently produced "None" always. This reads the real data.
+  const redirectIds = parseChannelIdList(settings.redirect_channel_ids);
+
+  const redirects = redirectIds.length
+    ? redirectIds
+        .map((id, i) => `**${i + 1}.** <#${id}>`)
+        .join('\n')
+    : '`None`';
 
   return new EmbedBuilder()
     .setColor('#8b2e2e')
@@ -189,10 +183,6 @@ function buildConfigEmbed(guild, settings, prefix) {
 module.exports = {
   name: 'welcome',
 
-  // IMPORTANT: these MUST be listed here or commandHandler.js will
-  // never route $welcomehelp / $welcomeconfig / $welcomeset / etc.
-  // to this file's execute(). registerCommand() only maps a command
-  // under its `name` plus whatever is in `aliases` — nothing else.
   aliases: [
     'welcomehelp',
     'welcomeconfig',
@@ -213,9 +203,16 @@ module.exports = {
 
     const prefix = client.getPrefix(message.guild.id);
 
-    // Get the actual command that was typed.
-    const rawCommand = message.content
-      .slice(prefix.length)
+    // Only strip the prefix if it's actually there. In prefixless mode
+    // (client.prefixless has the user) message.content has no prefix at
+    // all, so blindly slicing prefix.length off the front ate the first
+    // real character of the command (e.g. "welcomehelp" -> "elcomehelp"),
+    // which never matched anything below.
+    const stripped = message.content.startsWith(prefix)
+      ? message.content.slice(prefix.length)
+      : message.content;
+
+    const rawCommand = stripped
       .trim()
       .split(/\s+/)[0]
       .toLowerCase();
@@ -223,8 +220,6 @@ module.exports = {
     /*
     ============================================================
     HELP
-    Only $welcomehelp shows help.
-    $welcome does NOT show help.
     ============================================================
     */
 
@@ -256,10 +251,7 @@ module.exports = {
 
     /*
     ============================================================
-    UNKNOWN / BARE $welcome
-    Bail out BEFORE the permission check so a non-mod typing
-    $welcome or a typo gets "unknown command", not a confusing
-    "you need permission" message.
+    UNKNOWN / BARE welcome
     ============================================================
     */
 
@@ -279,7 +271,6 @@ module.exports = {
     /*
     ============================================================
     PERMISSION CHECK
-    Only reached for the real setup subcommands above.
     ============================================================
     */
 
@@ -490,13 +481,10 @@ module.exports = {
 
     $welcomechat redirect #roles #intro #commands
 
-    The first channel becomes Roles.
-    The second becomes Intro.
-    The third becomes Commands.
-    The fourth becomes Giveaways.
-    The fifth becomes VC.
-
-    You can provide 1-5 channels.
+    Stores an ordered list of up to 5 channel IDs as JSON in the
+    single redirect_channel_ids column (the only redirect column
+    that actually exists in welcome_settings / is whitelisted in
+    welcomeStore's ALLOWED_COLUMNS).
     ============================================================
     */
 
@@ -509,36 +497,16 @@ module.exports = {
         if (
           args[1]?.toLowerCase() === 'off'
         ) {
-          const redirectColumns = [
-            'redirect_roles_channel_id',
-            'redirect_intro_channel_id',
-            'redirect_commands_channel_id',
-            'redirect_giveaways_channel_id',
-            'redirect_vc_channel_id',
-          ];
-
-          for (const column of redirectColumns) {
-            setSetting(
-              message.guild.id,
-              column,
-              null
-            );
-          }
+          setSetting(
+            message.guild.id,
+            'redirect_channel_ids',
+            '[]'
+          );
 
           return message.reply(
             '✅ All welcome redirect buttons have been removed.'
           );
         }
-
-        /*
-        Get all mentioned channels.
-
-        Example:
-        $welcomechat redirect #roles #intro #commands
-
-        Discord message.mentions.channels will contain
-        all three channels.
-        */
 
         const channels =
           getMentionedChannels(message);
@@ -561,35 +529,13 @@ module.exports = {
           );
         }
 
-        const redirectColumns = [
-          'redirect_roles_channel_id',
-          'redirect_intro_channel_id',
-          'redirect_commands_channel_id',
-          'redirect_giveaways_channel_id',
-          'redirect_vc_channel_id',
-        ];
+        const ids = channels.map(channel => channel.id);
 
-        // Clear old redirects first
-        for (const column of redirectColumns) {
-          setSetting(
-            message.guild.id,
-            column,
-            null
-          );
-        }
-
-        // Save new redirects in order
-        for (
-          let i = 0;
-          i < channels.length;
-          i++
-        ) {
-          setSetting(
-            message.guild.id,
-            redirectColumns[i],
-            channels[i].id
-          );
-        }
+        setSetting(
+          message.guild.id,
+          'redirect_channel_ids',
+          JSON.stringify(ids)
+        );
 
         return message.reply(
           [
