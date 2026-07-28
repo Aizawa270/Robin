@@ -3,13 +3,24 @@ const fs = require('fs');
 const path = require('path');
 const { Collection, EmbedBuilder } = require('discord.js');
 
+// ============================================================
+// STRIP REPLIED-TO USER FROM MENTIONS
+// Prevents reply mentions from being treated as normal mentions
+// ============================================================
+
 function stripReplyMentions(message) {
   if (!message.reference) return;
+
   const repliedUserId = message.mentions?.repliedUser?.id;
   if (!repliedUserId) return;
+
   message.mentions.users.delete(repliedUserId);
   message.mentions.members?.delete(repliedUserId);
 }
+
+// ============================================================
+// LOAD ALL COMMANDS
+// ============================================================
 
 function loadCommands(client) {
   client.commands = new Collection();
@@ -17,128 +28,440 @@ function loadCommands(client) {
   client.brokenCommands = [];
 
   const commandsPath = path.join(__dirname, '..', 'commands');
-  if (!fs.existsSync(commandsPath)) return;
 
-  const categories = fs.readdirSync(commandsPath);
+  if (!fs.existsSync(commandsPath)) {
+    console.warn(
+      `[Commands] Commands folder not found: ${commandsPath}`
+    );
+    return;
+  }
 
-  for (const category of categories) {
-    const categoryPath = path.join(commandsPath, category);
+  const entries = fs.readdirSync(commandsPath).sort();
+
+  for (const entry of entries) {
+    const entryPath = path.join(commandsPath, entry);
+
     let stat;
-    try { stat = fs.statSync(categoryPath); } catch { continue; }
 
-    if (stat.isFile() && category.endsWith('.js')) {
-      try { registerCommand(client, require(categoryPath)); }
-      catch (e) { client.brokenCommands.push({ file: categoryPath, error: e }); }
+    try {
+      stat = fs.statSync(entryPath);
+    } catch (error) {
+      console.error(
+        `[Commands] Could not inspect: ${entryPath}`,
+        error
+      );
       continue;
     }
 
+    // ========================================================
+    // COMMAND FILE DIRECTLY INSIDE /commands
+    // ========================================================
+
+    if (stat.isFile() && entry.endsWith('.js')) {
+      try {
+        const command = require(entryPath);
+        registerCommand(client, command, entryPath);
+      } catch (error) {
+        client.brokenCommands.push({
+          file: entryPath,
+          error,
+        });
+      }
+
+      continue;
+    }
+
+    // ========================================================
+    // COMMAND CATEGORY FOLDER
+    // ========================================================
+
     if (!stat.isDirectory()) continue;
 
-    const files = fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'));
+    let files;
+
+    try {
+      files = fs
+        .readdirSync(entryPath)
+        .filter(file => file.endsWith('.js'))
+        .sort();
+    } catch (error) {
+      console.error(
+        `[Commands] Could not read category: ${entryPath}`,
+        error
+      );
+      continue;
+    }
+
     for (const file of files) {
-      const filePath = path.join(categoryPath, file);
-      try { registerCommand(client, require(filePath)); }
-      catch (e) { client.brokenCommands.push({ file: filePath, error: e }); }
+      const filePath = path.join(entryPath, file);
+
+      try {
+        const command = require(filePath);
+        registerCommand(client, command, filePath);
+      } catch (error) {
+        client.brokenCommands.push({
+          file: filePath,
+          error,
+        });
+      }
     }
   }
 
-  console.log(`✅ Loaded ${client.commands.size} commands`);
+  // ============================================================
+  // LOADING SUMMARY
+  // ============================================================
+
+  console.log(
+    `✅ Loaded ${client.commands.size} commands`
+  );
+
+  if (client.aliases.size > 0) {
+    console.log(
+      `🔗 Loaded ${client.aliases.size} aliases`
+    );
+  }
+
+  if (client.brokenCommands.length > 0) {
+    console.error(
+      `❌ ${client.brokenCommands.length} command(s) failed to load:`
+    );
+
+    for (const broken of client.brokenCommands) {
+      console.error(
+        `\n[Broken Command] ${broken.file}`
+      );
+
+      console.error(
+        broken.error?.stack ||
+        broken.error?.message ||
+        broken.error
+      );
+    }
+  }
 }
 
-function registerCommand(client, command) {
-  if (!command?.name || typeof command.execute !== 'function') return;
+// ============================================================
+// REGISTER COMMAND
+// ============================================================
+
+function registerCommand(client, command, filePath) {
+  if (
+    !command?.name ||
+    typeof command.execute !== 'function'
+  ) {
+    console.warn(
+      `[Commands] Skipping invalid command: ${filePath}`
+    );
+
+    return;
+  }
 
   command.aliases ??= [];
   command.category ??= 'Misc';
   command.usage ??= '';
   command.description ??= 'No description';
 
-  client.commands.set(command.name.toLowerCase(), command);
-  for (const a of command.aliases) {
-    if (!client.aliases.has(a.toLowerCase())) {
-      client.aliases.set(a.toLowerCase(), command);
-    }
-  }
-}
+  const commandName =
+    String(command.name).toLowerCase().trim();
 
-function getCurrentPrefix(client, guildId) {
-  return client.getPrefix(guildId) || '!';
-}
+  // ==========================================================
+  // DUPLICATE COMMAND NAME CHECK
+  // ==========================================================
 
-async function checkBotBlacklist(client, message) {
-  if (!client.botBlacklist?.has(message.author.id)) return false;
+  if (client.commands.has(commandName)) {
+    console.error(
+      `[Commands] Duplicate command name "${commandName}" in ${filePath}`
+    );
 
-  const embed = new EmbedBuilder()
-    .setColor('#ff0000')
-    .setAuthor({ name: 'Vanessa' })
-    .setDescription("You're restricted from using Vanessa.")
-    .setFooter({ text: 'Contact the server owner if you think this is a mistake.' });
-
-  await message.reply({ embeds: [embed] }).catch(() => {});
-  return true;
-}
-
-async function handleMessage(client, message) {
-  if (message.author.bot) return;
-
-  stripReplyMentions(message);
-
-  const content = message.content?.trim();
-  if (!content) return;
-
-  // NOTE: AFK logic is handled entirely in afk.js handleMessage — do NOT add it here
-
-  const prefix = getCurrentPrefix(client, message.guild?.id);
-  const isPrefixed = content.startsWith(prefix);
-
-  /* ===== PREFIXLESS ===== */
-  if (!isPrefixed && client.prefixless?.has(message.author.id)) {
-    const parts = content.split(/\s+/);
-    const cmdName = parts.shift().toLowerCase();
-    const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
-    if (!cmd) return;
-
-    if (await checkBotBlacklist(client, message)) return;
-
-    message.prefix = prefix;
-    message.commandName = cmd.name;
-    message.createEmbed = (opts) =>
-      universalHelper.createEmbed(client, message, opts);
-    universalHelper.patchMessageReply(message);
-
-    try {
-      await cmd.execute(client, message, parts);
-    } catch (e) {
-      console.error(e);
-      message.reply('Something went wrong.');
-    }
     return;
   }
 
-  /* ===== PREFIXED ===== */
-  if (!isPrefixed) return;
+  client.commands.set(
+    commandName,
+    command
+  );
 
-  const args = content.slice(prefix.length).trim().split(/\s+/);
-  const cmdName = args.shift()?.toLowerCase();
-  if (!cmdName) return;
+  // ==========================================================
+  // REGISTER ALIASES
+  // ==========================================================
 
-  const cmd = client.commands.get(cmdName) || client.aliases.get(cmdName);
-  if (!cmd) return;
+  for (const alias of command.aliases) {
+    if (!alias) continue;
 
-  if (await checkBotBlacklist(client, message)) return;
+    const aliasName =
+      String(alias).toLowerCase().trim();
 
-  message.prefix = prefix;
-  message.commandName = cmd.name;
-  message.createEmbed = (opts) =>
-    universalHelper.createEmbed(client, message, opts);
-  universalHelper.patchMessageReply(message);
+    if (!aliasName) continue;
 
-  try {
-    await cmd.execute(client, message, args);
-  } catch (e) {
-    console.error(e);
-    message.reply('Something went wrong.');
+    // Don't allow an alias to overwrite a real command
+    if (client.commands.has(aliasName)) {
+      console.error(
+        `[Commands] Alias "${aliasName}" in ${filePath} conflicts with command "${aliasName}". Skipping alias.`
+      );
+
+      continue;
+    }
+
+    // Don't silently overwrite another alias
+    if (client.aliases.has(aliasName)) {
+      const existingCommand =
+        client.aliases.get(aliasName);
+
+      console.error(
+        `[Commands] Duplicate alias "${aliasName}" in ${filePath}. ` +
+        `Already used by "${existingCommand.name}". Skipping alias.`
+      );
+
+      continue;
+    }
+
+    client.aliases.set(
+      aliasName,
+      command
+    );
   }
 }
 
-module.exports = { loadCommands, handleMessage };
+// ============================================================
+// GET CURRENT PREFIX
+// ============================================================
+
+function getCurrentPrefix(client, guildId) {
+  // Your bot's default prefix is $
+  return client.getPrefix(guildId) || '$';
+}
+
+// ============================================================
+// BOT BLACKLIST CHECK
+// ============================================================
+
+async function checkBotBlacklist(client, message) {
+  if (
+    !client.botBlacklist?.has(
+      message.author.id
+    )
+  ) {
+    return false;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor('#ff0000')
+    .setAuthor({
+      name: 'Vanessa',
+    })
+    .setDescription(
+      "You're restricted from using Vanessa."
+    )
+    .setFooter({
+      text:
+        'Contact the server owner if you think this is a mistake.',
+    });
+
+  await message
+    .reply({
+      embeds: [embed],
+    })
+    .catch(() => {});
+
+  return true;
+}
+
+// ============================================================
+// PREPARE MESSAGE FOR COMMAND
+// ============================================================
+
+function prepareMessage(
+  client,
+  message,
+  command
+) {
+  const prefix =
+    getCurrentPrefix(
+      client,
+      message.guild?.id
+    );
+
+  message.prefix = prefix;
+
+  message.commandName =
+    command.name;
+
+  message.createEmbed = (opts) =>
+    universalHelper.createEmbed(
+      client,
+      message,
+      opts
+    );
+
+  universalHelper.patchMessageReply(
+    message
+  );
+}
+
+// ============================================================
+// EXECUTE COMMAND SAFELY
+// ============================================================
+
+async function executeCommand(
+  client,
+  message,
+  command,
+  args
+) {
+  prepareMessage(
+    client,
+    message,
+    command
+  );
+
+  try {
+    await command.execute(
+      client,
+      message,
+      args
+    );
+  } catch (error) {
+    console.error(
+      `[Command Error] ${command.name}`,
+      error
+    );
+
+    await message
+      .reply(
+        'Something went wrong while running that command.'
+      )
+      .catch(() => {});
+  }
+}
+
+// ============================================================
+// HANDLE MESSAGE
+// ============================================================
+
+async function handleMessage(
+  client,
+  message
+) {
+  // Ignore bots
+  if (message.author.bot) return;
+
+  // Remove replied-to user's mention
+  stripReplyMentions(message);
+
+  const content =
+    message.content?.trim();
+
+  if (!content) return;
+
+  // ==========================================================
+  // IMPORTANT:
+  // AFK logic is handled separately in afk.js
+  // Do NOT put AFK handling here.
+  // ==========================================================
+
+  const prefix =
+    getCurrentPrefix(
+      client,
+      message.guild?.id
+    );
+
+  const isPrefixed =
+    content.startsWith(prefix);
+
+  // ==========================================================
+  // PREFIXLESS COMMANDS
+  // ==========================================================
+
+  if (
+    !isPrefixed &&
+    client.prefixless?.has(
+      message.author.id
+    )
+  ) {
+    const parts =
+      content.split(/\s+/);
+
+    const cmdName =
+      parts.shift()?.toLowerCase();
+
+    if (!cmdName) return;
+
+    const command =
+      client.commands.get(cmdName) ||
+      client.aliases.get(cmdName);
+
+    if (!command) return;
+
+    // Check bot blacklist
+    if (
+      await checkBotBlacklist(
+        client,
+        message
+      )
+    ) {
+      return;
+    }
+
+    await executeCommand(
+      client,
+      message,
+      command,
+      parts
+    );
+
+    return;
+  }
+
+  // ==========================================================
+  // PREFIXED COMMANDS
+  // ==========================================================
+
+  if (!isPrefixed) return;
+
+  const commandText =
+    content
+      .slice(prefix.length)
+      .trim();
+
+  if (!commandText) return;
+
+  const args =
+    commandText.split(/\s+/);
+
+  const cmdName =
+    args.shift()?.toLowerCase();
+
+  if (!cmdName) return;
+
+  const command =
+    client.commands.get(cmdName) ||
+    client.aliases.get(cmdName);
+
+  if (!command) return;
+
+  // Check bot blacklist
+  if (
+    await checkBotBlacklist(
+      client,
+      message
+    )
+  ) {
+    return;
+  }
+
+  await executeCommand(
+    client,
+    message,
+    command,
+    args
+  );
+}
+
+// ============================================================
+// EXPORTS
+// ============================================================
+
+module.exports = {
+  loadCommands,
+  handleMessage,
+};
