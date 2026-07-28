@@ -1,23 +1,19 @@
 const { EmbedBuilder } = require('discord.js');
 
-const DEFAULT_COLOR = '#FF69B4'; // Hot Pink (darker than FF6C1)
-const ROLES_INFO_COLOR = '#FF69B4'; // Also same color
+const DEFAULT_COLOR = '#FF69B4';
+const ROLES_INFO_COLOR = '#FF69B4';
 
-// Create embed with dynamic prefix
 function createEmbed(client, message, options = {}) {
-    // Get current prefix for this guild
     const prefix = client.getPrefix(message.guild?.id) || '!';
 
     const embed = new EmbedBuilder()
-        .setColor(DEFAULT_COLOR); // Hot pink
+        .setColor(DEFAULT_COLOR);
 
-    // Helper to replace $ prefixes with current prefix
     const fixPrefixInText = (text) => {
         if (typeof text !== 'string') return text;
-        return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
+        return text.replace(/\$([a-zA-Z0-9])/g, (_match, letter) => `${prefix}${letter}`);
     };
 
-    // Apply options
     if (options.title) embed.setTitle(fixPrefixInText(options.title));
     if (options.description) embed.setDescription(fixPrefixInText(options.description));
     if (options.fields) {
@@ -56,44 +52,35 @@ function createEmbed(client, message, options = {}) {
     return embed;
 }
 
-// Patch reply method for auto-fixing embeds AND text
 function patchMessageReply(message) {
     if (!message || message._replyPatched) return;
 
     const originalReply = message.reply.bind(message);
     const prefix = message.prefix || '!';
 
-    // Helper to fix prefixes in any text
     const fixText = (text) => {
         if (typeof text !== 'string') return text;
-        return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
+        return text.replace(/\$([a-zA-Z0-9])/g, (_match, letter) => `${prefix}${letter}`);
     };
 
     message.reply = async function(content, options) {
-        // If content is a string (plain text), fix prefixes
         if (typeof content === 'string') {
             content = fixText(content);
         }
-        // If content is an object with string content
         else if (content && typeof content === 'object' && content.content) {
             content.content = fixText(content.content);
         }
 
-        // Fix embeds in content
         if (content && content.embeds) {
             content.embeds = content.embeds.map(embed => {
-                // CHECK FOR BYPASS FLAG - if present, don't modify the embed
                 if (embed._bypassUniversalHelper) {
                     return embed;
                 }
 
                 if (embed.data) {
                     const fixedEmbed = new EmbedBuilder(embed.data);
-
-                    // Set hot pink color
                     fixedEmbed.setColor(DEFAULT_COLOR);
 
-                    // Fix prefixes in text fields
                     if (embed.data.title) fixedEmbed.setTitle(fixText(embed.data.title));
                     if (embed.data.description) fixedEmbed.setDescription(fixText(embed.data.description));
                     if (embed.data.fields) {
@@ -124,10 +111,9 @@ function patchMessageReply(message) {
     message._replyPatched = true;
 }
 
-// Simple prefix fix function
 function fixPrefixes(text, prefix) {
     if (typeof text !== 'string') return text;
-    return text.replace(/\$([a-zA-Z0-9])/g, `${prefix}$1`);
+    return text.replace(/\$([a-zA-Z0-9])/g, (_match, letter) => `${prefix}${letter}`);
 }
 
 module.exports = {
