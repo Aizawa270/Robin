@@ -7,6 +7,7 @@ const {
 
 const {
   getSettings,
+  parseChannelIdList,
 } = require('./welcomeStore');
 
 function spaced(text) {
@@ -35,26 +36,10 @@ function titleFromChannelName(name) {
     .trim()
     .split(' ')
     .map(word =>
-      word
-        ? word[0].toUpperCase() + word.slice(1)
-        : word
+      word ? word[0].toUpperCase() + word.slice(1) : word
     )
     .join(' ');
 }
-
-/*
-============================================================
-NORMAL WELCOME EMBED
-============================================================
-
-- NO separate ping outside the embed.
-- User is pinged INSIDE the embed at the very top.
-- Server name is ALWAYS displayed as:
-
-R A V I N E
-
-============================================================
-*/
 
 function buildMainWelcomeEmbed(member, settings) {
   const guild = member.guild;
@@ -84,26 +69,29 @@ function buildMainWelcomeEmbed(member, settings) {
     '#chat'
   );
 
-  // Hardcoded exactly how you wanted it.
-  const formattedGuildName = spaced('RAVINE');
+  // This makes:
+  // RAVINE
+  // become:
+  // R A V I N E
+  const formattedGuildName = spaced(guild.name);
 
   const embed = new EmbedBuilder()
     .setColor('#8b2e2e')
 
-    // User shown at the top of the embed
+    // Username is displayed at the top.
+    // This is NOT a mention because it is plain text.
     .setAuthor({
       name: member.user.username,
       iconURL: memberAvatar,
     })
 
+    // Server icon stays on the right side.
     .setThumbnail(
       serverIcon || memberAvatar
     )
 
     .setDescription(
-`<@${member.id}>
-
-╭━━━━━⚚━━━━━∙⋆⋅⋆∙━━━━━⚚━━━━━╮
+`╭━━━━━⚚━━━━━∙⋆⋅⋆∙━━━━━⚚━━━━━╮
 ㅤㅤㅤㅤㅤ𝓦𝓮𝓵𝓬𝓸𝓶𝓮 𝓣𝓸
 ㅤㅤㅤㅤㅤ『 ${formattedGuildName} 』
 
@@ -120,27 +108,15 @@ function buildMainWelcomeEmbed(member, settings) {
 
 You are the **${ordinal(guild.memberCount)}** member of the server!`
     )
-
     .setTimestamp();
 
+  // Bottom welcome image
   if (settings.welcome_image_url) {
-    embed.setImage(
-      settings.welcome_image_url
-    );
+    embed.setImage(settings.welcome_image_url);
   }
 
   return embed;
 }
-
-/*
-============================================================
-CHAT WELCOME EMBED
-============================================================
-
-The separate ping BEFORE the embed stays here.
-
-============================================================
-*/
 
 function buildChatWelcomeEmbed(member) {
   const guild = member.guild;
@@ -152,269 +128,201 @@ function buildChatWelcomeEmbed(member) {
 
   return new EmbedBuilder()
     .setColor('#8b2e2e')
-
     .setAuthor({
       name: `${member.user.username} has entered ${guild.name}!`,
       iconURL: memberAvatar,
     })
-
     .setTitle(`${guild.name} | Welcome`)
-
     .setDescription(
       `Welcome to **${guild.name}**, ${member}!\n\n` +
       `You are our **${ordinal(guild.memberCount)}** member!\n\n` +
       `Feel free to explore the server and meet everyone.\n\n` +
       `Click the buttons below to get started.`
     )
-
     .setThumbnail(memberAvatar)
     .setTimestamp();
 }
 
-/*
-============================================================
-WELCOME CHAT BUTTONS
-============================================================
-
-The new setup:
-
-$welcomechat redirect #channel1 #channel2 #channel3
-
-Maps them in order:
-
-1 = Roles
-2 = Intro
-3 = Commands
-4 = Giveaways
-5 = VC
-
-============================================================
-*/
-
 function buildButtons(guild, settings) {
   const buttons = [];
 
-  const redirectChannels = [
-    {
-      label: 'Roles',
-      id: settings.redirect_roles_channel_id,
-    },
-    {
-      label: 'Intro',
-      id: settings.redirect_intro_channel_id,
-    },
-    {
-      label: 'Commands',
-      id: settings.redirect_commands_channel_id,
-    },
-    {
-      label: 'Giveaways',
-      id: settings.redirect_giveaways_channel_id,
-    },
-    {
-      label: 'VC',
-      id: settings.redirect_vc_channel_id,
-    },
-  ];
+  const addButton = (label, channelId) => {
+    if (!channelId) return;
 
-  for (const redirect of redirectChannels) {
-    if (!redirect.id) continue;
+    const channel = guild.channels.cache.get(channelId);
 
-    const channel = guild.channels.cache.get(
-      redirect.id
-    );
-
-    if (!channel) continue;
+    if (!channel) return;
 
     buttons.push(
       new ButtonBuilder()
-        .setLabel(redirect.label)
+        .setLabel(label)
         .setStyle(ButtonStyle.Link)
         .setURL(
           `https://discord.com/channels/${guild.id}/${channel.id}`
         )
     );
+  };
+
+  // New multi-channel redirect system
+  const redirectIds = parseChannelIdList(
+    settings.redirect_channel_ids
+  );
+
+  // Legacy fallback
+  if (!redirectIds.length) {
+    const legacyIds = [
+      settings.redirect_roles_channel_id,
+      settings.redirect_intro_channel_id,
+      settings.redirect_commands_channel_id,
+      settings.redirect_giveaways_channel_id,
+      settings.redirect_vc_channel_id,
+    ].filter(Boolean);
+
+    for (const channelId of legacyIds) {
+      if (!redirectIds.includes(channelId)) {
+        redirectIds.push(channelId);
+      }
+    }
   }
 
-  // Ping button
+  // Create one button for every redirect channel
+  for (const channelId of redirectIds) {
+    const channel = guild.channels.cache.get(channelId);
+
+    if (!channel) continue;
+
+    addButton(
+      titleFromChannelName(channel.name),
+      channel.id
+    );
+  }
+
+  // Ping button remains separate
   if (settings.ping_channel_id) {
-    const pingChannel = guild.channels.cache.get(
+    addButton(
+      'Ping',
       settings.ping_channel_id
     );
-
-    if (pingChannel) {
-      buttons.push(
-        new ButtonBuilder()
-          .setLabel('Ping')
-          .setStyle(ButtonStyle.Link)
-          .setURL(
-            `https://discord.com/channels/${guild.id}/${pingChannel.id}`
-          )
-      );
-    }
   }
 
   if (!buttons.length) {
     return [];
   }
 
-  /*
-  Discord allows max 5 buttons per ActionRow.
-  */
-
+  // Discord allows max 5 buttons per row
   const rows = [];
 
-  for (
-    let i = 0;
-    i < buttons.length;
-    i += 5
-  ) {
+  for (let i = 0; i < buttons.length; i += 5) {
     rows.push(
-      new ActionRowBuilder()
-        .addComponents(
-          buttons.slice(i, i + 5)
-        )
+      new ActionRowBuilder().addComponents(
+        buttons.slice(i, i + 5)
+      )
     );
   }
 
   return rows;
 }
 
-/*
-============================================================
-EVENT HANDLER
-============================================================
-*/
-
 module.exports = (client) => {
+  client.on('guildMemberAdd', async (member) => {
+    try {
+      const settings = getSettings(
+        member.guild.id
+      );
 
-  client.on(
-    'guildMemberAdd',
-    async (member) => {
+      if (!settings) return;
 
-      try {
-        const settings = getSettings(
-          member.guild.id
-        );
+      const guild = member.guild;
 
-        if (!settings) return;
+      // ==========================================
+      // MAIN WELCOME EMBED
+      // ==========================================
+      // NO USER PING HERE.
+      // Username is only displayed as plain text
+      // at the top of the embed via setAuthor().
+      // ==========================================
 
-        const guild = member.guild;
+      if (settings.welcome_channel_id) {
+        const welcomeChannel =
+          guild.channels.cache.get(
+            settings.welcome_channel_id
+          );
 
-        /*
-        ====================================================
-        NORMAL WELCOME
-        ====================================================
-
-        IMPORTANT:
-        There is NO content: member here.
-
-        Therefore:
-        ❌ No separate ping above the embed.
-
-        The ping is INSIDE the embed description.
-        ====================================================
-        */
-
-        if (settings.welcome_channel_id) {
-
-          const welcomeChannel =
-            guild.channels.cache.get(
-              settings.welcome_channel_id
+        if (welcomeChannel) {
+          const embed =
+            buildMainWelcomeEmbed(
+              member,
+              settings
             );
 
-          if (welcomeChannel) {
-
-            const embed =
-              buildMainWelcomeEmbed(
-                member,
-                settings
+          await welcomeChannel
+            .send({
+              embeds: [embed],
+            })
+            .catch((error) => {
+              console.error(
+                '[Welcome] Failed to send main welcome:',
+                error
               );
-
-            await welcomeChannel
-              .send({
-                embeds: [embed],
-              })
-              .catch((error) => {
-                console.error(
-                  '[Welcome] Failed to send main welcome:',
-                  error
-                );
-              });
-          }
+            });
         }
-
-        /*
-        ====================================================
-        CHAT WELCOME
-        ====================================================
-
-        This one DOES ping the user separately.
-
-        ====================================================
-        */
-
-        if (
-          settings.welcome_chat_channel_id
-        ) {
-
-          const chatChannel =
-            guild.channels.cache.get(
-              settings.welcome_chat_channel_id
-            );
-
-          if (chatChannel) {
-
-            const embed =
-              buildChatWelcomeEmbed(
-                member
-              );
-
-            const components =
-              buildButtons(
-                guild,
-                settings
-              );
-
-            await chatChannel
-              .send({
-                content: `<@${member.id}>`,
-
-                allowedMentions: {
-                  users: [
-                    member.id,
-                  ],
-                },
-
-                embeds: [
-                  embed,
-                ],
-
-                components,
-              })
-              .catch((error) => {
-                console.error(
-                  '[Welcome] Failed to send chat welcome:',
-                  error
-                );
-              });
-          }
-        }
-
-        console.log(
-          `[Welcome] Sent for ${member.user.tag} in ${guild.name}`
-        );
-
-      } catch (error) {
-
-        console.error(
-          '[Welcome] Error:',
-          error
-        );
-
       }
+
+      // ==========================================
+      // CHAT WELCOME
+      // ==========================================
+      // THIS ONE STILL PINGS THE USER SEPARATELY.
+      // ==========================================
+
+      if (settings.welcome_chat_channel_id) {
+        const chatChannel =
+          guild.channels.cache.get(
+            settings.welcome_chat_channel_id
+          );
+
+        if (chatChannel) {
+          const embed =
+            buildChatWelcomeEmbed(member);
+
+          const components =
+            buildButtons(
+              guild,
+              settings
+            );
+
+          await chatChannel
+            .send({
+              // Separate ping outside the embed
+              content: `<@${member.id}>`,
+
+              allowedMentions: {
+                users: [member.id],
+              },
+
+              embeds: [embed],
+
+              components,
+            })
+            .catch((error) => {
+              console.error(
+                '[Welcome] Failed to send chat welcome:',
+                error
+              );
+            });
+        }
+      }
+
+      console.log(
+        `[Welcome] Sent for ${member.user.tag} in ${guild.name}`
+      );
+
+    } catch (error) {
+      console.error(
+        '[Welcome] Error:',
+        error
+      );
     }
-  );
+  });
 
   console.log(
     '🎉 Configurable welcome system initialized'
