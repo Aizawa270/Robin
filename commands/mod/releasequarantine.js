@@ -101,11 +101,25 @@ async function resolveUser(message, input) {
   return message.client.users.fetch(raw).catch(() => null);
 }
 
+function isThreadChannel(channel) {
+  return typeof channel?.isThread === 'function' && channel.isThread();
+}
+
+function runBackground(fn) {
+  setImmediate(() => {
+    Promise.resolve()
+      .then(fn)
+      .catch(err => console.error('[ReleaseQuarantine] Background task error:', err));
+  });
+}
+
 async function removeMemberQuarantineLock(guild, memberId) {
   const failed = [];
+  const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
 
-  for (const channel of guild.channels.cache.values()) {
-    if (!channel?.permissionOverwrites?.delete) continue;
+  for (const channel of channels.values()) {
+    if (!channel || isThreadChannel(channel)) continue;
+    if (!channel.permissionOverwrites?.delete) continue;
 
     try {
       await channel.permissionOverwrites.delete(memberId);
@@ -232,15 +246,22 @@ module.exports = {
 
         await member.roles.set([...rolesToRestore, ...managedRoles]);
 
-        await removeMemberQuarantineLock(message.guild, member.id);
-
         client.quarantineDB
           .prepare('DELETE FROM quarantine WHERE user_id = ?')
           .run(member.id);
 
-        return message.reply({
+        await message.reply({
           embeds: [makeEmbed('#34d399', 'Quarantine Fixed', `Fixed quarantine mismatch for **${member.user.tag}** and restored their roles.`)],
         });
+
+        runBackground(async () => {
+          const failed = await removeMemberQuarantineLock(message.guild, member.id);
+          if (failed.length) {
+            console.warn(`[ReleaseQuarantine] Some member overwrites failed to clear for ${targetUser.tag}:`, failed);
+          }
+        });
+
+        return;
       } catch (err) {
         console.error('Fix quarantine mismatch error:', err);
         return message.reply({
@@ -274,8 +295,6 @@ module.exports = {
       } else {
         await member.roles.remove(quarantineRole.id);
       }
-
-      await removeMemberQuarantineLock(message.guild, member.id);
     } catch (err) {
       console.error('Release quarantine error:', err);
       return message.reply({
@@ -283,11 +302,18 @@ module.exports = {
       });
     }
 
-    return message.reply({
+    await message.reply({
       embeds: [
         makeEmbed('#34d399', 'Quarantine Released', `Successfully removed **${targetUser.tag}** from quarantine.`)
           .setThumbnail(targetUser.displayAvatarURL({ size: 1024 })),
       ],
+    });
+
+    runBackground(async () => {
+      const failed = await removeMemberQuarantineLock(message.guild, member.id);
+      if (failed.length) {
+        console.warn(`[ReleaseQuarantine] Some member overwrites failed to clear for ${targetUser.tag}:`, failed);
+      }
     });
   },
 };
