@@ -189,8 +189,9 @@ function isVoiceLikeChannel(channel) {
 
 async function applyQuarantineServerPermissions(guild, quarantineChannelId, roleId) {
   const failedChannels = [];
+  const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
 
-  for (const channel of guild.channels.cache.values()) {
+  for (const channel of channels.values()) {
     if (!channel || isThreadChannel(channel)) continue;
     if (!channel.permissionOverwrites?.edit) continue;
 
@@ -245,56 +246,19 @@ async function applyQuarantineServerPermissions(guild, quarantineChannelId, role
   return failedChannels;
 }
 
-async function applyMemberQuarantineLock(guild, memberId, quarantineChannelId) {
+async function clearMemberOverwrites(guild, memberId) {
   const failedChannels = [];
+  const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
 
-  for (const channel of guild.channels.cache.values()) {
+  for (const channel of channels.values()) {
     if (!channel || isThreadChannel(channel)) continue;
-    if (!channel.permissionOverwrites?.edit) continue;
+    if (!channel.permissionOverwrites?.delete) continue;
 
     try {
-      if (channel.id === quarantineChannelId) {
-        const allow = { ViewChannel: true };
-
-        if (isTextLikeChannel(channel)) {
-          allow.SendMessages = true;
-          allow.ReadMessageHistory = true;
-          allow.AttachFiles = true;
-          allow.EmbedLinks = true;
-          allow.AddReactions = true;
-          allow.UseExternalEmojis = true;
-        }
-
-        if (isVoiceLikeChannel(channel)) {
-          allow.Connect = true;
-          allow.Speak = true;
-          allow.Stream = true;
-          allow.UseVAD = true;
-        }
-
-        await channel.permissionOverwrites.edit(memberId, allow);
-      } else {
-        const deny = {
-          ViewChannel: false,
-        };
-
-        if (isTextLikeChannel(channel)) {
-          deny.SendMessages = false;
-          deny.ReadMessageHistory = false;
-        }
-
-        if (isVoiceLikeChannel(channel)) {
-          deny.Connect = false;
-          deny.Speak = false;
-          deny.Stream = false;
-          deny.UseVAD = false;
-        }
-
-        await channel.permissionOverwrites.edit(memberId, deny);
-      }
+      await channel.permissionOverwrites.delete(memberId);
     } catch (err) {
       failedChannels.push(channel.id);
-      console.error(`[Quarantine] Failed to lock member perms for channel ${channel.name} (${channel.id}):`, err);
+      console.error(`[Quarantine] Failed to clear member overwrite for ${channel.name} (${channel.id}):`, err);
     }
   }
 
@@ -637,15 +601,15 @@ async function handleQuarantine(client, message, args) {
     });
   }
 
-  const lockResult = await applyMemberQuarantineLock(message.guild, member.id, cfg.channel_id);
+  const clearResult = await clearMemberOverwrites(message.guild, member.id);
 
-  if (lockResult.length) {
+  if (clearResult.length) {
     return message.reply({
       embeds: [
         makeEmbed(
           '#f59e0b',
           'Quarantine Applied',
-          `**${targetUser.tag}** was quarantined, but some channel locks failed. Check my permissions/role hierarchy.`
+          `**${targetUser.tag}** was quarantined, but some old member overwrites could not be cleared. Check my permissions/role hierarchy.`
         ).setThumbnail(targetUser.displayAvatarURL({ size: 1024 })),
       ],
     });
