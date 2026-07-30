@@ -62,11 +62,11 @@ function resolveTextChannel(guild, input) {
   const byId = guild.channels.cache.get(cleaned);
   if (
     byId &&
-    (byId.type === ChannelType.GuildText || byId.type === ChannelType.GuildAnnouncement)
+    (byId.type === ChannelType.GuildText || byId.type === ChannelType.GuildAnnouncement || byId.type === ChannelType.GuildForum)
   ) return byId;
 
   const byName = guild.channels.cache.find(ch =>
-    (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildAnnouncement) &&
+    (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildAnnouncement || ch.type === ChannelType.GuildForum) &&
     ch.name.toLowerCase() === cleaned.toLowerCase()
   );
 
@@ -166,21 +166,87 @@ function canUseQuarantineCommands(client, member) {
   return hasAccessEntry(client, member.guild.id, member);
 }
 
-async function applyQuarantineChannelPermissions(channel, roleId) {
-  const guild = channel.guild;
+function isThreadChannel(channel) {
+  return typeof channel?.isThread === 'function' && channel.isThread();
+}
 
-  await channel.permissionOverwrites.edit(guild.roles.everyone, {
-    ViewChannel: false,
-  });
+function isTextLikeChannel(channel) {
+  return (
+    channel.type === ChannelType.GuildText ||
+    channel.type === ChannelType.GuildAnnouncement ||
+    channel.type === ChannelType.GuildForum
+  );
+}
 
-  await channel.permissionOverwrites.edit(roleId, {
-    ViewChannel: true,
-    SendMessages: true,
-    ReadMessageHistory: true,
-    AttachFiles: true,
-    EmbedLinks: true,
-    AddReactions: true,
-  });
+function isVoiceLikeChannel(channel) {
+  return (
+    channel.type === ChannelType.GuildVoice ||
+    channel.type === ChannelType.GuildStageVoice
+  );
+}
+
+async function applyQuarantineServerPermissions(guild, quarantineChannelId, roleId) {
+  const failedChannels = [];
+
+  for (const channel of guild.channels.cache.values()) {
+    if (!channel || isThreadChannel(channel)) continue;
+    if (!channel.permissionOverwrites?.edit) continue;
+
+    try {
+      if (channel.id === quarantineChannelId) {
+        // Make quarantine channel visible to quarantined users
+        await channel.permissionOverwrites.edit(guild.roles.everyone, {
+          ViewChannel: false,
+        });
+
+        const allow = {
+          ViewChannel: true,
+        };
+
+        if (isTextLikeChannel(channel)) {
+          allow.SendMessages = true;
+          allow.ReadMessageHistory = true;
+          allow.AttachFiles = true;
+          allow.EmbedLinks = true;
+          allow.AddReactions = true;
+          allow.UseExternalEmojis = true;
+        }
+
+        if (isVoiceLikeChannel(channel)) {
+          allow.Connect = true;
+          allow.Speak = true;
+          allow.Stream = true;
+          allow.UseVAD = true;
+        }
+
+        await channel.permissionOverwrites.edit(roleId, allow);
+      } else {
+        // Hide every other channel from quarantined users
+        const deny = {
+          ViewChannel: false,
+        };
+
+        if (isTextLikeChannel(channel)) {
+          deny.SendMessages = false;
+          deny.ReadMessageHistory = false;
+        }
+
+        if (isVoiceLikeChannel(channel)) {
+          deny.Connect = false;
+          deny.Speak = false;
+          deny.Stream = false;
+          deny.UseVAD = false;
+        }
+
+        await channel.permissionOverwrites.edit(roleId, deny);
+      }
+    } catch (err) {
+      failedChannels.push(channel.id);
+      console.error(`[Quarantine] Failed to update permissions for channel ${channel.name} (${channel.id}):`, err);
+    }
+  }
+
+  return failedChannels;
 }
 
 function buildHelp(prefix) {
@@ -259,16 +325,15 @@ async function handleSetup(client, message, args) {
 
   setQuarantineSettings(client, message.guild.id, channel.id, role.id);
 
-  try {
-    await applyQuarantineChannelPermissions(channel, role.id);
-  } catch (err) {
-    console.error('[Quarantine] channel permission setup failed:', err);
+  const failedChannels = await applyQuarantineServerPermissions(message.guild, channel.id, role.id);
+
+  if (failedChannels.length) {
     return message.reply({
       embeds: [
         makeEmbed(
           '#f59e0b',
-          'Quarantine Setup Saved',
-          `Saved config for ${channel} and ${role}, but I could not apply channel permissions.\nCheck my permissions and role hierarchy.`
+          'Quarantine Setup Complete',
+          `Quarantine channel set to ${channel}\nQuarantine role set to ${role}\n\nI updated most channels, but some channels failed. Check my permissions and role hierarchy.`
         ),
       ],
     });
@@ -279,7 +344,7 @@ async function handleSetup(client, message, args) {
       makeEmbed(
         '#22c55e',
         'Quarantine Setup Complete',
-        `Quarantine channel set to ${channel}\nQuarantine role set to ${role}`
+        `Quarantine channel set to ${channel}\nQuarantine role set to ${role}\n\nQuarantined users will only see the quarantine channel now.`
       ),
     ],
   });
@@ -311,7 +376,11 @@ function parseAccessTarget(message, args) {
     const cleaned = String(raw).replace(/[<@!>]/g, '');
     if (!cleaned) return null;
 
-    return { type: 'user', id: cleaned, label: `<@${cleaned}>` };
+    return {
+      type: 'user',
+      id: cleaned,
+      label: `<@${cleaned}>`,
+    };
   }
 
   const role = resolveRole(message.guild, raw);
@@ -320,7 +389,11 @@ function parseAccessTarget(message, args) {
   const cleaned = String(raw).replace(/[<@!>]/g, '');
   if (!cleaned) return null;
 
-  return { type: 'user', id: cleaned, label: `<@${cleaned}>` };
+  return {
+    type: 'user',
+    id: cleaned,
+    label: `<@${cleaned}>`,
+  };
 }
 
 async function handleAccess(client, message, args) {
