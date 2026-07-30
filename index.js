@@ -45,7 +45,31 @@ console.log(`[BotBlacklist] Loaded ${client.botBlacklist.size} entries`);
 // Quarantine DB
 const quarantineDB = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
 quarantineDB.pragma('journal_mode = WAL');
-quarantineDB.prepare('CREATE TABLE IF NOT EXISTS quarantine (user_id TEXT PRIMARY KEY, roles TEXT)').run();
+
+quarantineDB.prepare(`
+CREATE TABLE IF NOT EXISTS quarantine (
+    user_id TEXT PRIMARY KEY,
+    roles TEXT
+)
+`).run();
+
+quarantineDB.prepare(`
+CREATE TABLE IF NOT EXISTS quarantine_settings (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    role_id TEXT NOT NULL
+)
+`).run();
+
+quarantineDB.prepare(`
+CREATE TABLE IF NOT EXISTS quarantine_access (
+    guild_id TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    PRIMARY KEY (guild_id, target_type, target_id)
+)
+`).run();
+
 client.quarantineDB = quarantineDB;
 
 // Giveaways DB
