@@ -117,19 +117,19 @@ function escapeRegex(str) {
 /**
  * Build a regex that matches the blacklisted phrase as a standalone word/phrase.
  * - Uses \b word boundaries to ensure it's not part of a larger word
- * - For multi-word phrases, splits on whitespace and joins with \s+ 
+ * - For multi-word phrases, splits on whitespace and joins with \s+
  * - Example: "niger" won't match "nigeria" because of word boundaries
  * - Flags: i (case-insensitive)
  */
 function buildWholeWordRegex(phrase) {
   const trimmed = String(phrase).trim().toLowerCase();
-  
+
   // Split on whitespace and escape each token
   const tokens = trimmed.split(/\s+/).map(escapeRegex);
-  
+
   // Join with \s+ to allow any whitespace between words
   const pattern = tokens.join('\\s+');
-  
+
   // Use word boundaries \b to ensure it's a complete word
   // This prevents "niger" from matching inside "nigeria"
   return new RegExp(`\\b${pattern}\\b`, 'i');
@@ -303,8 +303,39 @@ async function checkMessage(client, message) {
       // Check if user has Create Invite permission
       if (!message.member.permissions.has(PermissionFlagsBits.CreateInstantInvite)) {
         await message.delete().catch(() => {});
-        try { logModAction(client, guildId, 'AUTOMOD-SYSTEM', message.author.id, 'delete', 'discord invite link'); } catch {}
-        await sendAutomodAlert(client, message.guild, message.author, 'Discord Invite Link', message.channel.id, message.content);
+
+        // Timeout for 1 hour
+        try {
+          if (message.member?.moderatable) {
+            await message.member.timeout(
+              60 * 60 * 1000,
+              'Automod: Discord invite link'
+            );
+
+            try {
+              logModAction(
+                client,
+                guildId,
+                'AUTOMOD-SYSTEM',
+                message.author.id,
+                'mute',
+                'Discord invite link',
+                '1h'
+              );
+            } catch {}
+          }
+        } catch (err) {
+          console.error('[Automod] Invite timeout failed:', err);
+        }
+
+        await sendAutomodAlert(
+          client,
+          message.guild,
+          message.author,
+          'Discord Invite Link',
+          message.channel.id,
+          message.content
+        );
         return;
       }
     }
