@@ -101,6 +101,23 @@ async function resolveUser(message, input) {
   return message.client.users.fetch(raw).catch(() => null);
 }
 
+async function removeMemberQuarantineLock(guild, memberId) {
+  const failed = [];
+
+  for (const channel of guild.channels.cache.values()) {
+    if (!channel?.permissionOverwrites?.delete) continue;
+
+    try {
+      await channel.permissionOverwrites.delete(memberId);
+    } catch (err) {
+      failed.push(channel.id);
+      console.error(`[ReleaseQuarantine] Failed to remove member overwrite in ${channel.name} (${channel.id}):`, err);
+    }
+  }
+
+  return failed;
+}
+
 function buildHelp(prefix) {
   return new EmbedBuilder()
     .setColor('#22c55e')
@@ -204,7 +221,6 @@ module.exports = {
       }
     }
 
-    // Mismatch fix
     if (dbRow && !member.roles.cache.has(quarantineRole.id)) {
       try {
         const rolesToRestore = JSON.parse(dbRow.roles || '[]')
@@ -215,6 +231,8 @@ module.exports = {
         );
 
         await member.roles.set([...rolesToRestore, ...managedRoles]);
+
+        await removeMemberQuarantineLock(message.guild, member.id);
 
         client.quarantineDB
           .prepare('DELETE FROM quarantine WHERE user_id = ?')
@@ -256,6 +274,8 @@ module.exports = {
       } else {
         await member.roles.remove(quarantineRole.id);
       }
+
+      await removeMemberQuarantineLock(message.guild, member.id);
     } catch (err) {
       console.error('Release quarantine error:', err);
       return message.reply({
