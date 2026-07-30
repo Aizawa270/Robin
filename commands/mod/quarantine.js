@@ -477,6 +477,28 @@ async function handleAccess(client, message, args) {
   });
 }
 
+function quarantineRoleIds(member, quarantineRoleId) {
+  const rolesToSave = [];
+  member.roles.cache.forEach(role => {
+    if (
+      role.id !== member.guild.id &&
+      !role.managed &&
+      role.id !== quarantineRoleId
+    ) {
+      rolesToSave.push(role.id);
+    }
+  });
+  return rolesToSave;
+}
+
+function runBackground(fn) {
+  setImmediate(() => {
+    Promise.resolve()
+      .then(fn)
+      .catch(err => console.error('[Quarantine] Background task error:', err));
+  });
+}
+
 async function handleQuarantine(client, message, args) {
   const prefix = client.getPrefix(message.guild.id);
 
@@ -571,16 +593,7 @@ async function handleQuarantine(client, message, args) {
       .run(member.id);
   }
 
-  const rolesToSave = [];
-  member.roles.cache.forEach(role => {
-    if (
-      role.id !== message.guild.id &&
-      !role.managed &&
-      role.id !== quarantineRole.id
-    ) {
-      rolesToSave.push(role.id);
-    }
-  });
+  const rolesToSave = quarantineRoleIds(member, quarantineRole.id);
 
   client.quarantineDB.prepare(
     'INSERT OR REPLACE INTO quarantine (user_id, roles) VALUES (?, ?)'
@@ -601,25 +614,18 @@ async function handleQuarantine(client, message, args) {
     });
   }
 
-  const clearResult = await clearMemberOverwrites(message.guild, member.id);
-
-  if (clearResult.length) {
-    return message.reply({
-      embeds: [
-        makeEmbed(
-          '#f59e0b',
-          'Quarantine Applied',
-          `**${targetUser.tag}** was quarantined, but some old member overwrites could not be cleared. Check my permissions/role hierarchy.`
-        ).setThumbnail(targetUser.displayAvatarURL({ size: 1024 })),
-      ],
-    });
-  }
-
-  return message.reply({
+  await message.reply({
     embeds: [
       makeEmbed('#f87171', 'Quarantine Success', `Successfully sent **${targetUser.tag}** to quarantine.`)
         .setThumbnail(targetUser.displayAvatarURL({ size: 1024 })),
     ],
+  });
+
+  runBackground(async () => {
+    const clearResult = await clearMemberOverwrites(message.guild, member.id);
+    if (clearResult.length) {
+      console.warn(`[Quarantine] Some member overwrites failed to clear for ${targetUser.tag}:`, clearResult);
+    }
   });
 }
 
