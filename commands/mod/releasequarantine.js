@@ -52,9 +52,9 @@ function canBypassHierarchy(client, member) {
   return false;
 }
 
-function getQuarantineConfig(client, guildId) {
+function getQuarantineSettings(client, guildId) {
   return client.quarantineDB
-    .prepare('SELECT channel_id, role_id FROM quarantine_config WHERE guild_id = ?')
+    .prepare('SELECT channel_id, role_id FROM quarantine_settings WHERE guild_id = ?')
     .get(guildId) || null;
 }
 
@@ -86,7 +86,7 @@ function canUseQuarantineCommands(client, member) {
   return hasAccessEntry(client, member.guild.id, member);
 }
 
-function resolveUser(message, input) {
+async function resolveUser(message, input) {
   if (!input) return null;
 
   const mention = message.mentions.users.first();
@@ -143,7 +143,7 @@ module.exports = {
       });
     }
 
-    const cfg = getQuarantineConfig(client, message.guild.id);
+    const cfg = getQuarantineSettings(client, message.guild.id);
     if (!cfg?.role_id) {
       return message.reply({
         embeds: [makeEmbed('#f59e0b', 'Release Failed', `Quarantine is not set up yet. Use \`${prefix}quarantineset #channel @role\`.`)],
@@ -204,7 +204,7 @@ module.exports = {
       }
     }
 
-    // Mismatch fix: DB exists but role is missing
+    // Mismatch fix
     if (dbRow && !member.roles.cache.has(quarantineRole.id)) {
       try {
         const rolesToRestore = JSON.parse(dbRow.roles || '[]')
@@ -254,7 +254,6 @@ module.exports = {
           .prepare('DELETE FROM quarantine WHERE user_id = ?')
           .run(member.id);
       } else {
-        // No backup row, so just remove the quarantine role.
         await member.roles.remove(quarantineRole.id);
       }
     } catch (err) {
