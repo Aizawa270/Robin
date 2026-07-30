@@ -62,11 +62,13 @@ function resolveTextChannel(guild, input) {
   const byId = guild.channels.cache.get(cleaned);
   if (
     byId &&
-    (byId.type === ChannelType.GuildText || byId.type === ChannelType.GuildAnnouncement || byId.type === ChannelType.GuildForum)
+    (byId.type === ChannelType.GuildText ||
+      byId.type === ChannelType.GuildAnnouncement)
   ) return byId;
 
   const byName = guild.channels.cache.find(ch =>
-    (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildAnnouncement || ch.type === ChannelType.GuildForum) &&
+    (ch.type === ChannelType.GuildText ||
+      ch.type === ChannelType.GuildAnnouncement) &&
     ch.name.toLowerCase() === cleaned.toLowerCase()
   );
 
@@ -194,14 +196,11 @@ async function applyQuarantineServerPermissions(guild, quarantineChannelId, role
 
     try {
       if (channel.id === quarantineChannelId) {
-        // Make quarantine channel visible to quarantined users
         await channel.permissionOverwrites.edit(guild.roles.everyone, {
           ViewChannel: false,
         });
 
-        const allow = {
-          ViewChannel: true,
-        };
+        const allow = { ViewChannel: true };
 
         if (isTextLikeChannel(channel)) {
           allow.SendMessages = true;
@@ -221,10 +220,7 @@ async function applyQuarantineServerPermissions(guild, quarantineChannelId, role
 
         await channel.permissionOverwrites.edit(roleId, allow);
       } else {
-        // Hide every other channel from quarantined users
-        const deny = {
-          ViewChannel: false,
-        };
+        const deny = { ViewChannel: false };
 
         if (isTextLikeChannel(channel)) {
           deny.SendMessages = false;
@@ -243,6 +239,62 @@ async function applyQuarantineServerPermissions(guild, quarantineChannelId, role
     } catch (err) {
       failedChannels.push(channel.id);
       console.error(`[Quarantine] Failed to update permissions for channel ${channel.name} (${channel.id}):`, err);
+    }
+  }
+
+  return failedChannels;
+}
+
+async function applyMemberQuarantineLock(guild, memberId, quarantineChannelId) {
+  const failedChannels = [];
+
+  for (const channel of guild.channels.cache.values()) {
+    if (!channel || isThreadChannel(channel)) continue;
+    if (!channel.permissionOverwrites?.edit) continue;
+
+    try {
+      if (channel.id === quarantineChannelId) {
+        const allow = { ViewChannel: true };
+
+        if (isTextLikeChannel(channel)) {
+          allow.SendMessages = true;
+          allow.ReadMessageHistory = true;
+          allow.AttachFiles = true;
+          allow.EmbedLinks = true;
+          allow.AddReactions = true;
+          allow.UseExternalEmojis = true;
+        }
+
+        if (isVoiceLikeChannel(channel)) {
+          allow.Connect = true;
+          allow.Speak = true;
+          allow.Stream = true;
+          allow.UseVAD = true;
+        }
+
+        await channel.permissionOverwrites.edit(memberId, allow);
+      } else {
+        const deny = {
+          ViewChannel: false,
+        };
+
+        if (isTextLikeChannel(channel)) {
+          deny.SendMessages = false;
+          deny.ReadMessageHistory = false;
+        }
+
+        if (isVoiceLikeChannel(channel)) {
+          deny.Connect = false;
+          deny.Speak = false;
+          deny.Stream = false;
+          deny.UseVAD = false;
+        }
+
+        await channel.permissionOverwrites.edit(memberId, deny);
+      }
+    } catch (err) {
+      failedChannels.push(channel.id);
+      console.error(`[Quarantine] Failed to lock member perms for channel ${channel.name} (${channel.id}):`, err);
     }
   }
 
@@ -376,11 +428,7 @@ function parseAccessTarget(message, args) {
     const cleaned = String(raw).replace(/[<@!>]/g, '');
     if (!cleaned) return null;
 
-    return {
-      type: 'user',
-      id: cleaned,
-      label: `<@${cleaned}>`,
-    };
+    return { type: 'user', id: cleaned, label: `<@${cleaned}>` };
   }
 
   const role = resolveRole(message.guild, raw);
@@ -389,11 +437,7 @@ function parseAccessTarget(message, args) {
   const cleaned = String(raw).replace(/[<@!>]/g, '');
   if (!cleaned) return null;
 
-  return {
-    type: 'user',
-    id: cleaned,
-    label: `<@${cleaned}>`,
-  };
+  return { type: 'user', id: cleaned, label: `<@${cleaned}>` };
 }
 
 async function handleAccess(client, message, args) {
@@ -590,6 +634,20 @@ async function handleQuarantine(client, message, args) {
 
     return message.reply({
       embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'Failed to set quarantine role. Check bot permissions and role hierarchy.')],
+    });
+  }
+
+  const lockResult = await applyMemberQuarantineLock(message.guild, member.id, cfg.channel_id);
+
+  if (lockResult.length) {
+    return message.reply({
+      embeds: [
+        makeEmbed(
+          '#f59e0b',
+          'Quarantine Applied',
+          `**${targetUser.tag}** was quarantined, but some channel locks failed. Check my permissions/role hierarchy.`
+        ).setThumbnail(targetUser.displayAvatarURL({ size: 1024 })),
+      ],
     });
   }
 
