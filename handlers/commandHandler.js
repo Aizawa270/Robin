@@ -293,6 +293,20 @@ function prepareMessage(
       opts
     );
 
+  message.resolveUser = (input) =>
+    universalHelper.resolveUser(
+      client,
+      message,
+      input
+    );
+
+  message.resolveMember = (input) =>
+    universalHelper.resolveMember(
+      client,
+      message,
+      input
+    );
+
   universalHelper.patchMessageReply(
     message
   );
