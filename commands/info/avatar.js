@@ -4,28 +4,47 @@ const { colors } = require('../../config');
 async function resolveAvatarUser(client, message, input) {
   if (!input) return null;
 
-  const raw = String(input).trim();
+  const query = String(input).trim();
 
   // Mention
-  const mention = raw.match(/^<@!?(\d{15,20})>$/);
+  const mention = query.match(/^<@!?(\d{15,20})>$/);
   if (mention) {
     return await client.users.fetch(mention[1]).catch(() => null);
   }
 
-  // ID
-  if (/^\d{15,20}$/.test(raw)) {
-    return await client.users.fetch(raw).catch(() => null);
+  // ID only
+  if (/^\d{15,20}$/.test(query)) {
+    return await client.users.fetch(query).catch(() => null);
   }
 
-  // Username / tag only (NO display name)
-  const query = raw.toLowerCase();
+  // Username only (NO display names)
+  const lowered = query.toLowerCase();
 
-  return (
-    client.users.cache.find(u =>
-      u.username?.toLowerCase() === query ||
-      u.tag?.toLowerCase() === query
-    ) || null
+  const user = client.users.cache.find(u =>
+    u.username?.toLowerCase() === lowered ||
+    u.tag?.toLowerCase() === lowered
   );
+
+  if (user) return user;
+
+  // Fetch guild members and check ONLY username
+  if (message.guild) {
+    const members = await message.guild.members.fetch({
+      query,
+      limit: 10
+    }).catch(() => null);
+
+    if (members?.size) {
+      const exact = members.find(m =>
+        m.user.username?.toLowerCase() === lowered ||
+        m.user.tag?.toLowerCase() === lowered
+      );
+
+      if (exact) return exact.user;
+    }
+  }
+
+  return null;
 }
 
 module.exports = {
@@ -33,45 +52,31 @@ module.exports = {
   aliases: ['av', 'pfp'],
   description: "Shows a user's avatar.",
   category: 'info',
-  usage: '$avatar [@user]',
-  async execute(client, message, args) {
+  usage: '$avatar [@user|username|ID]',
 
-    let user = message.author;
+  async execute(client, message, args) {
+    let user = null;
 
     if (args[0]) {
-      const resolved = await resolveAvatarUser(client, message, args[0]);
+      user = await resolveAvatarUser(client, message, args[0]);
+    }
 
-      if (!resolved) {
-        return message.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setColor('#ef4444')
-              .setTitle('Avatar Failed')
-              .setDescription('User not found. Use a mention, user ID, or username.')
-          ]
-        });
-      }
-
-      user = resolved;
+    if (!user) {
+      user = message.author;
     }
 
     let avatarUrl;
 
     // Server profile avatar
-    if (message.guild) {
-      const member = await message.guild.members.fetch(user.id).catch(() => null);
+    const member = message.guild?.members.cache.get(user.id);
 
-      if (member) {
-        avatarUrl = member.displayAvatarURL({
-          size: 2048,
-          extension: 'png',
-          forceStatic: false
-        });
-      }
-    }
-
-    // Normal Discord avatar fallback
-    if (!avatarUrl) {
+    if (member) {
+      avatarUrl = member.displayAvatarURL({
+        size: 2048,
+        extension: 'png',
+        forceStatic: false
+      });
+    } else {
       avatarUrl = user.displayAvatarURL({
         size: 2048,
         extension: 'png',
@@ -85,11 +90,12 @@ module.exports = {
       .setDescription(`${user}`)
       .setImage(avatarUrl)
       .setFooter({
-        text: `Requested by ${message.author.tag}`,
-        iconURL: message.author.displayAvatarURL()
+        text: `Requested by ${message.author.tag}`
       })
       .setTimestamp();
 
-    return message.reply({ embeds: [embed] });
+    return message.reply({
+      embeds: [embed]
+    });
   },
 };
