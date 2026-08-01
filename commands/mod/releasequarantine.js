@@ -86,19 +86,59 @@ function canUseQuarantineCommands(client, member) {
   return hasAccessEntry(client, member.guild.id, member);
 }
 
+// ===== Updated resolveUser (consistent with other mod commands) =====
 async function resolveUser(message, input) {
   if (!input) return null;
 
-  const mention = message.mentions.users.first();
-  if (mention) return mention;
+  // Use the universal resolver if your command handler provides it
+  if (typeof message.resolveUser === 'function') {
+    return await message.resolveUser(input);
+  }
 
-  const raw = String(input).trim().replace(/[<@!>]/g, '');
-  if (!raw) return null;
+  const query = String(input).trim();
+  if (!query) return null;
 
-  const byId = message.client.users.cache.get(raw);
-  if (byId) return byId;
+  // Mention or raw ID
+  const id = query.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(id)) {
+    const cached = message.client.users.cache.get(id);
+    if (cached) return cached;
+    return await message.client.users.fetch(id).catch(() => null);
+  }
 
-  return message.client.users.fetch(raw).catch(() => null);
+  const lowered = query.toLowerCase();
+
+  // Exact match from user cache
+  const cachedUser = message.client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered ||
+    u?.globalName?.toLowerCase() === lowered
+  );
+  if (cachedUser) return cachedUser;
+
+  // Ensure guild members are cached
+  if (message.guild) {
+    await message.guild.members.fetch().catch(() => {});
+
+    // Exact match
+    let member = message.guild.members.cache.find(m =>
+      m?.displayName?.toLowerCase() === lowered ||
+      m?.user?.username?.toLowerCase() === lowered ||
+      m?.user?.globalName?.toLowerCase() === lowered
+    );
+
+    // Partial match fallback
+    if (!member) {
+      member = message.guild.members.cache.find(m =>
+        m?.displayName?.toLowerCase().includes(lowered) ||
+        m?.user?.username?.toLowerCase().includes(lowered) ||
+        m?.user?.globalName?.toLowerCase().includes(lowered)
+      );
+    }
+
+    if (member?.user) return member.user;
+  }
+
+  return null;
 }
 
 function isThreadChannel(channel) {
