@@ -49,24 +49,32 @@ module.exports = {
   usage: '$massmute @users <duration> [reason]',
   async execute(client, message, args) {
     if (!message.guild) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mass Mute Failed', 'This command only works in servers.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mass Mute Failed', 'This command only works in servers.')]
+      });
     }
 
     if (
-      !message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
-      !message.member.permissions.has(PermissionFlagsBits.Administrator)
+      !message.member?.permissions?.has(PermissionFlagsBits.ModerateMembers) &&
+      !message.member?.permissions?.has(PermissionFlagsBits.Administrator)
     ) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mass Mute Failed', 'You need **Timeout Members** permission.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mass Mute Failed', 'You need **Timeout Members** permission.')]
+      });
     }
 
     const targets = message.mentions.members;
     if (!targets.size) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mass Mute Failed', 'Mention at least one user.')] });
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mass Mute Failed', 'Mention at least one user.')]
+      });
     }
 
     const cleanedArgs = args.filter(a => !a.match(/^<@!?(\d+)>$/));
     if (!cleanedArgs.length) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mass Mute Failed', 'Provide a duration.')] });
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mass Mute Failed', 'Provide a duration.')]
+      });
     }
 
     let durationMs = null;
@@ -149,6 +157,6 @@ module.exports = {
       )
       .setTimestamp();
 
-    await message.reply({ embeds: [embed] });
+    return message.reply({ embeds: [embed] });
   },
 };
