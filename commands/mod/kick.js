@@ -16,22 +16,79 @@ function isOwner(guild, member) {
   return !!guild?.ownerId && member?.id === guild.ownerId;
 }
 
+async function resolveTargetUser(message, raw) {
+  if (!raw) return null;
+
+  if (typeof message.resolveUser === 'function') {
+    return await message.resolveUser(raw);
+  }
+
+  const query = String(raw).trim();
+  if (!query) return null;
+
+  const id = query.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(id)) {
+    const cached = message.client.users.cache.get(id);
+    if (cached) return cached;
+    return await message.client.users.fetch(id).catch(() => null);
+  }
+
+  const lowered = query.toLowerCase();
+
+  const cachedUser = message.client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered ||
+    u?.globalName?.toLowerCase() === lowered
+  );
+  if (cachedUser) return cachedUser;
+
+  if (message.guild) {
+    const member = message.guild.members.cache.find(m =>
+      m?.displayName?.toLowerCase() === lowered ||
+      m?.user?.username?.toLowerCase() === lowered ||
+      m?.user?.globalName?.toLowerCase() === lowered
+    );
+    if (member?.user) return member.user;
+  }
+
+  return null;
+}
+
+async function resolveTargetMember(message, raw) {
+  if (!message.guild) return null;
+
+  if (typeof message.resolveMember === 'function') {
+    return await message.resolveMember(raw);
+  }
+
+  const user = await resolveTargetUser(message, raw);
+  if (!user) return null;
+
+  return (
+    message.guild.members.cache.get(user.id) ||
+    await message.guild.members.fetch(user.id).catch(() => null)
+  );
+}
+
 module.exports = {
   name: 'kick',
-  description: 'Kick a user by mention or ID.',
+  description: 'Kick a user by mention, ID, username, or display name.',
   aliases: ['k', 'K'],
   category: 'mod',
-  usage: '$kick <@user|userID> [reason]',
+  usage: '$kick <@user|userID|username|display name> [reason]',
   async execute(client, message, args) {
     if (!message.guild) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Kick Failed', 'This command only works in servers.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Kick Failed', 'This command only works in servers.')]
+      });
     }
 
-    if (!message.member.permissions.has(PermissionFlagsBits.KickMembers)) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Kick Failed', 'You need **Kick Members** permission.')] });
+    if (!message.member?.permissions?.has(PermissionFlagsBits.KickMembers)) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Kick Failed', 'You need **Kick Members** permission.')]
+      });
     }
 
-    const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
+    const prefix = message.prefix || client.getPrefix?.(message.guild.id) || '$';
 
     if (!args.length) {
       return message.reply({
@@ -39,43 +96,35 @@ module.exports = {
           makeEmbed(
             '#fb923c',
             'Kick Command Usage',
-            `**Usage:** \`${prefix}kick <@user|userID> [reason]\`\n\n**Examples:**\n${prefix}kick @User being rude\n${prefix}kick 123456789012345678 spam`
+            `**Usage:** \`${prefix}kick <@user|userID|username|display name> [reason]\`\n\n**Examples:**\n${prefix}kick @User being rude\n${prefix}kick 123456789012345678 spam\n${prefix}kick xusion being annoying`
           ),
         ],
       });
     }
 
-    const targetToken = args[0];
+    const targetInput = args[0];
+    const reason = args.slice(1).join(' ').trim() || 'No reason provided';
 
-    const isMention = /^<@!?\d{17,20}>$/.test(targetToken);
-    const isRawId = /^\d{17,20}$/.test(targetToken);
-
-    if (!isMention && !isRawId) {
+    const targetUser = await resolveTargetUser(message, targetInput);
+    if (!targetUser) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Kick Failed', 'User not found. Mention them or provide a valid user ID.')]
+        embeds: [makeEmbed('#f59e0b', 'Kick Failed', 'User not found. Try a mention, user ID, exact username, or display name.')]
       });
     }
 
-    let targetUser = message.mentions.users.first();
-
-    if (!targetUser && isRawId) {
-      targetUser = await client.users.fetch(targetToken).catch(() => null);
-    }
-
-    if (!targetUser) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Kick Failed', 'User not found. Mention them or provide a valid user ID.')] });
-    }
-
     if (targetUser.id === message.author.id) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Kick Failed', 'You cannot kick yourself.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Kick Failed', 'You cannot kick yourself.')]
+      });
     }
 
     if (targetUser.id === client.user.id) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Kick Failed', 'I cannot kick myself.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Kick Failed', 'I cannot kick myself.')]
+      });
     }
 
-    const reason = args.slice(1).join(' ').trim() || 'No reason provided';
-    const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+    const targetMember = await resolveTargetMember(message, targetInput);
     const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
 
     if (!targetMember) {
@@ -85,7 +134,9 @@ module.exports = {
     }
 
     if (isOwner(message.guild, targetMember) && !isOwner(message.guild, message.member)) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Kick Failed', 'You cannot kick the server owner.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Kick Failed', 'You cannot kick the server owner.')]
+      });
     }
 
     if (!isOwner(message.guild, message.member)) {
