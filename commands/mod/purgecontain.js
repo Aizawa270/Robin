@@ -7,6 +7,9 @@ module.exports = {
     usage: 'purgecontain <word> <amount>',
     aliases: ['contain-purge', 'purge-contain'],
     async execute(client, message, args) {
+        // Guard against DMs
+        if (!message.guild) return;
+
         // Permission check: Administrator OR Bot Owner OR Server Owner
         const app = client.application?.partial
             ? await client.application.fetch()
@@ -41,6 +44,16 @@ module.exports = {
             });
         }
 
+        if (!message.guild.members.me.permissions.has(PermissionFlagsBits.ReadMessageHistory)) {
+            return message.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor('#ff0000')
+                        .setDescription('I need the Read Message History permission to fetch messages.')
+                ]
+            });
+        }
+
         // If no arguments, show usage instructions
         if (args.length === 0) {
             const embed = new EmbedBuilder()
@@ -58,7 +71,7 @@ module.exports = {
         }
 
         const word = args[0]?.toLowerCase();
-        const amount = parseInt(args[1]);
+        const amount = Number(args[1]);
 
         // Validate inputs
         if (!word) {
@@ -71,12 +84,12 @@ module.exports = {
             });
         }
 
-        if (!amount || amount < 1 || amount > 200) {
+        if (!Number.isInteger(amount) || amount < 1 || amount > 200) {
             return message.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setColor('#ff0000')
-                        .setDescription('Please provide a valid amount between 1-200.\n\n**Usage:** `purgecontain <word> <amount>`')
+                        .setDescription('Please provide a valid whole number between 1-200.\n\n**Usage:** `purgecontain <word> <amount>`')
                 ]
             });
         }
@@ -108,7 +121,13 @@ module.exports = {
                     return within14Days && wordRegex.test(msg.content);
                 });
 
-                allMatchingMessages.push(...matches.values());
+                // Add only unique messages (safe guard)
+                for (const msg of matches.values()) {
+                    if (!allMatchingMessages.some(m => m.id === msg.id)) {
+                        allMatchingMessages.push(msg);
+                    }
+                }
+
                 lastMessageId = messages.last().id;
 
                 // Stop if we've gone past 14 days
