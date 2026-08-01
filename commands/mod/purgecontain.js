@@ -8,7 +8,15 @@ module.exports = {
     aliases: ['contain-purge', 'purge-contain'],
     async execute(client, message, args) {
         // Permission check: Administrator OR Bot Owner OR Server Owner
-        const ownerId = client.floodOwnerId || (await client.application.fetch()).owner?.id;
+        const app = client.application?.partial
+            ? await client.application.fetch()
+            : client.application;
+
+        const ownerId =
+            app.owner?.id ||
+            app.owner?.ownerUserId ||
+            null;
+
         const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
         const isBotOwner = message.author.id === ownerId;
         const isServerOwner = message.author.id === message.guild.ownerId;
@@ -127,7 +135,10 @@ module.exports = {
             let deletedCount = 0;
             const chunks = chunkArray(toDelete, 100);
             for (const chunk of chunks) {
-                const deleted = await message.channel.bulkDelete(chunk, true);
+                const deleted = await message.channel.bulkDelete(
+                    chunk.map(msg => msg.id),
+                    true
+                );
                 deletedCount += deleted.size;
             }
 
