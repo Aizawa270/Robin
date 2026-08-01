@@ -1,8 +1,36 @@
-// commands/mod/resetmodstats.js
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
-const ADMIN_ID = '852839588689870879';
-const AUTHORIZED_ROLES = ['1447894643277561856', '1431646610752012420'];
+let config = null;
+try {
+  config = require('../../config');
+} catch {}
+
+function getBotOwnerIds(client) {
+  const ids = new Set();
+  if (config?.ownerId) ids.add(String(config.ownerId));
+  if (client?.ownerId) ids.add(String(client.ownerId));
+  if (client?.ownerIds && Array.isArray(client.ownerIds)) {
+    for (const id of client.ownerIds) ids.add(String(id));
+  }
+  if (process.env.OWNER_ID) ids.add(String(process.env.OWNER_ID));
+  return ids;
+}
+
+function isBotOwner(client, userId) {
+  return getBotOwnerIds(client).has(String(userId));
+}
+
+function isAdmin(member) {
+  return member.permissions.has(PermissionFlagsBits.Administrator);
+}
+
+function hasPermission(client, member) {
+  return (
+    isAdmin(member) ||
+    member.id === member.guild.ownerId ||
+    isBotOwner(client, member.id)
+  );
+}
 
 const VALID_ACTIONS = ['warn', 'ban', 'mute', 'kick', 'unban', 'warnremove'];
 
@@ -13,14 +41,18 @@ module.exports = {
   usage: 'resetmodstats <all|warn|ban|mute|kick|unban|warnremove> <@user|userID|username> [amount]',
   aliases: ['removemodstat'],
   async execute(client, message, args) {
-    if (!message.guild) return message.reply('This command only works in servers.');
+    if (!message.guild) return;
 
-    // Check permissions
-    const isAdmin = message.author.id === ADMIN_ID;
-    const hasRole = AUTHORIZED_ROLES.some(roleId => message.member.roles.cache.has(roleId));
+    const prefix = client.getPrefix(message.guild.id);
 
-    if (!isAdmin && !hasRole) {
-      return message.reply('You do not have permission to use this command.');
+    // Universal permission check
+    if (!hasPermission(client, message.member)) {
+      const embed = new EmbedBuilder()
+        .setColor('#ef4444')
+        .setTitle('Reset Failed')
+        .setDescription('You do not have permission to use this command.')
+        .setTimestamp();
+      return message.reply({ embeds: [embed] });
     }
 
     // Check if database exists
@@ -34,49 +66,35 @@ module.exports = {
         .setTitle('Reset Modstats Usage')
         .setColor('#3498db')
         .setDescription(
-          '**Reset all stats:**\n' +
-          '`!resetmodstats all <@user|userID|username>`\n\n' +
-          '**Reset specific action:**\n' +
-          '`!resetmodstats <warn|ban|mute|kick|unban|warnremove> <@user|userID|username> [amount]`\n\n' +
-          '**Examples:**\n' +
-          '`!resetmodstats all @astrix` - Reset all stats\n' +
-          '`!resetmodstats ban @astrix` - Reset all bans\n' +
-          '`!resetmodstats warn @astrix 5` - Remove 5 warns'
+          `**Reset all stats:**\n` +
+          `\`${prefix}resetmodstats all <@user|userID|username>\`\n\n` +
+          `**Reset specific action:**\n` +
+          `\`${prefix}resetmodstats <warn|ban|mute|kick|unban|warnremove> <@user|userID|username> [amount]\`\n\n` +
+          `**Examples:**\n` +
+          `\`${prefix}resetmodstats all @astrix\` - Reset all stats\n` +
+          `\`${prefix}resetmodstats ban @astrix\` - Reset all bans\n` +
+          `\`${prefix}resetmodstats warn @astrix 5\` - Remove 5 warns`
         );
       return message.reply({ embeds: [embed] });
     }
 
     const action = args[0].toLowerCase();
     const targetArg = args[1];
-    const amount = parseInt(args[2]) || null;
+    const amount = Number.isInteger(Number(args[2])) && Number(args[2]) > 0 ? Number(args[2]) : null;
 
     // Validate action
     if (action !== 'all' && !VALID_ACTIONS.includes(action)) {
       return message.reply(`Invalid action. Valid actions: all, ${VALID_ACTIONS.join(', ')}`);
     }
 
-    // Get target user
+    // Get target user (universal resolver only, no fallback)
     if (!targetArg) {
       return message.reply('Please specify a user.');
     }
 
-    let targetUser = message.mentions.users.first();
-
-    // Try by ID
-    if (!targetUser) {
-      targetUser = await client.users.fetch(targetArg).catch(() => null);
-    }
-
-    // Try by username
-    if (!targetUser && message.guild) {
-      const searchTerm = args.slice(1).join(' ').toLowerCase();
-      const member = message.guild.members.cache.find(m => 
-        m.user.username.toLowerCase() === searchTerm ||
-        m.user.tag.toLowerCase() === searchTerm ||
-        m.displayName.toLowerCase() === searchTerm
-      );
-      if (member) targetUser = member.user;
-    }
+    const targetUser = typeof message.resolveUser === 'function'
+      ? await message.resolveUser(targetArg)
+      : null;
 
     if (!targetUser) {
       return message.reply('User not found.');
@@ -132,7 +150,7 @@ module.exports = {
         if (amount && amount > 0) {
           // Remove specific amount (delete oldest entries first)
           const toDelete = Math.min(amount, currentStats.total);
-          
+
           const entries = client.automodDB.prepare(`
             SELECT id FROM modstats 
             WHERE guild_id = ? AND moderator_id = ? AND action_type = ?
@@ -141,7 +159,7 @@ module.exports = {
           `).all(message.guild.id, targetUser.id, action, toDelete);
 
           const deleteStmt = client.automodDB.prepare('DELETE FROM modstats WHERE id = ?');
-          
+
           for (const entry of entries) {
             deleteStmt.run(entry.id);
             deletedCount++;
