@@ -1,4 +1,3 @@
-// commands/mod/note.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const path = require('path');
 const fs = require('fs');
@@ -20,20 +19,45 @@ db.prepare(`
   )
 `).run();
 
-function resolveTargetId(message, raw) {
-  if (!raw) return null;
-  const mention = message.mentions.users.first();
-  if (mention) return mention.id;
+function makeEmbed(color, title, description) {
+  const embed = new EmbedBuilder().setColor(color).setTimestamp();
+  if (title) embed.setTitle(title);
+  if (description) embed.setDescription(description);
+  return embed;
+}
 
-  if (/^\d+$/.test(raw)) return raw;
+async function resolveTargetUser(client, message, raw) {
+  if (!raw) return null;
+
+  if (typeof message.resolveUser === 'function') {
+    return await message.resolveUser(raw);
+  }
+
+  const query = String(raw).trim();
+  if (!query) return null;
+
+  const id = query.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(id)) {
+    const cached = client.users.cache.get(id);
+    if (cached) return cached;
+    return await client.users.fetch(id).catch(() => null);
+  }
+
+  const lowered = query.toLowerCase();
+
+  const cachedUser = client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered ||
+    u?.globalName?.toLowerCase() === lowered
+  );
+  if (cachedUser) return cachedUser;
 
   if (message.guild) {
-    const lowered = raw.toLowerCase();
-    const m = message.guild.members.cache.find(mm =>
-      (mm.user.username && mm.user.username.toLowerCase() === lowered) ||
-      (mm.displayName && mm.displayName.toLowerCase() === lowered)
+    const member = message.guild.members.cache.find(mm =>
+      mm?.displayName?.toLowerCase() === lowered ||
+      mm?.user?.username?.toLowerCase() === lowered ||
+      mm?.user?.globalName?.toLowerCase() === lowered
     );
-    if (m) return m.user.id;
+    if (member?.user) return member.user;
   }
 
   return null;
@@ -46,30 +70,48 @@ module.exports = {
   usage: '!note <user> <note>',
   aliases: [],
   async execute(client, message, args) {
-    if (!message.guild) return;
-    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages) &&
-        !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return;
+    if (!message.guild) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Note Failed', 'This command can only be used in a server.')]
+      });
+    }
+
+    if (
+      !message.member?.permissions?.has(PermissionFlagsBits.ManageMessages) &&
+      !message.member?.permissions?.has(PermissionFlagsBits.Administrator)
+    ) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Note Failed', 'You need **Manage Messages** or **Administrator** permission.')]
+      });
     }
 
     const targetArg = args.shift();
-    if (!targetArg) return message.reply('Usage: `!note <id|@user|username> <note...>`');
+    if (!targetArg) {
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Note Usage', '`!note <id|@user|username> <note...>`')]
+      });
+    }
 
-    const targetId = resolveTargetId(message, targetArg);
-    if (!targetId) return message.reply('Could not find that user.');
+    const targetUser = await resolveTargetUser(client, message, targetArg);
+    if (!targetUser) {
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'User Not Found', 'Could not find that user. Try a mention, ID, username, or display name.')]
+      });
+    }
 
     const noteText = args.join(' ').trim();
-    if (!noteText) return message.reply('Provide the note text.');
+    if (!noteText) {
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Missing Note', 'Provide the note text.')]
+      });
+    }
 
     const now = Date.now();
     db.prepare(`INSERT INTO notes (target_id, moderator_id, note_text, created_at) VALUES (?, ?, ?, ?)`)
-      .run(targetId, message.author.id, noteText, now);
+      .run(targetUser.id, message.author.id, noteText, now);
 
-    // Fetch user for clean display
-    const user = await client.users.fetch(targetId).catch(() => null);
-    const userDisplay = user ? user.tag : 'Unknown User';
+    const userDisplay = targetUser.tag || targetUser.username || `User ${targetUser.id}`;
 
-    // Build embed
     const embed = new EmbedBuilder()
       .setTitle('🗒️ Note Added')
       .setColor('#f59e0b')
@@ -78,7 +120,8 @@ module.exports = {
         { name: 'By', value: message.author.tag, inline: true },
         { name: 'Note', value: noteText, inline: false },
         { name: 'Date', value: `<t:${Math.floor(now / 1000)}:f>`, inline: true }
-      );
+      )
+      .setTimestamp();
 
     return message.reply({ embeds: [embed] });
   }
