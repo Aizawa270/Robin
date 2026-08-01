@@ -5,41 +5,30 @@ module.exports = {
   name: 'userinfo',
   description: 'Shows information about a user.',
   category: 'info',
-  usage: '$userinfo [@user|username|userID]',
+  usage: '$userinfo [@user|username|display name|userID]',
   aliases: ['ui'],
   async execute(client, message, args) {
-    let user;
+    const query = args.join(' ').trim();
 
-    if (args[0]) {
-      // Try mention first
-      user = message.mentions.users.first();
+    let user = null;
 
-      // Try by ID
-      if (!user) {
-        user = await client.users.fetch(args[0]).catch(() => null);
+    if (query) {
+      if (typeof message.resolveUser === 'function') {
+        user = await message.resolveUser(query);
       }
 
-      // Try by username (search in guild)
-      if (!user && message.guild) {
-        const searchTerm = args.join(' ').toLowerCase();
-        const member = message.guild.members.cache.find(m => 
-          m.user.username.toLowerCase() === searchTerm ||
-          m.user.tag.toLowerCase() === searchTerm ||
-          m.displayName.toLowerCase() === searchTerm
+      if (!user) {
+        return message.reply(
+          'User not found. Try mentioning them, using their ID, or using their exact username/display name in this server.'
         );
-        if (member) user = member.user;
-      }
-
-      // If still not found, return error
-      if (!user) {
-        return message.reply('User not found. Try mentioning them, using their ID, or their exact username.');
       }
     } else {
-      // Default to message author
       user = message.author;
     }
 
-    const member = message.guild?.members.cache.get(user.id);
+    const member = message.guild
+      ? await message.guild.members.fetch(user.id).catch(() => message.guild.members.cache.get(user.id))
+      : null;
 
     const createdAt = `<t:${Math.floor(user.createdTimestamp / 1000)}:F>`;
     const joinedAt = member?.joinedTimestamp
@@ -55,10 +44,14 @@ module.exports = {
 
     const embed = new EmbedBuilder()
       .setColor(colors.userinfo)
-      .setAuthor({ name: `${user.tag}`, iconURL: user.displayAvatarURL({ size: 1024 }) })
+      .setAuthor({
+        name: user.username,
+        iconURL: user.displayAvatarURL({ size: 1024 })
+      })
       .setThumbnail(user.displayAvatarURL({ size: 1024 }))
       .addFields(
-        { name: 'Username', value: `${user.tag}`, inline: true },
+        { name: 'Username', value: user.username, inline: true },
+        { name: 'Display Name', value: member?.displayName || 'Unknown', inline: true },
         { name: 'User ID', value: user.id, inline: true },
         { name: 'Account Created', value: createdAt, inline: false },
         { name: 'Joined Server', value: joinedAt, inline: false },
