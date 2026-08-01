@@ -1,176 +1,325 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
 const { logModAction } = require('../../handlers/modstatsHelper');
 
-const WARN_FILE = path.join(__dirname, '../../warns.json');
-
 function makeEmbed(color, title, description) {
-  const embed = new EmbedBuilder().setColor(color).setTimestamp();
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTimestamp();
+
   if (title) embed.setTitle(title);
   if (description) embed.setDescription(description);
+
   return embed;
 }
 
+async function resolveTargetUser(message, input) {
+  if (!input) return null;
+
+  if (typeof message.resolveUser === 'function') {
+    return await message.resolveUser(input);
+  }
+
+  const raw = String(input).trim();
+
+  const mention = raw.match(/^<@!?(\d{15,20})>$/);
+  const id = mention?.[1] || raw.replace(/[<@!>]/g, '');
+
+  if (/^\d{15,20}$/.test(id)) {
+    return (
+      message.client.users.cache.get(id) ||
+      await message.client.users.fetch(id).catch(() => null)
+    );
+  }
+
+  const lowered = raw.toLowerCase();
+
+  const cached = message.client.users.cache.find(u =>
+    u.username?.toLowerCase() === lowered ||
+    u.globalName?.toLowerCase() === lowered
+  );
+
+  if (cached) return cached;
+
+  if (message.guild) {
+    const member = message.guild.members.cache.find(m =>
+      m.displayName?.toLowerCase() === lowered ||
+      m.user.username?.toLowerCase() === lowered ||
+      m.user.globalName?.toLowerCase() === lowered
+    );
+
+    if (member) return member.user;
+
+    const fetched = await message.guild.members.fetch({
+      query: raw,
+      limit: 10
+    }).catch(() => null);
+
+    if (fetched?.size) {
+      const exact = fetched.find(m =>
+        m.displayName?.toLowerCase() === lowered ||
+        m.user.username?.toLowerCase() === lowered ||
+        m.user.globalName?.toLowerCase() === lowered
+      );
+
+      return exact?.user || fetched.first()?.user || null;
+    }
+  }
+
+  return null;
+}
+
+
 module.exports = {
   name: 'warnremove',
-  description: 'Remove a specific warn from a user.',
+  description: 'Remove a warning from a user.',
   category: 'mod',
   usage: '$warnremove <@user|userID> <warnNumber> [reason]',
   aliases: ['wrnremove', 'removewarn', 'delwarn'],
+
   async execute(client, message, args) {
+
     if (!message.guild) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Remove Failed', 'This command only works in servers.')] });
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Remove Failed',
+            'This command can only be used in servers.'
+          )
+        ]
+      });
     }
+
 
     if (
       !message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
       !message.member.permissions.has(PermissionFlagsBits.Administrator)
     ) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Remove Failed', 'You need Moderate Members permission.')] });
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Remove Failed',
+            'You need **Moderate Members** permission.'
+          )
+        ]
+      });
     }
 
-    const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
+
+    const prefix = message.prefix || client.getPrefix?.(message.guild.id) || '$';
+
 
     if (args.length < 2) {
       return message.reply({
         embeds: [
-          new EmbedBuilder()
-            .setColor('#fde047')
-            .setTitle('Warnremove Command Usage')
-            .setDescription(
-              '**Usage:**\n' +
-              `\`${prefix}warnremove <@user|userID> <warnNumber> [reason]\`\n\n` +
-              '**Note:** Use `$warns <user>` to see warn numbers.'
-            )
-            .setTimestamp(),
-        ],
+          makeEmbed(
+            '#facc15',
+            'Warnremove Usage',
+            `**Usage:**\n\`${prefix}warnremove <@user|ID> <warn number> [reason]\`\n\nExample:\n\`${prefix}warnremove @User 2 spam cleared\``
+          )
+        ]
       });
     }
 
-    const targetArg = args.shift();
-    const warnNumArg = args.shift();
+
+    const targetInput = args.shift();
+    const warnNumber = Number(args.shift());
     const reason = args.join(' ').trim() || 'No reason provided';
 
-    let targetUser = message.mentions.users.first();
-    if (!targetUser && /^\d{17,20}$/.test(targetArg)) {
-      targetUser = await client.users.fetch(targetArg).catch(() => null);
+
+    if (!Number.isInteger(warnNumber) || warnNumber < 1) {
+      return message.reply({
+        embeds:[
+          makeEmbed(
+            '#f59e0b',
+            'Warn Remove Failed',
+            'Warn number must be a valid number.'
+          )
+        ]
+      });
     }
+
+
+    const targetUser = await resolveTargetUser(message, targetInput);
+
 
     if (!targetUser) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Warn Remove Failed', 'User not found.')] });
+      return message.reply({
+        embeds:[
+          makeEmbed(
+            '#f59e0b',
+            'Warn Remove Failed',
+            'User not found.'
+          )
+        ]
+      });
     }
+
 
     if (targetUser.id === message.author.id) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Remove Failed', 'You cannot remove your own warn.')] });
+      return message.reply({
+        embeds:[
+          makeEmbed(
+            '#ef4444',
+            'Warn Remove Failed',
+            'You cannot remove your own warning.'
+          )
+        ]
+      });
     }
 
-    const warnIndex = parseInt(warnNumArg, 10) - 1;
-    if (isNaN(warnIndex) || warnIndex < 0) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Warn Remove Failed', 'Invalid warn number. Must be 1 or higher.')] });
+
+    if (!client.automodDB) {
+      return message.reply({
+        embeds:[
+          makeEmbed(
+            '#ef4444',
+            'Warn Remove Failed',
+            'Warning database is unavailable.'
+          )
+        ]
+      });
     }
 
-    const guildId = message.guild.id;
-    const userId = targetUser.id;
 
     try {
-      if (!client.automodDB) {
-        return message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Remove Failed', 'Database not available. Please restart the bot.')] });
-      }
 
-      const sqliteWarns = client.automodDB.prepare(`
+      const warns = client.automodDB.prepare(`
         SELECT id, reason, moderator_id, timestamp
         FROM automod_warns
         WHERE guild_id = ? AND user_id = ?
         ORDER BY timestamp DESC
-      `).all(guildId, userId);
+      `).all(
+        message.guild.id,
+        targetUser.id
+      );
 
-      const jsonWarns = fs.existsSync(WARN_FILE) ? JSON.parse(fs.readFileSync(WARN_FILE, 'utf8')) : {};
-      const userJsonWarns = jsonWarns[userId] || [];
 
-      const totalWarns = sqliteWarns.length + userJsonWarns.length;
-      if (totalWarns === 0) {
-        return message.reply({ embeds: [makeEmbed('#f59e0b', 'Warn Remove Failed', 'This user has no warnings.')] });
-      }
-
-      if (warnIndex >= totalWarns) {
+      if (!warns.length) {
         return message.reply({
-          embeds: [makeEmbed('#f59e0b', 'Warn Remove Failed', `Warn #${warnNumArg} not found. User has only ${totalWarns} warning(s).`)]
+          embeds:[
+            makeEmbed(
+              '#f59e0b',
+              'No Warnings',
+              `<@${targetUser.id}> has no warnings.`
+            )
+          ]
         });
       }
 
-      let removedReason = 'Unknown reason';
-      let removedModerator = 'Unknown';
 
-      if (warnIndex < sqliteWarns.length) {
-        const warnToRemove = sqliteWarns[warnIndex];
-        removedReason = warnToRemove.reason || 'No reason';
-
-        try {
-          const mod = await client.users.fetch(warnToRemove.moderator_id).catch(() => null);
-          removedModerator = mod ? mod.tag : `ID: ${warnToRemove.moderator_id}`;
-        } catch {
-          removedModerator = `ID: ${warnToRemove.moderator_id}`;
-        }
-
-        client.automodDB.prepare(`DELETE FROM automod_warns WHERE id = ?`).run(warnToRemove.id);
-        const newSqliteCount = sqliteWarns.length - 1;
-        client.automodDB.prepare(`
-          INSERT OR REPLACE INTO automod_warn_counts (guild_id, user_id, count)
-          VALUES (?, ?, ?)
-        `).run(guildId, userId, newSqliteCount);
-      } else {
-        const jsonIndex = warnIndex - sqliteWarns.length;
-        if (jsonIndex < userJsonWarns.length) {
-          const warnToRemove = userJsonWarns[jsonIndex];
-          removedReason = warnToRemove.reason || 'No reason';
-          removedModerator = warnToRemove.moderator || 'Unknown';
-
-          userJsonWarns.splice(jsonIndex, 1);
-          if (userJsonWarns.length === 0) delete jsonWarns[userId];
-          else jsonWarns[userId] = userJsonWarns;
-
-          fs.writeFileSync(WARN_FILE, JSON.stringify(jsonWarns, null, 2));
-        }
+      if (warnNumber > warns.length) {
+        return message.reply({
+          embeds:[
+            makeEmbed(
+              '#f59e0b',
+              'Warn Remove Failed',
+              `That user only has ${warns.length} warning(s).`
+            )
+          ]
+        });
       }
 
-      const updatedSqliteWarns = client.automodDB.prepare(`
-        SELECT COUNT(*) as count FROM automod_warns
-        WHERE guild_id = ? AND user_id = ?
-      `).get(guildId, userId);
 
-      const updatedJsonWarns = jsonWarns[userId] || [];
-      const updatedTotalWarns = (updatedSqliteWarns?.count || 0) + updatedJsonWarns.length;
+      const warn = warns[warnNumber - 1];
+
+
+      await client.automodDB.prepare(`
+        DELETE FROM automod_warns
+        WHERE id = ?
+      `).run(warn.id);
+
+
+
+      const remaining = client.automodDB.prepare(`
+        SELECT COUNT(*) AS count
+        FROM automod_warns
+        WHERE guild_id = ? AND user_id = ?
+      `).get(
+        message.guild.id,
+        targetUser.id
+      );
+
+
+      client.automodDB.prepare(`
+        INSERT OR REPLACE INTO automod_warn_counts
+        (guild_id,user_id,count)
+        VALUES (?,?,?)
+      `).run(
+        message.guild.id,
+        targetUser.id,
+        remaining.count
+      );
+
 
       logModAction(
         client,
-        guildId,
+        message.guild.id,
         message.author.id,
-        userId,
+        targetUser.id,
         'warnremove',
-        `Removed warn #${warnNumArg}: "${removedReason.substring(0, 100)}" | Reason: ${reason}`
+        `Removed warn #${warnNumber}: ${warn.reason}`
       );
+
 
       const embed = new EmbedBuilder()
         .setColor('#22c55e')
-        .setTitle('✅ Warn Removed')
-        .setDescription(`A warning has been successfully removed from <@${targetUser.id}>.`)
+        .setTitle('Warn Removed')
         .addFields(
-          { name: 'User', value: `<@${targetUser.id}>`, inline: true },
-          { name: 'Warn #', value: warnNumArg, inline: true },
-          { name: 'Removed by', value: `<@${message.author.id}>`, inline: true },
-          { name: 'Original Reason', value: removedReason.length > 100 ? removedReason.substring(0, 97) + '...' : removedReason, inline: false },
-          { name: 'Original Moderator', value: removedModerator, inline: true },
-          { name: 'Removal Reason', value: reason, inline: false },
-          { name: 'Remaining Warns', value: `${updatedTotalWarns}/5`, inline: true }
+          {
+            name:'User',
+            value:`<@${targetUser.id}>`,
+            inline:true
+          },
+          {
+            name:'Warn Removed',
+            value:`#${warnNumber}`,
+            inline:true
+          },
+          {
+            name:'Removed By',
+            value:`<@${message.author.id}>`,
+            inline:true
+          },
+          {
+            name:'Original Reason',
+            value:warn.reason || 'No reason',
+            inline:false
+          },
+          {
+            name:'Removal Reason',
+            value:reason,
+            inline:false
+          },
+          {
+            name:'Remaining Warns',
+            value:`${remaining.count}/5`,
+            inline:true
+          }
         )
-        .setTimestamp()
-        .setFooter({ text: `Use ${prefix}warns <user> to see remaining warnings` });
+        .setTimestamp();
 
-      await message.reply({ embeds: [embed] });
-    } catch (error) {
-      console.error('Warnremove command error:', error);
-      await message.reply({ embeds: [makeEmbed('#ef4444', 'Warn Remove Failed', 'Failed to remove warning. Check console for details.')] });
+
+      return message.reply({
+        embeds:[embed]
+      });
+
+
+    } catch(err) {
+
+      console.error('[WarnRemove] Error:',err);
+
+      return message.reply({
+        embeds:[
+          makeEmbed(
+            '#ef4444',
+            'Warn Remove Failed',
+            'Failed to remove warning.'
+          )
+        ]
+      });
+
     }
-  },
+  }
 };
