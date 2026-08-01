@@ -1,4 +1,4 @@
-const { PermissionFlagsBits, EmbedBuilder, ChannelType } = require('discord.js');
+const { PermissionFlagsBits, EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
@@ -52,10 +52,8 @@ async function getBotOwnerId(client) {
 
     if (!owner) return null;
 
-    // User owner
     if (owner.id) return owner.id;
 
-    // Team owner fallback (if present in your setup)
     if (owner.ownerUserId) return owner.ownerUserId;
 
     return null;
@@ -92,6 +90,13 @@ async function executeNuke(message, targetChannel, channelData) {
     console.error(`Nuke error in channel ${targetChannel?.id}:`, err);
     return { ok: false, error: err };
   }
+}
+
+async function executeNukeWithDelay(message, targetChannel, channelData, index) {
+  if (index > 0) {
+    await new Promise(resolve => setTimeout(resolve, 80));
+  }
+  return executeNuke(message, targetChannel, channelData);
 }
 
 module.exports = {
@@ -148,57 +153,117 @@ module.exports = {
     const confirmEmbed = makeEmbed(
       '#f59e0b',
       'Nuke Confirmation',
-      `You are about to nuke these channels:\n\n${channelList}${invalidList}\n\nType \`confirm\` to continue or \`cancel\` to stop.`
+      `You are about to nuke these channels:\n\n${channelList}${invalidList}\n\nClick a button below to continue or cancel.`
     );
 
-    const prompt = await message.reply({ embeds: [confirmEmbed] });
+    const nukeButton = new ButtonBuilder()
+      .setCustomId('nuke_confirm')
+      .setLabel('Nuke')
+      .setStyle(ButtonStyle.Danger);
 
-    try {
-      const collected = await message.channel.awaitMessages({
-        filter: (m) =>
-          m.author.id === message.author.id &&
-          ['confirm', 'cancel'].includes(m.content.toLowerCase().trim()),
-        max: 1,
-        time: 30000,
-      });
+    const cancelButton = new ButtonBuilder()
+      .setCustomId('nuke_cancel')
+      .setLabel('Cancel')
+      .setStyle(ButtonStyle.Secondary);
 
-      const response = collected.first();
+    const row = new ActionRowBuilder().addComponents(nukeButton, cancelButton);
 
-      if (!response || response.content.toLowerCase().trim() === 'cancel') {
-        return prompt.edit({
-          embeds: [makeEmbed('#6b7280', 'Nuke Cancelled', 'The nuke has been cancelled.')]
-        }).catch(() => {});
-      }
+    const prompt = await message.reply({ embeds: [confirmEmbed], components: [row] });
 
-      await prompt.delete().catch(() => {});
-      await response.delete().catch(() => {});
+    const collector = prompt.createMessageComponentCollector({ time: 30000 });
 
-      const results = [];
-      for (const channel of valid) {
-        const data = buildChannelData(channel);
-        const result = await executeNuke(message, channel, data);
-        results.push({
-          name: channel.name,
-          ok: result.ok,
+    collector.on('collect', async (interaction) => {
+      // Only the bot owner can click
+      if (interaction.user.id !== ownerId) {
+        return interaction.reply({
+          content: 'You are not authorized to use this.',
+          ephemeral: true,
         });
       }
 
-      const successCount = results.filter(r => r.ok).length;
-      const failCount = results.length - successCount;
+      if (interaction.customId === 'nuke_cancel') {
+        await interaction.update({
+          embeds: [makeEmbed('#6b7280', 'Nuke Cancelled', 'The nuke has been cancelled.')],
+          components: [],
+        });
+        collector.stop();
+        return;
+      }
 
-      return message.channel.send({
-        embeds: [
-          makeEmbed(
-            failCount ? '#f59e0b' : '#10b981',
-            'Nuke Complete',
-            `Nuked **${successCount}** channel${successCount === 1 ? '' : 's'} successfully.${failCount ? ` **${failCount}** failed.` : ''}`
-          )
-        ]
-      }).catch(() => {});
-    } catch {
-      return prompt.edit({
-        embeds: [makeEmbed('#6b7280', 'Nuke Cancelled', 'The nuke timed out.')]
-      }).catch(() => {});
-    }
+      if (interaction.customId === 'nuke_confirm') {
+        // Acknowledge immediately so the interaction doesn't time out
+        await interaction.update({
+          embeds: [makeEmbed('#f59e0b', 'Nuking...', 'Nuke in progress, please wait...')],
+          components: [],
+        });
+        collector.stop();
+
+        const channelDataMap = valid.map(ch => ({
+          channel: ch,
+          data: buildChannelData(ch),
+        }));
+
+        // 3+ channels: staggered parallel nuke
+        if (valid.length >= 3) {
+          const results = await Promise.allSettled(
+            channelDataMap.map(({ channel, data }, index) =>
+              executeNukeWithDelay(message, channel, data, index)
+            )
+          );
+
+          const formattedResults = results.map((r, i) => ({
+            name: channelDataMap[i].channel.name,
+            ok: r.status === 'fulfilled' && r.value.ok,
+          }));
+
+          const successCount = formattedResults.filter(r => r.ok).length;
+          const failCount = formattedResults.length - successCount;
+
+          return prompt.edit({
+            embeds: [
+              makeEmbed(
+                failCount ? '#f59e0b' : '#10b981',
+                'Nuke Complete',
+                `Nuked **${successCount}** channel${successCount === 1 ? '' : 's'} successfully.${failCount ? ` **${failCount}** failed.` : ''}`
+              )
+            ],
+            components: [],
+          }).catch(() => {});
+        }
+
+        // 1-2 channels: sequential nuke
+        const results = [];
+        for (const { channel, data } of channelDataMap) {
+          const result = await executeNuke(message, channel, data);
+          results.push({
+            name: channel.name,
+            ok: result.ok,
+          });
+        }
+
+        const successCount = results.filter(r => r.ok).length;
+        const failCount = results.length - successCount;
+
+        return prompt.edit({
+          embeds: [
+            makeEmbed(
+              failCount ? '#f59e0b' : '#10b981',
+              'Nuke Complete',
+              `Nuked **${successCount}** channel${successCount === 1 ? '' : 's'} successfully.${failCount ? ` **${failCount}** failed.` : ''}`
+            )
+          ],
+          components: [],
+        }).catch(() => {});
+      }
+    });
+
+    collector.on('end', async (collected, reason) => {
+      if (reason === 'time') {
+        await prompt.edit({
+          embeds: [makeEmbed('#6b7280', 'Nuke Timed Out', 'The nuke confirmation timed out.')],
+          components: [],
+        }).catch(() => {});
+      }
+    });
   },
 };
