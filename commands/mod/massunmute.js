@@ -22,17 +22,23 @@ module.exports = {
   usage: '$massunmute @user1 @user2 ...',
   async execute(client, message, args) {
     if (!message.guild) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mass Unmute Failed', 'This command only works in servers.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mass Unmute Failed', 'This command only works in servers.')]
+      });
     }
 
     const perms = message.member.permissions;
     if (!perms.has(PermissionFlagsBits.ModerateMembers) && !perms.has(PermissionFlagsBits.Administrator)) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mass Unmute Failed', 'You need **Timeout Members** or admin permission.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mass Unmute Failed', 'You need **Timeout Members** or admin permission.')]
+      });
     }
 
     const targets = message.mentions.members;
     if (!targets.size) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mass Unmute Failed', 'Mention at least one user.')] });
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mass Unmute Failed', 'Mention at least one user.')]
+      });
     }
 
     const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
@@ -85,6 +91,6 @@ module.exports = {
       )
       .setTimestamp();
 
-    await message.reply({ embeds: [embed] });
+    return message.reply({ embeds: [embed] });
   },
 };
