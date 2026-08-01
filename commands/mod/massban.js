@@ -15,6 +15,43 @@ function isOwner(guild, member) {
   return !!guild?.ownerId && member?.id === guild.ownerId;
 }
 
+async function resolveTargetUser(client, message, raw) {
+  if (!raw) return null;
+
+  if (typeof message.resolveUser === 'function') {
+    return await message.resolveUser(raw);
+  }
+
+  const query = String(raw).trim();
+  if (!query) return null;
+
+  const id = query.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(id)) {
+    const cached = client.users.cache.get(id);
+    if (cached) return cached;
+    return await client.users.fetch(id).catch(() => null);
+  }
+
+  const lowered = query.toLowerCase();
+
+  const cachedUser = client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered ||
+    u?.globalName?.toLowerCase() === lowered
+  );
+  if (cachedUser) return cachedUser;
+
+  if (message.guild) {
+    const member = message.guild.members.cache.find(m =>
+      m?.displayName?.toLowerCase() === lowered ||
+      m?.user?.username?.toLowerCase() === lowered ||
+      m?.user?.globalName?.toLowerCase() === lowered
+    );
+    if (member?.user) return member.user;
+  }
+
+  return null;
+}
+
 module.exports = {
   name: 'massban',
   aliases: ['MB', 'mb'],
@@ -23,33 +60,45 @@ module.exports = {
   usage: '$massban <@user|userID> <@user|userID> ... [reason]',
   async execute(client, message, args) {
     if (!message.guild) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mass Ban Failed', 'This command can only be used in a server.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mass Ban Failed', 'This command can only be used in a server.')]
+      });
     }
 
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mass Ban Failed', 'Only administrators can use this command.')] });
+    if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mass Ban Failed', 'Only administrators can use this command.')]
+      });
     }
 
     if (!args.length) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mass Ban Failed', 'You need to provide at least **1 user** to ban.')] });
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mass Ban Failed', 'You need to provide at least **1 user** to ban.')]
+      });
     }
 
     const userIds = new Set();
 
-    message.mentions.users.forEach(u => userIds.add(u.id));
+    for (const mention of message.mentions.users.values()) {
+      userIds.add(mention.id);
+    }
 
     for (const arg of args) {
-      if (/^\d{17,20}$/.test(arg)) {
+      if (/^\d{15,20}$/.test(arg)) {
         userIds.add(arg);
       }
     }
 
     if (userIds.size === 0) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mass Ban Failed', 'No valid users found to ban.')] });
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mass Ban Failed', 'No valid users found to ban. Use mentions or user IDs.')]
+      });
     }
 
     if (userIds.size > 10) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mass Ban Failed', 'You can only massban **up to 10 users at once**.')] });
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mass Ban Failed', 'You can only massban **up to 10 users at once**.')]
+      });
     }
 
     const existingBans = await message.guild.bans.fetch().catch(() => null);
@@ -118,6 +167,6 @@ module.exports = {
       )
       .setTimestamp();
 
-    await message.reply({ embeds: [embed] });
+    return message.reply({ embeds: [embed] });
   },
 };
