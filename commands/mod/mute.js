@@ -18,6 +18,7 @@ function isOwner(guild, member) {
 
 function parseDuration(str) {
   if (!str) return null;
+
   const regex = /(\d+)\s*(s|m|h|d)/gi;
   let match;
   let totalMs = 0;
@@ -45,22 +46,63 @@ function formatDuration(ms) {
   return `${seconds} second${seconds !== 1 ? 's' : ''}`;
 }
 
+async function resolveTargetUser(client, message, raw) {
+  if (!raw) return null;
+
+  if (typeof message.resolveUser === 'function') {
+    return await message.resolveUser(raw);
+  }
+
+  const query = String(raw).trim();
+  if (!query) return null;
+
+  const id = query.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(id)) {
+    const cached = client.users.cache.get(id);
+    if (cached) return cached;
+    return await client.users.fetch(id).catch(() => null);
+  }
+
+  const lowered = query.toLowerCase();
+
+  const cachedUser = client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered ||
+    u?.globalName?.toLowerCase() === lowered
+  );
+  if (cachedUser) return cachedUser;
+
+  if (message.guild) {
+    const member = message.guild.members.cache.find(m =>
+      m?.displayName?.toLowerCase() === lowered ||
+      m?.user?.username?.toLowerCase() === lowered ||
+      m?.user?.globalName?.toLowerCase() === lowered
+    );
+    if (member?.user) return member.user;
+  }
+
+  return null;
+}
+
 module.exports = {
   name: 'mute',
   description: 'Timeout a user for a duration.',
   category: 'mod',
-  usage: '$mute <@user|userID> <duration> [reason]',
+  usage: '$mute <@user|userID|username|display name> <duration> [reason]',
   async execute(client, message, args) {
     if (!message.guild) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Server only.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Server only.')]
+      });
     }
 
-    const perms = message.member.permissions;
-    if (!perms.has(PermissionFlagsBits.ModerateMembers) && !perms.has(PermissionFlagsBits.Administrator)) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You need **Timeout Members** permission.')] });
+    const perms = message.member?.permissions;
+    if (!perms?.has(PermissionFlagsBits.ModerateMembers) && !perms?.has(PermissionFlagsBits.Administrator)) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You need **Timeout Members** permission.')]
+      });
     }
 
-    const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
+    const prefix = message.prefix || client.getPrefix?.(message.guild.id) || '$';
 
     if (!args.length) {
       return message.reply({
@@ -68,21 +110,19 @@ module.exports = {
           makeEmbed(
             '#facc15',
             'Mute Command Usage',
-            `**Usage:** \`${prefix}mute <@user|userID> <duration> [reason]\`\n\n**Examples:**\n${prefix}mute @User 10m spamming\n${prefix}mute 123456789012345678 1h advertising`
+            `**Usage:** \`${prefix}mute <@user|userID|username|display name> <duration> [reason]\`\n\n**Examples:**\n${prefix}mute @User 10m spamming\n${prefix}mute 123456789012345678 1h advertising\n${prefix}mute xusion 30m being annoying`
           ),
         ],
       });
     }
 
     const targetToken = args.shift();
-    let targetUser = message.mentions.users.first();
-
-    if (!targetUser && /^\d{17,20}$/.test(targetToken)) {
-      targetUser = await client.users.fetch(targetToken).catch(() => null);
-    }
+    const targetUser = await resolveTargetUser(client, message, targetToken);
 
     if (!targetUser) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'User not found. Mention them or provide a valid user ID.')] });
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'User not found. Try a mention, user ID, username, or display name.')]
+      });
     }
 
     const durationArg = args.shift();
@@ -104,19 +144,27 @@ module.exports = {
     const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
 
     if (!member) {
-      return message.reply({ embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'User not in this server.')] });
+      return message.reply({
+        embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'User not in this server.')]
+      });
     }
 
     if (member.id === message.author.id) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You cannot mute yourself.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You cannot mute yourself.')]
+      });
     }
 
     if (member.id === client.user.id) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'I cannot mute myself.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'I cannot mute myself.')]
+      });
     }
 
     if (isOwner(message.guild, member) && !isOwner(message.guild, message.member)) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You cannot mute the server owner.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'You cannot mute the server owner.')]
+      });
     }
 
     if (!isOwner(message.guild, message.member)) {
@@ -134,11 +182,15 @@ module.exports = {
     }
 
     if (member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Cannot mute an administrator.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Cannot mute an administrator.')]
+      });
     }
 
-    if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'I need **Timeout Members** permission to mute users.')] });
+    if (!botMember?.permissions?.has(PermissionFlagsBits.ModerateMembers)) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'I need **Timeout Members** permission to mute users.')]
+      });
     }
 
     if (!member.moderatable) {
@@ -189,7 +241,9 @@ module.exports = {
       return message.reply({ embeds: [embed] });
     } catch (err) {
       console.error('Mute error:', err);
-      return message.reply({ embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Failed to mute the user.')] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Mute Failed', 'Failed to mute the user.')]
+      });
     }
   },
 };
