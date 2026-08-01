@@ -55,8 +55,14 @@ function createEmbed(client, message, options = {}) {
     return embed;
 }
 
+function fixPrefixes(text, prefix) {
+    if (typeof text !== 'string') return text;
+    return text.replace(/\$([a-zA-Z0-9])/g, (_match, letter) => `${prefix}${letter}`);
+}
+
 function patchMessageReply(message) {
     if (!message || message._replyPatched) return;
+    if (typeof message.reply !== 'function') return;
 
     const originalReply = message.reply.bind(message);
     const prefix = message.prefix || '!';
@@ -69,45 +75,62 @@ function patchMessageReply(message) {
     message.reply = async function(content, options) {
         if (typeof content === 'string') {
             content = fixText(content);
-        } else if (content && typeof content === 'object' && content.content) {
-            content.content = fixText(content.content);
-        }
+        } else if (content && typeof content === 'object') {
+            if (content.content) {
+                content.content = fixText(content.content);
+            }
 
-        if (content && content.embeds) {
-            content.embeds = content.embeds.map(embed => {
-                if (embed._bypassUniversalHelper) {
+            if (Array.isArray(content.embeds)) {
+                content.embeds = content.embeds.map(embed => {
+                    if (!embed) return embed;
+                    if (embed._bypassUniversalHelper) return embed;
+
+                    if (embed.data) {
+                        const fixedEmbed = new EmbedBuilder(embed.data);
+                        fixedEmbed.setColor(DEFAULT_COLOR);
+
+                        if (embed.data.title) fixedEmbed.setTitle(fixText(embed.data.title));
+                        if (embed.data.description) fixedEmbed.setDescription(fixText(embed.data.description));
+
+                        if (Array.isArray(embed.data.fields)) {
+                            fixedEmbed.setFields(
+                                embed.data.fields.map(field => ({
+                                    name: fixText(field.name),
+                                    value: fixText(field.value),
+                                    inline: field.inline
+                                }))
+                            );
+                        }
+
+                        if (embed.data.footer) {
+                            fixedEmbed.setFooter({
+                                text: fixText(embed.data.footer.text || ''),
+                                iconURL: embed.data.footer.iconURL
+                            });
+                        }
+
+                        if (embed.data.author) {
+                            fixedEmbed.setAuthor({
+                                name: fixText(embed.data.author.name || ''),
+                                iconURL: embed.data.author.iconURL,
+                                url: embed.data.author.url
+                            });
+                        }
+
+                        if (embed.data.thumbnail?.url) {
+                            fixedEmbed.setThumbnail(embed.data.thumbnail.url);
+                        }
+
+                        if (embed.data.image?.url) {
+                            fixedEmbed.setImage(embed.data.image.url);
+                        }
+
+                        return fixedEmbed;
+                    }
+
                     return embed;
-                }
-
-                if (embed.data) {
-                    const fixedEmbed = new EmbedBuilder(embed.data);
-                    fixedEmbed.setColor(DEFAULT_COLOR);
-
-                    if (embed.data.title) fixedEmbed.setTitle(fixText(embed.data.title));
-                    if (embed.data.description) fixedEmbed.setDescription(fixText(embed.data.description));
-
-                    if (embed.data.fields) {
-                        fixedEmbed.setFields(
-                            embed.data.fields.map(field => ({
-                                name: fixText(field.name),
-                                value: fixText(field.value),
-                                inline: field.inline
-                            }))
-                        );
-                    }
-
-                    if (embed.data.footer) {
-                        fixedEmbed.setFooter({
-                            text: fixText(embed.data.footer.text || ''),
-                            iconURL: embed.data.footer.iconURL
-                        });
-                    }
-
-                    return fixedEmbed;
-                }
-
-                return embed;
-            });
+                });
+            }
         }
 
         return originalReply(content, options);
@@ -116,44 +139,107 @@ function patchMessageReply(message) {
     message._replyPatched = true;
 }
 
-function fixPrefixes(text, prefix) {
-    if (typeof text !== 'string') return text;
-    return text.replace(/\$([a-zA-Z0-9])/g, (_match, letter) => `${prefix}${letter}`);
+function normalizeQuery(input) {
+    if (!input) return '';
+    return String(input).trim();
+}
+
+function stripMentionMarkup(query) {
+    return query.replace(/[<@!>]/g, '');
 }
 
 async function resolveUser(client, message, input) {
-    if (!input) return null;
-
-    const query = String(input).trim();
+    const query = normalizeQuery(input);
     if (!query) return null;
 
-    // 1) Mention
-    const mention = message.mentions?.users?.first();
-    if (mention) return mention;
-
-    // 2) User ID
-    const id = query.replace(/[<@!>]/g, '');
-    if (/^\d{15,20}$/.test(id)) {
-        const cached = client.users.cache.get(id);
-        if (cached) return cached;
-
-        const fetched = await client.users.fetch(id).catch(() => null);
-        if (fetched) return fetched;
-    }
-
-    // 3) Exact Discord username (NOT nickname, NOT display name)
     const lowered = query.toLowerCase();
 
-    const cachedUser = client.users.cache.find(u =>
-        u?.username?.toLowerCase() === lowered
-    );
+    // 1) Raw mention input only
+    const mentionMatch = query.match(/^<@!?(\d{15,20})>$/);
+    if (mentionMatch) {
+        const id = mentionMatch[1];
+
+        const cachedMention = client.users.cache.get(id);
+        if (cachedMention) return cachedMention;
+
+        const fetchedMention = await client.users.fetch(id).catch(() => null);
+        if (fetchedMention) return fetchedMention;
+    }
+
+    // 2) User ID input
+    const maybeId = stripMentionMarkup(query);
+    if (/^\d{15,20}$/.test(maybeId)) {
+        const cachedById = client.users.cache.get(maybeId);
+        if (cachedById) return cachedById;
+
+        const fetchedById = await client.users.fetch(maybeId).catch(() => null);
+        if (fetchedById) return fetchedById;
+    }
+
+    // 3) Exact cached user match by username / global name / tag
+    const cachedUser = client.users.cache.find(u => {
+        if (!u) return false;
+
+        const username = u.username?.toLowerCase?.() || '';
+        const globalName = u.globalName?.toLowerCase?.() || '';
+        const tag = u.tag?.toLowerCase?.() || '';
+
+        return (
+            username === lowered ||
+            globalName === lowered ||
+            tag === lowered
+        );
+    });
+
     if (cachedUser) return cachedUser;
 
+    // 4) Guild member lookup by display name / username / global name
     if (message.guild) {
-        const guildMember = message.guild.members.cache.find(m =>
-            m?.user?.username?.toLowerCase() === lowered
-        );
-        if (guildMember?.user) return guildMember.user;
+        const cachedMember = message.guild.members.cache.find(m => {
+            if (!m?.user) return false;
+
+            const displayName = m.displayName?.toLowerCase?.() || '';
+            const username = m.user.username?.toLowerCase?.() || '';
+            const globalName = m.user.globalName?.toLowerCase?.() || '';
+            const tag = m.user.tag?.toLowerCase?.() || '';
+
+            return (
+                displayName === lowered ||
+                username === lowered ||
+                globalName === lowered ||
+                tag === lowered
+            );
+        });
+
+        if (cachedMember?.user) return cachedMember.user;
+
+        // 5) Fetch members by query from the guild
+        const fetchedMembers = await message.guild.members.fetch({
+            query,
+            limit: 10
+        }).catch(() => null);
+
+        if (fetchedMembers?.size) {
+            const exactMember = fetchedMembers.find(m => {
+                if (!m?.user) return false;
+
+                const displayName = m.displayName?.toLowerCase?.() || '';
+                const username = m.user.username?.toLowerCase?.() || '';
+                const globalName = m.user.globalName?.toLowerCase?.() || '';
+                const tag = m.user.tag?.toLowerCase?.() || '';
+
+                return (
+                    displayName === lowered ||
+                    username === lowered ||
+                    globalName === lowered ||
+                    tag === lowered
+                );
+            });
+
+            if (exactMember?.user) return exactMember.user;
+
+            return fetchedMembers.first()?.user || null;
+        }
     }
 
     return null;
@@ -163,8 +249,10 @@ async function resolveMember(client, message, input) {
     const user = await resolveUser(client, message, input);
     if (!user || !message.guild) return null;
 
-    return message.guild.members.cache.get(user.id)
-        || await message.guild.members.fetch(user.id).catch(() => null);
+    return (
+        message.guild.members.cache.get(user.id) ||
+        await message.guild.members.fetch(user.id).catch(() => null)
+    );
 }
 
 module.exports = {
