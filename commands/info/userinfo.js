@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const { colors } = require('../../config');
+const { resolveUser: universalResolveUser } = require('../../handlers/universalHelper');
 
 module.exports = {
   name: 'userinfo',
@@ -7,14 +8,18 @@ module.exports = {
   category: 'info',
   usage: '$userinfo [@user|username|display name|userID]',
   aliases: ['ui'],
+
   async execute(client, message, args) {
     const query = args.join(' ').trim();
-
     let user = null;
 
     if (query) {
       if (typeof message.resolveUser === 'function') {
-        user = await message.resolveUser(query);
+        user = await message.resolveUser(query).catch(() => null);
+      }
+
+      if (!user && typeof universalResolveUser === 'function') {
+        user = await universalResolveUser(client, message, query).catch(() => null);
       }
 
       if (!user) {
@@ -37,13 +42,13 @@ module.exports = {
 
     const roles = member
       ? member.roles.cache
-          .filter((r) => r.id !== message.guild.id)
+          .filter(r => r.id !== message.guild.id)
           .sort((a, b) => b.position - a.position)
-          .map((r) => r.toString())
+          .map(r => r.toString())
       : [];
 
     const embed = new EmbedBuilder()
-      .setColor(colors.userinfo)
+      .setColor(colors.userinfo || '#FF69B4')
       .setAuthor({
         name: user.username,
         iconURL: user.displayAvatarURL({ size: 1024 })
@@ -57,10 +62,11 @@ module.exports = {
         { name: 'Joined Server', value: joinedAt, inline: false },
         {
           name: `Roles [${roles.length}]`,
-          value: roles.length ? roles.join(', ') : 'No roles',
-        },
-      );
+          value: roles.length ? roles.join(', ') : 'No roles'
+        }
+      )
+      .setTimestamp();
 
-    await message.reply({ embeds: [embed] });
-  },
+    return message.reply({ embeds: [embed] });
+  }
 };
