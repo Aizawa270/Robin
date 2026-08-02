@@ -46,12 +46,8 @@ function formatDuration(ms) {
   return `${seconds} second${seconds !== 1 ? 's' : ''}`;
 }
 
-async function resolveTargetUser(client, message, raw) {
+async function resolveTargetUserStrict(client, message, raw) {
   if (!raw) return null;
-
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(raw);
-  }
 
   const query = String(raw).trim();
   if (!query) return null;
@@ -66,18 +62,23 @@ async function resolveTargetUser(client, message, raw) {
   const lowered = query.toLowerCase();
 
   const cachedUser = client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
+    u?.username?.toLowerCase() === lowered
   );
   if (cachedUser) return cachedUser;
 
   if (message.guild) {
-    const member = message.guild.members.cache.find(m =>
-      m?.displayName?.toLowerCase() === lowered ||
-      m?.user?.username?.toLowerCase() === lowered ||
-      m?.user?.globalName?.toLowerCase() === lowered
+    const cachedMember = message.guild.members.cache.find(m =>
+      m?.user?.username?.toLowerCase() === lowered
     );
-    if (member?.user) return member.user;
+    if (cachedMember?.user) return cachedMember.user;
+
+    const fetchedMembers = await message.guild.members.fetch().catch(() => null);
+    if (fetchedMembers?.size) {
+      const exact = fetchedMembers.find(m =>
+        m?.user?.username?.toLowerCase() === lowered
+      );
+      if (exact?.user) return exact.user;
+    }
   }
 
   return null;
@@ -87,7 +88,7 @@ module.exports = {
   name: 'mute',
   description: 'Timeout a user for a duration.',
   category: 'mod',
-  usage: '$mute <@user|userID|username|display name> <duration> [reason]',
+  usage: '$mute <@user|userID|username> <duration> [reason]',
   async execute(client, message, args) {
     if (!message.guild) {
       return message.reply({
@@ -110,18 +111,18 @@ module.exports = {
           makeEmbed(
             '#facc15',
             'Mute Command Usage',
-            `**Usage:** \`${prefix}mute <@user|userID|username|display name> <duration> [reason]\`\n\n**Examples:**\n${prefix}mute @User 10m spamming\n${prefix}mute 123456789012345678 1h advertising\n${prefix}mute xusion 30m being annoying`
+            `**Usage:** \`${prefix}mute <@user|userID|username> <duration> [reason]\`\n\n**Examples:**\n${prefix}mute @User 10m spamming\n${prefix}mute 123456789012345678 1h advertising\n${prefix}mute xusion 30m being annoying`
           ),
         ],
       });
     }
 
     const targetToken = args.shift();
-    const targetUser = await resolveTargetUser(client, message, targetToken);
+    const targetUser = await resolveTargetUserStrict(client, message, targetToken);
 
     if (!targetUser) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'User not found. Try a mention, user ID, username, or display name.')]
+        embeds: [makeEmbed('#f59e0b', 'Mute Failed', 'User not found. Try a mention, user ID, or exact username.')]
       });
     }
 
