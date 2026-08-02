@@ -1,19 +1,21 @@
 const { EmbedBuilder } = require('discord.js');
-const { ownerId } = require('../../config');
+
+let config = null;
+try {
+  config = require('../../config');
+} catch {}
+
+const OWNER_ID = config?.ownerId ? String(config.ownerId) : null;
 
 function buildInvalidUserEmbed() {
   return new EmbedBuilder()
     .setColor('#ff0000')
     .setTitle('❌ Invalid User')
-    .setDescription('Provide a valid ping, user ID, exact username, or display name.');
+    .setDescription('Provide a valid ping, user ID, or exact username.');
 }
 
 async function resolveTargetUser(message, input) {
   if (!input) return null;
-
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(input);
-  }
 
   const raw = String(input).trim();
   if (!raw) return null;
@@ -28,20 +30,23 @@ async function resolveTargetUser(message, input) {
   const lowered = raw.toLowerCase();
 
   const cachedUser = message.client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
+    u?.username?.toLowerCase() === lowered
   );
-
   if (cachedUser) return cachedUser;
 
   if (message.guild) {
     const member = message.guild.members.cache.find(m =>
-      m?.displayName?.toLowerCase() === lowered ||
-      m?.user?.username?.toLowerCase() === lowered ||
-      m?.user?.globalName?.toLowerCase() === lowered
+      m?.user?.username?.toLowerCase() === lowered
     );
-
     if (member?.user) return member.user;
+
+    const fetched = await message.guild.members.fetch().catch(() => null);
+    if (fetched?.size) {
+      const exact = fetched.find(m =>
+        m?.user?.username?.toLowerCase() === lowered
+      );
+      if (exact?.user) return exact.user;
+    }
   }
 
   return null;
@@ -52,10 +57,10 @@ module.exports = {
   aliases: ['bla', 'blr'],
   description: 'Blacklist or unblacklist a user from using the bot',
   category: 'mod',
-  usage: 'blacklistbot <add|remove> <@user|user_id|username|display name>',
+  usage: 'blacklistbot <add|remove> <@user|user_id|username>',
 
   async execute(client, message, args) {
-    if (message.author.id !== ownerId) return;
+    if (!OWNER_ID || message.author.id !== OWNER_ID) return;
 
     let sub = args[0]?.toLowerCase();
     const invokedAs = message.content.trim().split(/\s+/)[0].replace(/^\$/, '').toLowerCase();
@@ -69,8 +74,8 @@ module.exports = {
         .setTitle('Blacklist Bot')
         .setDescription(
           '**Usage:**\n' +
-          '`blacklistbot add <@user|id|username|display name>` — Block user from bot\n' +
-          '`blacklistbot remove <@user|id|username|display name>` — Unblock user\n\n' +
+          '`blacklistbot add <@user|id|username>` — Block user from bot\n' +
+          '`blacklistbot remove <@user|id|username>` — Unblock user\n\n' +
           '**Aliases:** `bla` = add, `blr` = remove'
         );
 
@@ -84,22 +89,30 @@ module.exports = {
       return message.reply({ embeds: [buildInvalidUserEmbed()] });
     }
 
-    if (targetUser.id === ownerId) {
-      const errEmbed = new EmbedBuilder()
-        .setColor('#ff0000')
-        .setTitle('❌ Nice try');
-      return message.reply({ embeds: [errEmbed] });
+    if (targetUser.id === OWNER_ID) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ff0000')
+            .setTitle('❌ Nice try')
+        ]
+      });
     }
 
-    const db = client.prefixlessDB;
-    db.prepare(`
+    if (!client.prefixlessDB) {
+      return message.reply({
+        embeds: [new EmbedBuilder().setColor('#ef4444').setDescription('Database unavailable.')]
+      });
+    }
+
+    client.prefixlessDB.prepare(`
       CREATE TABLE IF NOT EXISTS bot_blacklist (
         user_id TEXT PRIMARY KEY
       )
     `).run();
 
     if (sub === 'add') {
-      const already = db.prepare('SELECT user_id FROM bot_blacklist WHERE user_id = ?').get(targetUser.id);
+      const already = client.prefixlessDB.prepare('SELECT user_id FROM bot_blacklist WHERE user_id = ?').get(targetUser.id);
       if (already) {
         const embed = new EmbedBuilder()
           .setColor('#ffaa00')
@@ -108,23 +121,23 @@ module.exports = {
         return message.reply({ embeds: [embed] });
       }
 
-      db.prepare('INSERT INTO bot_blacklist (user_id) VALUES (?)').run(targetUser.id);
+      client.prefixlessDB.prepare('INSERT INTO bot_blacklist (user_id) VALUES (?)').run(targetUser.id);
 
       if (client.botBlacklist instanceof Set) {
         client.botBlacklist.add(targetUser.id);
       } else {
         client.botBlacklist = new Set(
-          db.prepare('SELECT user_id FROM bot_blacklist').all().map(r => r.user_id)
+          client.prefixlessDB.prepare('SELECT user_id FROM bot_blacklist').all().map(r => r.user_id)
         );
       }
 
       const embed = new EmbedBuilder()
         .setColor('#ff0000')
-        .setAuthor({ name: 'Vanessa', iconURL: client.user.displayAvatarURL() })
+        .setAuthor({ name: client.user.username, iconURL: client.user.displayAvatarURL() })
         .setTitle('🚫 User Blacklisted')
         .setDescription(
-          `**${targetUser.tag}** has been restricted from using Vanessa.\n\n` +
-          `> You're restricted from using Vanessa.`
+          `**${targetUser.tag}** has been restricted from using the bot.\n\n` +
+          `> You're restricted from using this bot.`
         )
         .addFields({ name: 'User ID', value: `\`${targetUser.id}\``, inline: true })
         .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
@@ -135,7 +148,7 @@ module.exports = {
     }
 
     if (sub === 'remove') {
-      const exists = db.prepare('SELECT user_id FROM bot_blacklist WHERE user_id = ?').get(targetUser.id);
+      const exists = client.prefixlessDB.prepare('SELECT user_id FROM bot_blacklist WHERE user_id = ?').get(targetUser.id);
       if (!exists) {
         const embed = new EmbedBuilder()
           .setColor('#ffaa00')
@@ -144,7 +157,7 @@ module.exports = {
         return message.reply({ embeds: [embed] });
       }
 
-      db.prepare('DELETE FROM bot_blacklist WHERE user_id = ?').run(targetUser.id);
+      client.prefixlessDB.prepare('DELETE FROM bot_blacklist WHERE user_id = ?').run(targetUser.id);
 
       if (client.botBlacklist instanceof Set) {
         client.botBlacklist.delete(targetUser.id);
@@ -152,9 +165,9 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setColor('#00ff00')
-        .setAuthor({ name: 'Vanessa', iconURL: client.user.displayAvatarURL() })
+        .setAuthor({ name: client.user.username, iconURL: client.user.displayAvatarURL() })
         .setTitle('✅ Blacklist Removed')
-        .setDescription(`**${targetUser.tag}** can now use Vanessa again.`)
+        .setDescription(`**${targetUser.tag}** can now use the bot again.`)
         .addFields({ name: 'User ID', value: `\`${targetUser.id}\``, inline: true })
         .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
         .setFooter({ text: `Action by ${message.author.tag}` })
