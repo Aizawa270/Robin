@@ -117,13 +117,8 @@ function patchMessageReply(message) {
                             });
                         }
 
-                        if (embed.data.thumbnail?.url) {
-                            fixedEmbed.setThumbnail(embed.data.thumbnail.url);
-                        }
-
-                        if (embed.data.image?.url) {
-                            fixedEmbed.setImage(embed.data.image.url);
-                        }
+                        if (embed.data.thumbnail?.url) fixedEmbed.setThumbnail(embed.data.thumbnail.url);
+                        if (embed.data.image?.url) fixedEmbed.setImage(embed.data.image.url);
 
                         return fixedEmbed;
                     }
@@ -154,92 +149,38 @@ async function resolveUser(client, message, input) {
 
     const lowered = query.toLowerCase();
 
-    // 1) Raw mention input only
     const mentionMatch = query.match(/^<@!?(\d{15,20})>$/);
     if (mentionMatch) {
         const id = mentionMatch[1];
-
         const cachedMention = client.users.cache.get(id);
         if (cachedMention) return cachedMention;
-
-        const fetchedMention = await client.users.fetch(id).catch(() => null);
-        if (fetchedMention) return fetchedMention;
+        return await client.users.fetch(id).catch(() => null);
     }
 
-    // 2) User ID input
     const maybeId = stripMentionMarkup(query);
     if (/^\d{15,20}$/.test(maybeId)) {
         const cachedById = client.users.cache.get(maybeId);
         if (cachedById) return cachedById;
-
-        const fetchedById = await client.users.fetch(maybeId).catch(() => null);
-        if (fetchedById) return fetchedById;
+        return await client.users.fetch(maybeId).catch(() => null);
     }
 
-    // 3) Exact cached user match by username / global name / tag
     const cachedUser = client.users.cache.find(u => {
         if (!u) return false;
-
         const username = u.username?.toLowerCase?.() || '';
-        const globalName = u.globalName?.toLowerCase?.() || '';
-        const tag = u.tag?.toLowerCase?.() || '';
-
-        return (
-            username === lowered ||
-            globalName === lowered ||
-            tag === lowered
-        );
+        return username === lowered;
     });
-
     if (cachedUser) return cachedUser;
 
-    // 4) Guild member lookup by display name / username / global name
     if (message.guild) {
+        await message.guild.members.fetch().catch(() => null);
+
         const cachedMember = message.guild.members.cache.find(m => {
             if (!m?.user) return false;
-
-            const displayName = m.displayName?.toLowerCase?.() || '';
             const username = m.user.username?.toLowerCase?.() || '';
-            const globalName = m.user.globalName?.toLowerCase?.() || '';
-            const tag = m.user.tag?.toLowerCase?.() || '';
-
-            return (
-                displayName === lowered ||
-                username === lowered ||
-                globalName === lowered ||
-                tag === lowered
-            );
+            return username === lowered;
         });
 
         if (cachedMember?.user) return cachedMember.user;
-
-        // 5) Fetch members by query from the guild
-        const fetchedMembers = await message.guild.members.fetch({
-            query,
-            limit: 10
-        }).catch(() => null);
-
-        if (fetchedMembers?.size) {
-            const exactMember = fetchedMembers.find(m => {
-                if (!m?.user) return false;
-
-                const displayName = m.displayName?.toLowerCase?.() || '';
-                const username = m.user.username?.toLowerCase?.() || '';
-                const globalName = m.user.globalName?.toLowerCase?.() || '';
-                const tag = m.user.tag?.toLowerCase?.() || '';
-
-                return (
-                    displayName === lowered ||
-                    username === lowered ||
-                    globalName === lowered ||
-                    tag === lowered
-                );
-            });
-
-            if (exactMember?.user) return exactMember.user;
-
-            return fetchedMembers.first()?.user || null;
-        }
     }
 
     return null;
