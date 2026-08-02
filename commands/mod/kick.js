@@ -1,5 +1,6 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { logModAction } = require('../../handlers/modstatsHelper');
+const { resolveUser, resolveMember } = require('../../handlers/universalHelper');
 
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
@@ -16,65 +17,12 @@ function isOwner(guild, member) {
   return !!guild?.ownerId && member?.id === guild.ownerId;
 }
 
-async function resolveTargetUser(message, raw) {
-  if (!raw) return null;
-
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(raw);
-  }
-
-  const query = String(raw).trim();
-  if (!query) return null;
-
-  const id = query.replace(/[<@!>]/g, '');
-  if (/^\d{15,20}$/.test(id)) {
-    const cached = message.client.users.cache.get(id);
-    if (cached) return cached;
-    return await message.client.users.fetch(id).catch(() => null);
-  }
-
-  const lowered = query.toLowerCase();
-
-  const cachedUser = message.client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
-  );
-  if (cachedUser) return cachedUser;
-
-  if (message.guild) {
-    const member = message.guild.members.cache.find(m =>
-      m?.displayName?.toLowerCase() === lowered ||
-      m?.user?.username?.toLowerCase() === lowered ||
-      m?.user?.globalName?.toLowerCase() === lowered
-    );
-    if (member?.user) return member.user;
-  }
-
-  return null;
-}
-
-async function resolveTargetMember(message, raw) {
-  if (!message.guild) return null;
-
-  if (typeof message.resolveMember === 'function') {
-    return await message.resolveMember(raw);
-  }
-
-  const user = await resolveTargetUser(message, raw);
-  if (!user) return null;
-
-  return (
-    message.guild.members.cache.get(user.id) ||
-    await message.guild.members.fetch(user.id).catch(() => null)
-  );
-}
-
 module.exports = {
   name: 'kick',
-  description: 'Kick a user by mention, ID, username, or display name.',
+  description: 'Kick a user by mention, ID, or exact username.',
   aliases: ['k', 'K'],
   category: 'mod',
-  usage: '$kick <@user|userID|username|display name> [reason]',
+  usage: '$kick <@user|userID|username> [reason]',
   async execute(client, message, args) {
     if (!message.guild) {
       return message.reply({
@@ -96,7 +44,7 @@ module.exports = {
           makeEmbed(
             '#fb923c',
             'Kick Command Usage',
-            `**Usage:** \`${prefix}kick <@user|userID|username|display name> [reason]\`\n\n**Examples:**\n${prefix}kick @User being rude\n${prefix}kick 123456789012345678 spam\n${prefix}kick xusion being annoying`
+            `**Usage:** \`${prefix}kick <@user|userID|username> [reason]\`\n\n**Examples:**\n${prefix}kick @User being rude\n${prefix}kick 123456789012345678 spam\n${prefix}kick xusion being annoying`
           ),
         ],
       });
@@ -105,10 +53,10 @@ module.exports = {
     const targetInput = args[0];
     const reason = args.slice(1).join(' ').trim() || 'No reason provided';
 
-    const targetUser = await resolveTargetUser(message, targetInput);
+    const targetUser = await resolveUser(client, message, targetInput);
     if (!targetUser) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Kick Failed', 'User not found. Try a mention, user ID, exact username, or display name.')]
+        embeds: [makeEmbed('#f59e0b', 'Kick Failed', 'User not found. Try a mention, user ID, or exact username.')]
       });
     }
 
@@ -124,7 +72,7 @@ module.exports = {
       });
     }
 
-    const targetMember = await resolveTargetMember(message, targetInput);
+    const targetMember = await resolveMember(client, message, targetInput);
     const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
 
     if (!targetMember) {
