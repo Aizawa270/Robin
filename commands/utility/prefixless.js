@@ -1,11 +1,16 @@
 const { EmbedBuilder } = require('discord.js');
 const { colors, ownerId } = require('../../config');
+const { resolveUser: universalResolveUser } = require('../../handlers/universalHelper');
 
 async function resolveTargetUser(client, message, input) {
   if (!input) return null;
 
   if (typeof message.resolveUser === 'function') {
     return await message.resolveUser(input).catch(() => null);
+  }
+
+  if (typeof universalResolveUser === 'function') {
+    return await universalResolveUser(client, message, input).catch(() => null);
   }
 
   const raw = String(input).trim();
@@ -26,12 +31,10 @@ async function resolveTargetUser(client, message, input) {
     u?.tag?.toLowerCase() === lowered
   );
 
-  if (cachedUser) return cachedUser;
-
-  return null;
+  return cachedUser || null;
 }
 
-function guildCache(client, guildId) {
+function ensureGuildCache(client, guildId) {
   if (!client.prefixlessByGuild) client.prefixlessByGuild = new Map();
 
   const key = String(guildId);
@@ -142,13 +145,13 @@ module.exports = {
           new EmbedBuilder()
             .setColor('#f59e0b')
             .setTitle('Prefixless Failed')
-            .setDescription('Provide a valid user mention or user ID.')
+            .setDescription('Provide a valid user mention, ID, or exact username.')
             .setTimestamp()
         ]
       });
     }
 
-    const cache = guildCache(client, guildId);
+    const cache = ensureGuildCache(client, guildId);
 
     if (sub === 'add') {
       db.prepare(
