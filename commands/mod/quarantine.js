@@ -4,6 +4,8 @@ const {
   ChannelType,
 } = require('discord.js');
 
+const { resolveUser } = require('../../handlers/universalHelper');
+
 let config = null;
 try {
   config = require('../../config');
@@ -89,61 +91,6 @@ function resolveRole(guild, input) {
   );
 
   return byName || null;
-}
-
-// ===== Updated resolveUser (consistent with other mod commands) =====
-async function resolveUser(message, input) {
-  if (!input) return null;
-
-  // Use the universal resolver if your command handler provides it
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(input);
-  }
-
-  const query = String(input).trim();
-  if (!query) return null;
-
-  // Mention or raw ID
-  const id = query.replace(/[<@!>]/g, '');
-  if (/^\d{15,20}$/.test(id)) {
-    const cached = message.client.users.cache.get(id);
-    if (cached) return cached;
-    return await message.client.users.fetch(id).catch(() => null);
-  }
-
-  const lowered = query.toLowerCase();
-
-  // Exact match from user cache
-  const cachedUser = message.client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
-  );
-  if (cachedUser) return cachedUser;
-
-  // Ensure guild members are cached
-  if (message.guild) {
-    await message.guild.members.fetch().catch(() => {});
-
-    // Exact match
-    let member = message.guild.members.cache.find(m =>
-      m?.displayName?.toLowerCase() === lowered ||
-      m?.user?.username?.toLowerCase() === lowered ||
-      m?.user?.globalName?.toLowerCase() === lowered
-    );
-
-    // Partial match fallback
-    if (!member) {
-      member = message.guild.members.cache.find(m =>
-        m?.displayName?.toLowerCase().includes(lowered) ||
-        m?.user?.username?.toLowerCase().includes(lowered) ||
-        m?.user?.globalName?.toLowerCase().includes(lowered)
-      );
-    }
-
-    if (member?.user) return member.user;
-  }
-
-  return null;
 }
 
 function getQuarantineSettings(client, guildId) {
@@ -357,7 +304,7 @@ async function handleSetup(client, message, args) {
 
   if (!canManageQuarantineSystem(client, message.member)) {
     return message.reply({
-      embeds: [makeEmbed('#ef4444', 'Quarantine Setup Failed', 'You do not have permission to configure quarantine.')],
+      embeds: [makeEmbed('#ef4444', 'Quarantine Setup Failed', 'You do not have permission to configure quarantine.')]
     });
   }
 
@@ -406,7 +353,7 @@ async function handleSetup(client, message, args) {
   });
 }
 
-function parseAccessTarget(message, args) {
+async function parseAccessTarget(message, args) {
   const explicitType = (args[0] || '').toLowerCase();
   let type = null;
   let valueIndex = 0;
@@ -426,22 +373,18 @@ function parseAccessTarget(message, args) {
   }
 
   if (type === 'user') {
-    const userMention = message.mentions.users.first();
-    if (userMention) return { type: 'user', id: userMention.id, label: `<@${userMention.id}>` };
-
-    const cleaned = String(raw).replace(/[<@!>]/g, '');
-    if (!cleaned) return null;
-
-    return { type: 'user', id: cleaned, label: `<@${cleaned}>` };
+    const user = await resolveUser(message.client, message, raw);
+    if (!user) return null;
+    return { type: 'user', id: user.id, label: `<@${user.id}>` };
   }
 
   const role = resolveRole(message.guild, raw);
   if (role) return { type: 'role', id: role.id, label: `<@&${role.id}>` };
 
-  const cleaned = String(raw).replace(/[<@!>]/g, '');
-  if (!cleaned) return null;
+  const user = await resolveUser(message.client, message, raw);
+  if (user) return { type: 'user', id: user.id, label: `<@${user.id}>` };
 
-  return { type: 'user', id: cleaned, label: `<@${cleaned}>` };
+  return null;
 }
 
 async function handleAccess(client, message, args) {
@@ -449,7 +392,7 @@ async function handleAccess(client, message, args) {
 
   if (!canManageQuarantineSystem(client, message.member)) {
     return message.reply({
-      embeds: [makeEmbed('#ef4444', 'Access Failed', 'You do not have permission to manage quarantine access.')],
+      embeds: [makeEmbed('#ef4444', 'Access Failed', 'You do not have permission to manage quarantine access.')]
     });
   }
 
@@ -485,7 +428,7 @@ async function handleAccess(client, message, args) {
     });
   }
 
-  const target = parseAccessTarget(message, args.slice(1));
+  const target = await parseAccessTarget(message, args.slice(1));
   if (!target) {
     return message.reply({
       embeds: [
@@ -502,18 +445,14 @@ async function handleAccess(client, message, args) {
     addAccessEntry(client, message.guild.id, target.type, target.id);
 
     return message.reply({
-      embeds: [
-        makeEmbed('#22c55e', 'Access Added', `${target.label} can now use quarantine commands.`),
-      ],
+      embeds: [makeEmbed('#22c55e', 'Access Added', `${target.label} can now use quarantine commands.`)]
     });
   }
 
   removeAccessEntry(client, message.guild.id, target.type, target.id);
 
   return message.reply({
-    embeds: [
-      makeEmbed('#ef4444', 'Access Removed', `${target.label} can no longer use quarantine commands.`),
-    ],
+    embeds: [makeEmbed('#ef4444', 'Access Removed', `${target.label} can no longer use quarantine commands.`)]
   });
 }
 
@@ -544,7 +483,7 @@ async function handleQuarantine(client, message, args) {
 
   if (!canUseQuarantineCommands(client, message.member)) {
     return message.reply({
-      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You do not have permission to use this command.')],
+      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You do not have permission to use this command.')]
     });
   }
 
@@ -564,13 +503,11 @@ async function handleQuarantine(client, message, args) {
   const quarantineRole = message.guild.roles.cache.get(cfg.role_id);
   if (!quarantineRole) {
     return message.reply({
-      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'Configured quarantine role no longer exists. Run setup again.')],
+      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'Configured quarantine role no longer exists. Run setup again.')]
     });
   }
 
-  const targetUser =
-    message.mentions.users.first() ||
-    await resolveUser(message, args[0]);
+  const targetUser = message.mentions.users.first() || await resolveUser(message.client, message, args[0]);
 
   if (!targetUser) {
     return message.reply({
@@ -578,7 +515,7 @@ async function handleQuarantine(client, message, args) {
         makeEmbed(
           '#f59e0b',
           'Quarantine Failed',
-          `Please provide a user mention or ID.\nExample:\n\`${prefix}quarantine @user\``
+          `Please provide a user mention, ID, or exact username.\nExample:\n\`${prefix}quarantine @user\``
         ),
       ],
     });
@@ -586,39 +523,39 @@ async function handleQuarantine(client, message, args) {
 
   if (targetUser.bot) {
     return message.reply({
-      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine a bot.')],
+      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine a bot.')]
     });
   }
 
   if (targetUser.id === message.author.id) {
     return message.reply({
-      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine yourself.')],
+      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine yourself.')]
     });
   }
 
   const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
   if (!member) {
     return message.reply({
-      embeds: [makeEmbed('#f59e0b', 'Quarantine Failed', 'User not found in this server.')],
+      embeds: [makeEmbed('#f59e0b', 'Quarantine Failed', 'User not found in this server.')]
     });
   }
 
   if (member.roles.cache.has(quarantineRole.id)) {
     return message.reply({
-      embeds: [makeEmbed('#f59e0b', 'Quarantine Failed', 'This user is already quarantined.')],
+      embeds: [makeEmbed('#f59e0b', 'Quarantine Failed', 'This user is already quarantined.')]
     });
   }
 
   if (!canBypassHierarchy(client, message.member)) {
     if (member.id === message.guild.ownerId) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine the server owner.')],
+        embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine the server owner.')]
       });
     }
 
     if (message.member.roles.highest.comparePositionTo(member.roles.highest) <= 0) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine someone at your level or above.')],
+        embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'You cannot quarantine someone at your level or above.')]
       });
     }
   }
@@ -650,7 +587,7 @@ async function handleQuarantine(client, message, args) {
       .run(member.id);
 
     return message.reply({
-      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'Failed to set quarantine role. Check bot permissions and role hierarchy.')],
+      embeds: [makeEmbed('#ef4444', 'Quarantine Failed', 'Failed to set quarantine role. Check bot permissions and role hierarchy.')]
     });
   }
 
@@ -674,7 +611,7 @@ module.exports = {
   aliases: ['q', 'quarantineset', 'quarantineaccess'],
   description: 'Configure quarantine, manage access, or quarantine a user.',
   category: 'mod',
-  usage: '$quarantine <@user|id>',
+  usage: '$quarantine <@user|id|username>',
 
   async execute(client, message, args) {
     if (!message.guild) return;
