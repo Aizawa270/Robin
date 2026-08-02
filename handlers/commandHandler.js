@@ -30,9 +30,7 @@ function loadCommands(client) {
   const commandsPath = path.join(__dirname, '..', 'commands');
 
   if (!fs.existsSync(commandsPath)) {
-    console.warn(
-      `[Commands] Commands folder not found: ${commandsPath}`
-    );
+    console.warn(`[Commands] Commands folder not found: ${commandsPath}`);
     return;
   }
 
@@ -46,16 +44,9 @@ function loadCommands(client) {
     try {
       stat = fs.statSync(entryPath);
     } catch (error) {
-      console.error(
-        `[Commands] Could not inspect: ${entryPath}`,
-        error
-      );
+      console.error(`[Commands] Could not inspect: ${entryPath}`, error);
       continue;
     }
-
-    // ========================================================
-    // COMMAND FILE DIRECTLY INSIDE /commands
-    // ========================================================
 
     if (stat.isFile() && entry.endsWith('.js')) {
       try {
@@ -71,24 +62,14 @@ function loadCommands(client) {
       continue;
     }
 
-    // ========================================================
-    // COMMAND CATEGORY FOLDER
-    // ========================================================
-
     if (!stat.isDirectory()) continue;
 
     let files;
 
     try {
-      files = fs
-        .readdirSync(entryPath)
-        .filter(file => file.endsWith('.js'))
-        .sort();
+      files = fs.readdirSync(entryPath).filter(file => file.endsWith('.js')).sort();
     } catch (error) {
-      console.error(
-        `[Commands] Could not read category: ${entryPath}`,
-        error
-      );
+      console.error(`[Commands] Could not read category: ${entryPath}`, error);
       continue;
     }
 
@@ -107,30 +88,17 @@ function loadCommands(client) {
     }
   }
 
-  // ============================================================
-  // LOADING SUMMARY
-  // ============================================================
-
-  console.log(
-    `✅ Loaded ${client.commands.size} commands`
-  );
+  console.log(`✅ Loaded ${client.commands.size} commands`);
 
   if (client.aliases.size > 0) {
-    console.log(
-      `🔗 Loaded ${client.aliases.size} aliases`
-    );
+    console.log(`🔗 Loaded ${client.aliases.size} aliases`);
   }
 
   if (client.brokenCommands.length > 0) {
-    console.error(
-      `❌ ${client.brokenCommands.length} command(s) failed to load:`
-    );
+    console.error(`❌ ${client.brokenCommands.length} command(s) failed to load:`);
 
     for (const broken of client.brokenCommands) {
-      console.error(
-        `\n[Broken Command] ${broken.file}`
-      );
-
+      console.error(`\n[Broken Command] ${broken.file}`);
       console.error(
         broken.error?.stack ||
         broken.error?.message ||
@@ -145,14 +113,8 @@ function loadCommands(client) {
 // ============================================================
 
 function registerCommand(client, command, filePath) {
-  if (
-    !command?.name ||
-    typeof command.execute !== 'function'
-  ) {
-    console.warn(
-      `[Commands] Skipping invalid command: ${filePath}`
-    );
-
+  if (!command?.name || typeof command.execute !== 'function') {
+    console.warn(`[Commands] Skipping invalid command: ${filePath}`);
     return;
   }
 
@@ -161,64 +123,37 @@ function registerCommand(client, command, filePath) {
   command.usage ??= '';
   command.description ??= 'No description';
 
-  const commandName =
-    String(command.name).toLowerCase().trim();
-
-  // ==========================================================
-  // DUPLICATE COMMAND NAME CHECK
-  // ==========================================================
+  const commandName = String(command.name).toLowerCase().trim();
 
   if (client.commands.has(commandName)) {
-    console.error(
-      `[Commands] Duplicate command name "${commandName}" in ${filePath}`
-    );
-
+    console.error(`[Commands] Duplicate command name "${commandName}" in ${filePath}`);
     return;
   }
 
-  client.commands.set(
-    commandName,
-    command
-  );
-
-  // ==========================================================
-  // REGISTER ALIASES
-  // ==========================================================
+  client.commands.set(commandName, command);
 
   for (const alias of command.aliases) {
     if (!alias) continue;
 
-    const aliasName =
-      String(alias).toLowerCase().trim();
-
+    const aliasName = String(alias).toLowerCase().trim();
     if (!aliasName) continue;
 
-    // Don't allow an alias to overwrite a real command
     if (client.commands.has(aliasName)) {
       console.error(
         `[Commands] Alias "${aliasName}" in ${filePath} conflicts with command "${aliasName}". Skipping alias.`
       );
-
       continue;
     }
 
-    // Don't silently overwrite another alias
     if (client.aliases.has(aliasName)) {
-      const existingCommand =
-        client.aliases.get(aliasName);
-
+      const existingCommand = client.aliases.get(aliasName);
       console.error(
-        `[Commands] Duplicate alias "${aliasName}" in ${filePath}. ` +
-        `Already used by "${existingCommand.name}". Skipping alias.`
+        `[Commands] Duplicate alias "${aliasName}" in ${filePath}. Already used by "${existingCommand.name}". Skipping alias.`
       );
-
       continue;
     }
 
-    client.aliases.set(
-      aliasName,
-      command
-    );
+    client.aliases.set(aliasName, command);
   }
 }
 
@@ -227,7 +162,6 @@ function registerCommand(client, command, filePath) {
 // ============================================================
 
 function getCurrentPrefix(client, guildId) {
-  // Your bot's default prefix is $
   return client.getPrefix(guildId) || '$';
 }
 
@@ -236,33 +170,19 @@ function getCurrentPrefix(client, guildId) {
 // ============================================================
 
 async function checkBotBlacklist(client, message) {
-  if (
-    !client.botBlacklist?.has(
-      message.author.id
-    )
-  ) {
+  if (!client.botBlacklist?.has(message.author.id)) {
     return false;
   }
 
   const embed = new EmbedBuilder()
     .setColor('#ff0000')
-    .setAuthor({
-      name: 'Vanessa',
-    })
-    .setDescription(
-      "You're restricted from using Vanessa."
-    )
+    .setAuthor({ name: 'Vanessa' })
+    .setDescription("You're restricted from using Vanessa.")
     .setFooter({
-      text:
-        'Contact the server owner if you think this is a mistake.',
+      text: 'Contact the server owner if you think this is a mistake.',
     });
 
-  await message
-    .reply({
-      embeds: [embed],
-    })
-    .catch(() => {});
-
+  await message.reply({ embeds: [embed] }).catch(() => {});
   return true;
 }
 
@@ -270,81 +190,33 @@ async function checkBotBlacklist(client, message) {
 // PREPARE MESSAGE FOR COMMAND
 // ============================================================
 
-function prepareMessage(
-  client,
-  message,
-  command
-) {
-  const prefix =
-    getCurrentPrefix(
-      client,
-      message.guild?.id
-    );
+function prepareMessage(client, message, command) {
+  const prefix = getCurrentPrefix(client, message.guild?.id);
 
   message.prefix = prefix;
+  message.commandName = command.name;
 
-  message.commandName =
-    command.name;
+  message.createEmbed = (opts) => universalHelper.createEmbed(client, message, opts);
 
-  message.createEmbed = (opts) =>
-    universalHelper.createEmbed(
-      client,
-      message,
-      opts
-    );
+  message.resolveUser = (input) => universalHelper.resolveUser(client, message, input);
+  message.resolveMember = (input) => universalHelper.resolveMember(client, message, input);
 
-  message.resolveUser = (input) =>
-    universalHelper.resolveUser(
-      client,
-      message,
-      input
-    );
-
-  message.resolveMember = (input) =>
-    universalHelper.resolveMember(
-      client,
-      message,
-      input
-    );
-
-  universalHelper.patchMessageReply(
-    message
-  );
+  universalHelper.patchMessageReply(message);
 }
 
 // ============================================================
 // EXECUTE COMMAND SAFELY
 // ============================================================
 
-async function executeCommand(
-  client,
-  message,
-  command,
-  args
-) {
-  prepareMessage(
-    client,
-    message,
-    command
-  );
+async function executeCommand(client, message, command, args) {
+  prepareMessage(client, message, command);
 
   try {
-    await command.execute(
-      client,
-      message,
-      args
-    );
+    await command.execute(client, message, args);
   } catch (error) {
-    console.error(
-      `[Command Error] ${command.name}`,
-      error
-    );
+    console.error(`[Command Error] ${command.name}`, error);
 
-    await message
-      .reply(
-        'Something went wrong while running that command.'
-      )
-      .catch(() => {});
+    await message.reply('Something went wrong while running that command.').catch(() => {});
   }
 }
 
@@ -352,123 +224,55 @@ async function executeCommand(
 // HANDLE MESSAGE
 // ============================================================
 
-async function handleMessage(
-  client,
-  message
-) {
-  // Ignore bots
+async function handleMessage(client, message) {
   if (message.author.bot) return;
 
-  // Remove replied-to user's mention
   stripReplyMentions(message);
 
-  const content =
-    message.content?.trim();
-
+  const content = message.content?.trim();
   if (!content) return;
 
-  // ==========================================================
-  // IMPORTANT:
-  // AFK logic is handled separately in afk.js
-  // Do NOT put AFK handling here.
-  // ==========================================================
+  const prefix = getCurrentPrefix(client, message.guild?.id);
+  const isPrefixed = content.startsWith(prefix);
 
-  const prefix =
-    getCurrentPrefix(
-      client,
-      message.guild?.id
+  const isPrefixless =
+    message.guild &&
+    !isPrefixed &&
+    (
+      typeof client.isPrefixless === 'function'
+        ? client.isPrefixless(message.guild.id, message.author.id)
+        : client.prefixless?.has(message.author.id)
     );
 
-  const isPrefixed =
-    content.startsWith(prefix);
-
-  // ==========================================================
-  // PREFIXLESS COMMANDS
-  // ==========================================================
-
-  if (
-    !isPrefixed &&
-    client.prefixless?.has(
-      message.author.id
-    )
-  ) {
-    const parts =
-      content.split(/\s+/);
-
-    const cmdName =
-      parts.shift()?.toLowerCase();
-
+  if (isPrefixless) {
+    const parts = content.split(/\s+/);
+    const cmdName = parts.shift()?.toLowerCase();
     if (!cmdName) return;
 
-    const command =
-      client.commands.get(cmdName) ||
-      client.aliases.get(cmdName);
-
+    const command = client.commands.get(cmdName) || client.aliases.get(cmdName);
     if (!command) return;
 
-    // Check bot blacklist
-    if (
-      await checkBotBlacklist(
-        client,
-        message
-      )
-    ) {
-      return;
-    }
+    if (await checkBotBlacklist(client, message)) return;
 
-    await executeCommand(
-      client,
-      message,
-      command,
-      parts
-    );
-
+    await executeCommand(client, message, command, parts);
     return;
   }
-
-  // ==========================================================
-  // PREFIXED COMMANDS
-  // ==========================================================
 
   if (!isPrefixed) return;
 
-  const commandText =
-    content
-      .slice(prefix.length)
-      .trim();
-
+  const commandText = content.slice(prefix.length).trim();
   if (!commandText) return;
 
-  const args =
-    commandText.split(/\s+/);
-
-  const cmdName =
-    args.shift()?.toLowerCase();
-
+  const args = commandText.split(/\s+/);
+  const cmdName = args.shift()?.toLowerCase();
   if (!cmdName) return;
 
-  const command =
-    client.commands.get(cmdName) ||
-    client.aliases.get(cmdName);
-
+  const command = client.commands.get(cmdName) || client.aliases.get(cmdName);
   if (!command) return;
 
-  // Check bot blacklist
-  if (
-    await checkBotBlacklist(
-      client,
-      message
-    )
-  ) {
-    return;
-  }
+  if (await checkBotBlacklist(client, message)) return;
 
-  await executeCommand(
-    client,
-    message,
-    command,
-    args
-  );
+  await executeCommand(client, message, command, args);
 }
 
 // ============================================================
