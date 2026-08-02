@@ -6,7 +6,7 @@ module.exports = {
   name: 'userinfo',
   description: 'Shows information about a user.',
   category: 'info',
-  usage: '$userinfo [@user|username|display name|userID]',
+  usage: '$userinfo [@user|username|userID]',
   aliases: ['ui'],
 
   async execute(client, message, args) {
@@ -23,16 +23,26 @@ module.exports = {
       }
 
       if (!user) {
-        return message.reply(
-          'User not found. Try mentioning them, using their ID, or using their exact username/display name in this server.'
-        );
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#ef4444')
+              .setTitle('User Not Found')
+              .setDescription(
+                'Could not find that user.\n\nTry using a mention, user ID, username, global name, or tag.'
+              )
+              .setTimestamp()
+          ]
+        });
       }
     } else {
       user = message.author;
     }
 
     const member = message.guild
-      ? await message.guild.members.fetch(user.id).catch(() => message.guild.members.cache.get(user.id))
+      ? await message.guild.members
+          .fetch(user.id)
+          .catch(() => message.guild.members.cache.get(user.id))
       : null;
 
     const createdAt = `<t:${Math.floor(user.createdTimestamp / 1000)}:F>`;
@@ -55,11 +65,31 @@ module.exports = {
       })
       .setThumbnail(user.displayAvatarURL({ size: 1024 }))
       .addFields(
-        { name: 'Username', value: user.username, inline: true },
-        { name: 'Display Name', value: member?.displayName || 'Unknown', inline: true },
-        { name: 'User ID', value: user.id, inline: true },
-        { name: 'Account Created', value: createdAt, inline: false },
-        { name: 'Joined Server', value: joinedAt, inline: false },
+        {
+          name: 'Username',
+          value: user.username,
+          inline: true
+        },
+        {
+          name: 'Display Name',
+          value: member?.displayName || 'Unknown',
+          inline: true
+        },
+        {
+          name: 'User ID',
+          value: user.id,
+          inline: true
+        },
+        {
+          name: 'Account Created',
+          value: createdAt,
+          inline: false
+        },
+        {
+          name: 'Joined Server',
+          value: joinedAt,
+          inline: false
+        },
         {
           name: `Roles [${roles.length}]`,
           value: roles.length ? roles.join(', ') : 'No roles'
@@ -67,6 +97,8 @@ module.exports = {
       )
       .setTimestamp();
 
-    return message.reply({ embeds: [embed] });
+    return message.reply({
+      embeds: [embed]
+    });
   }
 };
