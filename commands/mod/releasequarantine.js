@@ -1,7 +1,4 @@
-const {
-  EmbedBuilder,
-  PermissionFlagsBits,
-} = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 
 let config = null;
 try {
@@ -86,63 +83,48 @@ function canUseQuarantineCommands(client, member) {
   return hasAccessEntry(client, member.guild.id, member);
 }
 
-// ===== Updated resolveUser (consistent with other mod commands) =====
-async function resolveUser(message, input) {
-  if (!input) return null;
+function isThreadChannel(channel) {
+  return typeof channel?.isThread === 'function' && channel.isThread();
+}
 
-  // Use the universal resolver if your command handler provides it
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(input);
-  }
+async function resolveUserStrict(client, message, input) {
+  if (!input) return null;
 
   const query = String(input).trim();
   if (!query) return null;
 
-  // Mention or raw ID
-  const id = query.replace(/[<@!>]/g, '');
+  const mentionMatch = query.match(/^<@!?(\d{15,20})>$/);
+  const id = mentionMatch?.[1] || query.replace(/[<@!>]/g, '');
+
   if (/^\d{15,20}$/.test(id)) {
-    const cached = message.client.users.cache.get(id);
+    const cached = client.users.cache.get(id);
     if (cached) return cached;
-    return await message.client.users.fetch(id).catch(() => null);
+    return await client.users.fetch(id).catch(() => null);
   }
 
   const lowered = query.toLowerCase();
 
-  // Exact match from user cache
-  const cachedUser = message.client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
+  const cachedUser = client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered
   );
   if (cachedUser) return cachedUser;
 
-  // Ensure guild members are cached
   if (message.guild) {
-    await message.guild.members.fetch().catch(() => {});
-
-    // Exact match
-    let member = message.guild.members.cache.find(m =>
-      m?.displayName?.toLowerCase() === lowered ||
-      m?.user?.username?.toLowerCase() === lowered ||
-      m?.user?.globalName?.toLowerCase() === lowered
+    const cachedMember = message.guild.members.cache.find(m =>
+      m?.user?.username?.toLowerCase() === lowered
     );
+    if (cachedMember?.user) return cachedMember.user;
 
-    // Partial match fallback
-    if (!member) {
-      member = message.guild.members.cache.find(m =>
-        m?.displayName?.toLowerCase().includes(lowered) ||
-        m?.user?.username?.toLowerCase().includes(lowered) ||
-        m?.user?.globalName?.toLowerCase().includes(lowered)
+    const fetchedMembers = await message.guild.members.fetch().catch(() => null);
+    if (fetchedMembers?.size) {
+      const exact = fetchedMembers.find(m =>
+        m?.user?.username?.toLowerCase() === lowered
       );
+      if (exact?.user) return exact.user;
     }
-
-    if (member?.user) return member.user;
   }
 
   return null;
-}
-
-function isThreadChannel(channel) {
-  return typeof channel?.isThread === 'function' && channel.isThread();
 }
 
 function runBackground(fn) {
@@ -165,7 +147,10 @@ async function removeMemberQuarantineLock(guild, memberId) {
       await channel.permissionOverwrites.delete(memberId);
     } catch (err) {
       failed.push(channel.id);
-      console.error(`[ReleaseQuarantine] Failed to remove member overwrite in ${channel.name} (${channel.id}):`, err);
+      console.error(
+        `[ReleaseQuarantine] Failed to remove member overwrite in ${channel.name} (${channel.id}):`,
+        err
+      );
     }
   }
 
@@ -193,10 +178,16 @@ module.exports = {
   aliases: ['rq'],
   description: 'Release a user from quarantine.',
   category: 'mod',
-  usage: '$releasequarantine <@user|id>',
+  usage: '$releasequarantine <@user|id|username>',
 
   async execute(client, message, args) {
     if (!message.guild) return;
+
+    if (!client.quarantineDB) {
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Release Failed', 'Quarantine database is unavailable.')]
+      });
+    }
 
     const prefix = client.getPrefix(message.guild.id);
     const firstWord = (message.content.trim().split(/\s+/)[0] || '').toLowerCase();
@@ -210,27 +201,33 @@ module.exports = {
 
     if (!canUseQuarantineCommands(client, message.member)) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Release Failed', 'You do not have permission to use this command.')],
+        embeds: [makeEmbed('#ef4444', 'Release Failed', 'You do not have permission to use this command.')]
       });
     }
 
     const cfg = getQuarantineSettings(client, message.guild.id);
     if (!cfg?.role_id) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Release Failed', `Quarantine is not set up yet. Use \`${prefix}quarantineset #channel @role\`.`)],
+        embeds: [
+          makeEmbed(
+            '#f59e0b',
+            'Release Failed',
+            `Quarantine is not set up yet. Use \`${prefix}quarantineset #channel @role\`.`
+          ),
+        ],
       });
     }
 
     const quarantineRole = message.guild.roles.cache.get(cfg.role_id);
     if (!quarantineRole) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Release Failed', 'Configured quarantine role no longer exists. Run setup again.')],
+        embeds: [makeEmbed('#ef4444', 'Release Failed', 'Configured quarantine role no longer exists. Run setup again.')]
       });
     }
 
     const targetUser =
       message.mentions.users.first() ||
-      await resolveUser(message, args[0]);
+      await resolveUserStrict(client, message, args[0]);
 
     if (!targetUser) {
       return message.reply({
@@ -238,7 +235,7 @@ module.exports = {
           makeEmbed(
             '#f59e0b',
             'Release Failed',
-            `Please provide a user mention or ID.\nExample:\n\`${prefix}releasequarantine @user\``
+            `Please provide a user mention, ID, or exact username.\nExample:\n\`${prefix}releasequarantine @user\``
           ),
         ],
       });
@@ -247,7 +244,7 @@ module.exports = {
     const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Release Failed', 'User not found in this server.')],
+        embeds: [makeEmbed('#f59e0b', 'Release Failed', 'User not found in this server.')]
       });
     }
 
@@ -257,20 +254,20 @@ module.exports = {
 
     if (!member.roles.cache.has(quarantineRole.id) && !dbRow) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Release Failed', 'This user is not in quarantine.')],
+        embeds: [makeEmbed('#f59e0b', 'Release Failed', 'This user is not in quarantine.')]
       });
     }
 
     if (!canBypassHierarchy(client, message.member)) {
       if (member.id === message.guild.ownerId) {
         return message.reply({
-          embeds: [makeEmbed('#ef4444', 'Release Failed', 'You cannot release the server owner.')],
+          embeds: [makeEmbed('#ef4444', 'Release Failed', 'You cannot release the server owner.')]
         });
       }
 
       if (message.member.roles.highest.comparePositionTo(member.roles.highest) <= 0) {
         return message.reply({
-          embeds: [makeEmbed('#ef4444', 'Release Failed', 'You cannot release someone at your level or above.')],
+          embeds: [makeEmbed('#ef4444', 'Release Failed', 'You cannot release someone at your level or above.')]
         });
       }
     }
@@ -291,7 +288,10 @@ module.exports = {
           .run(member.id);
 
         await message.reply({
-          embeds: [makeEmbed('#34d399', 'Quarantine Fixed', `Fixed quarantine mismatch for **${member.user.tag}** and restored their roles.`)],
+          embeds: [
+            makeEmbed('#34d399', 'Quarantine Fixed', `Fixed quarantine mismatch for **${member.user.tag}** and restored their roles.`)
+              .setThumbnail(targetUser.displayAvatarURL({ size: 1024 })),
+          ],
         });
 
         runBackground(async () => {
@@ -305,7 +305,7 @@ module.exports = {
       } catch (err) {
         console.error('Fix quarantine mismatch error:', err);
         return message.reply({
-          embeds: [makeEmbed('#ef4444', 'Release Failed', 'Failed to fix quarantine mismatch.')],
+          embeds: [makeEmbed('#ef4444', 'Release Failed', 'Failed to fix quarantine mismatch.')]
         });
       }
     }
@@ -338,7 +338,7 @@ module.exports = {
     } catch (err) {
       console.error('Release quarantine error:', err);
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Release Failed', 'Failed to restore roles. Check bot permissions and role hierarchy.')],
+        embeds: [makeEmbed('#ef4444', 'Release Failed', 'Failed to restore roles. Check bot permissions and role hierarchy.')]
       });
     }
 
