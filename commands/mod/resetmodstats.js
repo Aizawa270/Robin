@@ -1,4 +1,4 @@
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { EmbedBuilder } = require('discord.js');
 
 let config = null;
 try {
@@ -21,7 +21,7 @@ function isBotOwner(client, userId) {
 }
 
 function isAdmin(member) {
-  return member.permissions.has(PermissionFlagsBits.Administrator);
+  return !!member?.permissions?.has('Administrator');
 }
 
 function hasPermission(client, member) {
@@ -34,6 +34,51 @@ function hasPermission(client, member) {
 
 const VALID_ACTIONS = ['warn', 'ban', 'mute', 'kick', 'unban', 'warnremove'];
 
+function makeEmbed(color, title, description) {
+  const embed = new EmbedBuilder().setColor(color).setTimestamp();
+  if (title) embed.setTitle(title);
+  if (description) embed.setDescription(description);
+  return embed;
+}
+
+async function resolveTargetUserStrict(client, message, input) {
+  if (!input) return null;
+
+  const query = String(input).trim();
+  if (!query) return null;
+
+  const id = query.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(id)) {
+    const cached = client.users.cache.get(id);
+    if (cached) return cached;
+    return await client.users.fetch(id).catch(() => null);
+  }
+
+  const lowered = query.toLowerCase();
+
+  const cachedUser = client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered
+  );
+  if (cachedUser) return cachedUser;
+
+  if (message.guild) {
+    const cachedMember = message.guild.members.cache.find(m =>
+      m?.user?.username?.toLowerCase() === lowered
+    );
+    if (cachedMember?.user) return cachedMember.user;
+
+    const fetched = await message.guild.members.fetch().catch(() => null);
+    if (fetched?.size) {
+      const exact = fetched.find(m =>
+        m?.user?.username?.toLowerCase() === lowered
+      );
+      if (exact?.user) return exact.user;
+    }
+  }
+
+  return null;
+}
+
 module.exports = {
   name: 'resetmodstats',
   description: 'Reset moderation statistics for a user',
@@ -45,22 +90,16 @@ module.exports = {
 
     const prefix = client.getPrefix(message.guild.id);
 
-    // Universal permission check
     if (!hasPermission(client, message.member)) {
-      const embed = new EmbedBuilder()
-        .setColor('#ef4444')
-        .setTitle('Reset Failed')
-        .setDescription('You do not have permission to use this command.')
-        .setTimestamp();
-      return message.reply({ embeds: [embed] });
+      return message.reply({
+        embeds: [makeEmbed('#ef4444', 'Reset Failed', 'You do not have permission to use this command.')]
+      });
     }
 
-    // Check if database exists
     if (!client.automodDB) {
       return message.reply('Modstats database not available.');
     }
 
-    // Show usage if no args
     if (!args[0]) {
       const embed = new EmbedBuilder()
         .setTitle('Reset Modstats Usage')
@@ -82,20 +121,15 @@ module.exports = {
     const targetArg = args[1];
     const amount = Number.isInteger(Number(args[2])) && Number(args[2]) > 0 ? Number(args[2]) : null;
 
-    // Validate action
     if (action !== 'all' && !VALID_ACTIONS.includes(action)) {
       return message.reply(`Invalid action. Valid actions: all, ${VALID_ACTIONS.join(', ')}`);
     }
 
-    // Get target user (universal resolver only, no fallback)
     if (!targetArg) {
       return message.reply('Please specify a user.');
     }
 
-    const targetUser = typeof message.resolveUser === 'function'
-      ? await message.resolveUser(targetArg)
-      : null;
-
+    const targetUser = await resolveTargetUserStrict(client, message, targetArg);
     if (!targetUser) {
       return message.reply('User not found.');
     }
@@ -105,9 +139,8 @@ module.exports = {
       let deletedCount = 0;
 
       if (action === 'all') {
-        // Reset all stats
         const currentStats = client.automodDB.prepare(`
-          SELECT COUNT(*) as total FROM modstats 
+          SELECT COUNT(*) as total FROM modstats
           WHERE guild_id = ? AND moderator_id = ?
         `).get(message.guild.id, targetUser.id);
 
@@ -116,7 +149,7 @@ module.exports = {
         }
 
         result = client.automodDB.prepare(`
-          DELETE FROM modstats 
+          DELETE FROM modstats
           WHERE guild_id = ? AND moderator_id = ?
         `).run(message.guild.id, targetUser.id);
 
@@ -134,12 +167,9 @@ module.exports = {
           .setTimestamp();
 
         await message.reply({ embeds: [embed] });
-        console.log(`[ResetModStats] ${message.author.tag} reset all stats for ${targetUser.tag} (${deletedCount} entries)`);
-
       } else {
-        // Reset specific action type
         const currentStats = client.automodDB.prepare(`
-          SELECT COUNT(*) as total FROM modstats 
+          SELECT COUNT(*) as total FROM modstats
           WHERE guild_id = ? AND moderator_id = ? AND action_type = ?
         `).get(message.guild.id, targetUser.id, action);
 
@@ -147,12 +177,11 @@ module.exports = {
           return message.reply(`${targetUser.tag} has no **${action}** statistics to reset.`);
         }
 
-        if (amount && amount > 0) {
-          // Remove specific amount (delete oldest entries first)
+        if (amount) {
           const toDelete = Math.min(amount, currentStats.total);
 
           const entries = client.automodDB.prepare(`
-            SELECT id FROM modstats 
+            SELECT id FROM modstats
             WHERE guild_id = ? AND moderator_id = ? AND action_type = ?
             ORDER BY timestamp ASC
             LIMIT ?
@@ -165,12 +194,14 @@ module.exports = {
             deletedCount++;
           }
 
+          const after = currentStats.total - deletedCount;
+
           const embed = new EmbedBuilder()
             .setTitle(`✅ ${action.charAt(0).toUpperCase() + action.slice(1)} Stats Reduced`)
             .setDescription(
               `Successfully removed **${deletedCount}** ${action} action(s) from **${targetUser.tag}**\n\n` +
               `**Before:** ${currentStats.total}\n` +
-              `**After:** ${currentStats.total - deletedCount}\n` +
+              `**After:** ${after}\n` +
               `**Reset By:** ${message.author.tag}`
             )
             .setThumbnail(targetUser.displayAvatarURL({ size: 128 }))
@@ -178,12 +209,9 @@ module.exports = {
             .setTimestamp();
 
           await message.reply({ embeds: [embed] });
-          console.log(`[ResetModStats] ${message.author.tag} removed ${deletedCount} ${action} stats from ${targetUser.tag}`);
-
         } else {
-          // Remove all of this action type
           result = client.automodDB.prepare(`
-            DELETE FROM modstats 
+            DELETE FROM modstats
             WHERE guild_id = ? AND moderator_id = ? AND action_type = ?
           `).run(message.guild.id, targetUser.id, action);
 
@@ -201,10 +229,8 @@ module.exports = {
             .setTimestamp();
 
           await message.reply({ embeds: [embed] });
-          console.log(`[ResetModStats] ${message.author.tag} reset ${action} stats for ${targetUser.tag} (${deletedCount} entries)`);
         }
       }
-
     } catch (error) {
       console.error('[ResetModStats] Error:', error);
       await message.reply('Failed to reset moderation statistics.');
