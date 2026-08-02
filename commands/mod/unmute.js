@@ -1,5 +1,4 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { resolveUser } = require('../../handlers/universalHelper');
 
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
@@ -24,14 +23,52 @@ function buildUsage(prefix) {
       `**Examples:**\n` +
       `${prefix}unmute @User timeout ended\n` +
       `${prefix}unmute 123456789012345678 apology\n` +
-      `${prefix}unmute Xusion stopped`
+      `${prefix}unmute xusion stopped`
   );
+}
+
+async function resolveTargetUserStrict(client, message, input) {
+  if (!input) return null;
+
+  const query = String(input).trim();
+  if (!query) return null;
+
+  const id = query.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(id)) {
+    const cached = client.users.cache.get(id);
+    if (cached) return cached;
+    return await client.users.fetch(id).catch(() => null);
+  }
+
+  const lowered = query.toLowerCase();
+
+  const cachedUser = client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered
+  );
+  if (cachedUser) return cachedUser;
+
+  if (message.guild) {
+    const cachedMember = message.guild.members.cache.find(m =>
+      m?.user?.username?.toLowerCase() === lowered
+    );
+    if (cachedMember?.user) return cachedMember.user;
+
+    const fetched = await message.guild.members.fetch().catch(() => null);
+    if (fetched?.size) {
+      const exact = fetched.find(m =>
+        m?.user?.username?.toLowerCase() === lowered
+      );
+      if (exact?.user) return exact.user;
+    }
+  }
+
+  return null;
 }
 
 async function resolveTargetMember(message, input) {
   if (!message.guild) return null;
 
-  const user = await resolveUser(message.client, message, input);
+  const user = await resolveTargetUserStrict(message.client, message, input);
   if (!user) return null;
 
   return (
@@ -59,27 +96,35 @@ module.exports = {
     ) {
       return message.reply({
         embeds: [
-          makeEmbed('#ef4444', 'Unmute Failed', 'You need **Timeout Members** permission or Administrator.')
-        ]
+          makeEmbed(
+            '#ef4444',
+            'Unmute Failed',
+            'You need **Timeout Members** permission or Administrator.'
+          ),
+        ],
       });
     }
 
     const prefix = message.prefix || client.getPrefix?.(message.guild.id) || '$';
 
     if (!args.length) {
-      return message.reply({
-        embeds: [buildUsage(prefix)]
-      });
+      return message.reply({ embeds: [buildUsage(prefix)] });
     }
 
     const targetInput = args[0];
     const reason = args.slice(1).join(' ').trim() || 'No reason provided';
 
-    const targetUser = await resolveUser(client, message, targetInput);
+    const targetUser = await resolveTargetUserStrict(client, message, targetInput);
 
     if (!targetUser) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Unmute Failed', 'User not found. Try a mention, ID, or exact username.')]
+        embeds: [
+          makeEmbed(
+            '#f59e0b',
+            'Unmute Failed',
+            'User not found. Try a mention, ID, or exact username.'
+          ),
+        ],
       });
     }
 
@@ -103,7 +148,9 @@ module.exports = {
       });
     }
 
-    const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+    const botMember =
+      message.guild.members.me ||
+      await message.guild.members.fetchMe().catch(() => null);
 
     if (isOwner(message.guild, member) && !isOwner(message.guild, message.member)) {
       return message.reply({
@@ -125,7 +172,7 @@ module.exports = {
       });
     }
 
-    if (botMember && !botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+    if (!botMember?.permissions?.has(PermissionFlagsBits.ModerateMembers)) {
       return message.reply({
         embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'I need **Timeout Members** permission.')]
       });
@@ -161,5 +208,5 @@ module.exports = {
         embeds: [makeEmbed('#ef4444', 'Unmute Failed', 'Failed to remove timeout from the user.')]
       });
     }
-  }
+  },
 };
