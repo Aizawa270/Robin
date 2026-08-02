@@ -93,9 +93,7 @@ async function resolveUserStrict(client, message, input) {
   const query = String(input).trim();
   if (!query) return null;
 
-  const mentionMatch = query.match(/^<@!?(\d{15,20})>$/);
-  const id = mentionMatch?.[1] || query.replace(/[<@!>]/g, '');
-
+  const id = query.replace(/[<@!>]/g, '');
   if (/^\d{15,20}$/.test(id)) {
     const cached = client.users.cache.get(id);
     if (cached) return cached;
@@ -147,10 +145,7 @@ async function removeMemberQuarantineLock(guild, memberId) {
       await channel.permissionOverwrites.delete(memberId);
     } catch (err) {
       failed.push(channel.id);
-      console.error(
-        `[ReleaseQuarantine] Failed to remove member overwrite in ${channel.name} (${channel.id}):`,
-        err
-      );
+      console.error(`[ReleaseQuarantine] Failed to remove member overwrite in ${channel.name} (${channel.id}):`, err);
     }
   }
 
