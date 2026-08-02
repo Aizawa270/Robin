@@ -236,4 +236,361 @@ module.exports = {
             .setColor('#7c3aed')
             .setTitle('Staff Starter Roles')
             .setDescription(mentions)
-            .addFields({ name: 'Access Count', value: `\`${accessCount}\
+            .addFields({ name: 'Access Count', value: `\`${accessCount}\``, inline: true })
+            .setFooter({ text: `${roleIds.length} role(s) configured` })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    const sub = args[0].toLowerCase();
+
+    if (sub === 'setup') {
+      if (!canManageStaff(client, message.member)) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#ef4444')
+              .setDescription('Only the bot owner or server owner can configure staff roles.')
+              .setTimestamp()
+          ]
+        });
+      }
+
+      const roleArgs = args.slice(1);
+      if (!roleArgs.length) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#f59e0b')
+              .setDescription(`Usage: \`${prefix}staffadd setup @role @role ...\``)
+              .setTimestamp()
+          ]
+        });
+      }
+
+      const roles = [];
+      const invalid = [];
+
+      for (const raw of roleArgs) {
+        const role = resolveRole(message.guild, raw);
+        if (!role) {
+          invalid.push(raw);
+          continue;
+        }
+
+        if (!roles.some(r => r.id === role.id)) roles.push(role);
+      }
+
+      if (!roles.length) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#ef4444')
+              .setDescription('No valid roles found. Provide role mentions or IDs.')
+              .setTimestamp()
+          ]
+        });
+      }
+
+      db.prepare(
+        'INSERT OR REPLACE INTO staffadd_settings (guild_id, roles) VALUES (?, ?)'
+      ).run(message.guild.id, JSON.stringify(roles.map(r => r.id)));
+
+      const embed = new EmbedBuilder()
+        .setColor('#22c55e')
+        .setTitle('Staff Roles Configured')
+        .setDescription(roles.map(r => `<@&${r.id}>`).join('\n'))
+        .setFooter({ text: `${roles.length} role(s) saved` })
+        .setTimestamp();
+
+      if (invalid.length) {
+        embed.addFields({ name: 'Skipped', value: invalid.join(', ') });
+      }
+
+      return message.reply({ embeds: [embed] });
+    }
+
+    if (sub === 'remove') {
+      if (!canManageStaff(client, message.member)) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#ef4444')
+              .setDescription('Only the bot owner or server owner can remove staff configuration.')
+              .setTimestamp()
+          ]
+        });
+      }
+
+      if ((args[1] || '').toLowerCase() !== 'all') {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#f59e0b')
+              .setDescription(`Usage: \`${prefix}staffadd remove all\``)
+              .setTimestamp()
+          ]
+        });
+      }
+
+      db.prepare('DELETE FROM staffadd_settings WHERE guild_id = ?').run(message.guild.id);
+
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#22c55e')
+            .setDescription('Staff starter roles have been removed.')
+            .setTimestamp()
+        ]
+      });
+    }
+
+    if (sub === 'access') {
+      if (!canManageStaff(client, message.member)) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#ef4444')
+              .setDescription('Only the bot owner or server owner can manage staffadd access.')
+              .setTimestamp()
+          ]
+        });
+      }
+
+      const action = (args[1] || '').toLowerCase();
+
+      if (!action || !['add', 'remove', 'list'].includes(action)) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#f59e0b')
+              .setTitle('StaffAdd Access')
+              .setDescription(
+                `\`${prefix}staffadd access add @user/@role\`\n` +
+                `\`${prefix}staffadd access remove @user/@role\`\n` +
+                `\`${prefix}staffadd access list\``
+              )
+              .setTimestamp()
+          ]
+        });
+      }
+
+      if (action === 'list') {
+        const rows = db.prepare(
+          'SELECT target_type, target_id FROM staffadd_access WHERE guild_id = ? ORDER BY target_type, target_id'
+        ).all(message.guild.id);
+
+        const roles = rows.filter(r => r.target_type === 'role').map(r => `<@&${r.target_id}>`);
+        const users = rows.filter(r => r.target_type === 'user').map(r => `<@${r.target_id}>`);
+
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#3b82f6')
+              .setTitle('StaffAdd Access List')
+              .setDescription(
+                rows.length
+                  ? `**Roles:**\n${roles.length ? roles.join('\n') : 'None'}\n\n**Users:**\n${users.length ? users.join('\n') : 'None'}`
+                  : 'No access entries.'
+              )
+              .setTimestamp()
+          ]
+        });
+      }
+
+      const targetArg = args[2];
+      if (!targetArg) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#f59e0b')
+              .setDescription(`Provide a user or role.\nExample: \`${prefix}staffadd access add @Moderator\``)
+              .setTimestamp()
+          ]
+        });
+      }
+
+      const target = await resolveAccessTarget(message, targetArg);
+      if (!target) {
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#ef4444')
+              .setDescription('Could not resolve that user or role.')
+              .setTimestamp()
+          ]
+        });
+      }
+
+      if (action === 'add') {
+        db.prepare(
+          'INSERT OR IGNORE INTO staffadd_access (guild_id, target_type, target_id) VALUES (?, ?, ?)'
+        ).run(message.guild.id, target.type, target.id);
+
+        return message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#22c55e')
+              .setDescription(`${target.label} can now use \`${prefix}staffadd\`.`)
+              .setTimestamp()
+          ]
+        });
+      }
+
+      db.prepare(
+        'DELETE FROM staffadd_access WHERE guild_id = ? AND target_type = ? AND target_id = ?'
+      ).run(message.guild.id, target.type, target.id);
+
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ef4444')
+            .setDescription(`${target.label} can no longer use \`${prefix}staffadd\`.`)
+            .setTimestamp()
+        ]
+      });
+    }
+
+    if (!canUseStaffAdd(client, message.member)) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ef4444')
+            .setDescription('You do not have permission to staff members.')
+            .setTimestamp()
+        ]
+      });
+    }
+
+    const row = db.prepare(
+      'SELECT roles FROM staffadd_settings WHERE guild_id = ?'
+    ).get(message.guild.id);
+
+    if (!row) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#f59e0b')
+            .setDescription(`No staff starter roles configured. Use \`${prefix}staffadd setup ...\` first.`)
+            .setTimestamp()
+        ]
+      });
+    }
+
+    let roleIds = [];
+    try {
+      roleIds = JSON.parse(row.roles || '[]');
+    } catch {
+      roleIds = [];
+    }
+
+    if (!roleIds.length) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#f59e0b')
+            .setDescription('No roles in the configuration.')
+            .setTimestamp()
+        ]
+      });
+    }
+
+    const targetUser = await resolveTargetUser(message, args[0]);
+    if (!targetUser) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ef4444')
+            .setDescription('Could not find that user.')
+            .setTimestamp()
+        ]
+      });
+    }
+
+    const member = await message.guild.members.fetch(targetUser.id).catch(() => null);
+    if (!member) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ef4444')
+            .setDescription('That user is not in the server.')
+            .setTimestamp()
+        ]
+      });
+    }
+
+    if (member.user.bot) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ef4444')
+            .setDescription('You cannot staff a bot.')
+            .setTimestamp()
+        ]
+      });
+    }
+
+    const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+    const added = [];
+    const already = [];
+    const failed = [];
+
+    for (const roleId of roleIds) {
+      const role = message.guild.roles.cache.get(roleId);
+      if (!role) {
+        failed.push(`Missing role ${roleId}`);
+        continue;
+      }
+
+      if (role.managed) {
+        failed.push(role.name);
+        continue;
+      }
+
+      if (botMember && role.position >= botMember.roles.highest.position) {
+        failed.push(role.name);
+        continue;
+      }
+
+      if (member.roles.cache.has(roleId)) {
+        already.push(role.name);
+        continue;
+      }
+
+      try {
+        await member.roles.add(role, `Staffadd by ${message.author.tag}`);
+        added.push(role.name);
+      } catch {
+        failed.push(role.name);
+      }
+    }
+
+    if (added.length === 0 && already.length === 0) {
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#f59e0b')
+            .setDescription('No new roles could be added.')
+            .setTimestamp()
+        ]
+      });
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor('#7c3aed')
+      .setTitle('Staff Roles Added')
+      .setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
+      .addFields(
+        { name: 'User', value: `${targetUser.tag || targetUser.username} (<@${targetUser.id}>)`, inline: true },
+        { name: 'Added by', value: message.author.tag, inline: true }
+      )
+      .setTimestamp();
+
+    if (added.length) embed.addFields({ name: 'Added', value: added.map(r => `\`${r}\``).join(', '), inline: false });
+    if (already.length) embed.addFields({ name: 'Already had', value: already.map(r => `\`${r}\``).join(', '), inline: false });
+    if (failed.length) embed.addFields({ name: 'Failed', value: failed.map(r => `\`${r}\``).join(', '), inline: false });
+
+    return message.reply({ embeds: [embed] });
+  }
+};
