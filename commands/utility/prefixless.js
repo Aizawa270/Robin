@@ -1,5 +1,38 @@
 const { EmbedBuilder } = require('discord.js');
 const { colors, ownerId } = require('../../config');
+const { resolveUser: universalResolveUser } = require('../../handlers/universalHelper');
+
+async function resolveTargetUser(client, message, input) {
+  if (!input) return null;
+
+  if (typeof message.resolveUser === 'function') {
+    return await message.resolveUser(input).catch(() => null);
+  }
+
+  if (typeof universalResolveUser === 'function') {
+    return await universalResolveUser(client, message, input).catch(() => null);
+  }
+
+  const raw = String(input).trim();
+  if (!raw) return null;
+
+  const id = raw.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(id)) {
+    const cached = client.users.cache.get(id);
+    if (cached) return cached;
+    return await client.users.fetch(id).catch(() => null);
+  }
+
+  const lowered = raw.toLowerCase();
+
+  const cachedUser = client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered ||
+    u?.globalName?.toLowerCase() === lowered
+  );
+  if (cachedUser) return cachedUser;
+
+  return null;
+}
 
 module.exports = {
   name: 'prefixless',
@@ -7,7 +40,7 @@ module.exports = {
   category: 'utility',
   usage: '$prefixless <add|remove|list> [@user|id]',
   aliases: [],
-  hidden: true, // ✅ This hides it from the help command
+  hidden: true,
   async execute(client, message, args) {
     if (!message.guild) return;
     if (message.author.id !== ownerId) {
@@ -32,7 +65,6 @@ module.exports = {
       });
     }
 
-    // ===== LIST =====
     if (sub === 'list') {
       const rows = db.prepare('SELECT user_id FROM prefixless').all();
       if (!rows.length) return message.reply('No prefixless users.');
@@ -51,31 +83,25 @@ module.exports = {
       return message.reply({
         embeds: [
           new EmbedBuilder()
-            .setColor('#3b82f6') // Glowy blue
+            .setColor('#3b82f6')
             .setTitle('Prefixless Users')
             .setDescription(cleanList)
         ]
       });
     }
 
-    // ===== RESOLVE TARGET =====
-    const target =
-      message.mentions.users.first() ||
-      (args[0] && await client.users.fetch(args[0]).catch(() => null));
-
+    const target = await resolveTargetUser(client, message, args[0]);
     if (!target) return message.reply('Provide a user mention or ID.');
 
-    // ===== ADD =====
     if (sub === 'add') {
       db.prepare('INSERT OR IGNORE INTO prefixless (user_id) VALUES (?)').run(target.id);
-      client.prefixless.add(target.id);
+      if (client.prefixless instanceof Set) client.prefixless.add(target.id);
       return message.reply(`✅ **${target.tag}** is now prefixless.`);
     }
 
-    // ===== REMOVE =====
     if (sub === 'remove') {
       db.prepare('DELETE FROM prefixless WHERE user_id = ?').run(target.id);
-      client.prefixless.delete(target.id);
+      if (client.prefixless instanceof Set) client.prefixless.delete(target.id);
       return message.reply(`⚠️ **${target.tag}** is no longer prefixless.`);
     }
   },
