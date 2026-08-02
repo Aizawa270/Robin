@@ -118,21 +118,27 @@ prefixDB.prepare('CREATE TABLE IF NOT EXISTS prefixes (guild_id TEXT PRIMARY KEY
 client.prefixDB = prefixDB;
 
 // ===== FAME DATABASE =====
+// Guild-based fame system: separate stats per server
 const fameDB = new Database(path.join(DATA_DIR, 'fame.sqlite'));
 fameDB.pragma('journal_mode = WAL');
+fameDB.pragma('synchronous = NORMAL');
+
 fameDB.prepare(`
-  CREATE TABLE IF NOT EXISTS fame_points (
-    user_id TEXT PRIMARY KEY,
+  CREATE TABLE IF NOT EXISTS fame_points_guild (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     reputation INTEGER DEFAULT 0,
     stupidity INTEGER DEFAULT 0,
     black INTEGER DEFAULT 0,
-    last_updated INTEGER DEFAULT (strftime('%s','now')*1000)
+    last_updated INTEGER DEFAULT (strftime('%s','now')*1000),
+    PRIMARY KEY (guild_id, user_id)
   )
 `).run();
 
 fameDB.prepare(`
-  CREATE TABLE IF NOT EXISTS fame_logs (
+  CREATE TABLE IF NOT EXISTS fame_logs_guild (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
     giver_id TEXT NOT NULL,
     receiver_id TEXT NOT NULL,
     point_type TEXT NOT NULL,
@@ -141,11 +147,12 @@ fameDB.prepare(`
 `).run();
 
 fameDB.prepare(`
-  CREATE TABLE IF NOT EXISTS fame_cooldowns (
+  CREATE TABLE IF NOT EXISTS fame_cooldowns_guild (
+    guild_id TEXT NOT NULL,
     giver_id TEXT NOT NULL,
     point_type TEXT NOT NULL,
     last_given INTEGER NOT NULL,
-    PRIMARY KEY (giver_id, point_type)
+    PRIMARY KEY (guild_id, giver_id, point_type)
   )
 `).run();
 
