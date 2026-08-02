@@ -7,7 +7,6 @@ module.exports = {
   description: 'Shows all available commands or commands for a specific category.',
   category: 'utility',
   usage: 'help [category]',
-  aliases: ['h'],
   async execute(client, message, args) {
     try {
       // Get current prefix dynamically (fallback to $)
