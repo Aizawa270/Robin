@@ -1,5 +1,6 @@
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { logModAction } = require('../../handlers/modstatsHelper');
+const { resolveUser, resolveMember } = require('../../handlers/universalHelper');
 
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
@@ -20,88 +21,16 @@ function buildUsage(prefix) {
   return makeEmbed(
     '#f43f5e',
     'Ban Command Usage',
-    `**Usage:** \`${prefix}ban <@user|userID|username|display name> [reason]\`\n\n**Examples:**\n${prefix}ban @User spamming\n${prefix}ban 123456789012345678 breaking rules\n${prefix}ban xusion being annoying`
-  );
-}
-
-async function resolveTargetUser(message, input) {
-  if (!input) return null;
-
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(input);
-  }
-
-  const raw = String(input).trim();
-  if (!raw) return null;
-
-  const mentionMatch = raw.match(/^<@!?(\d{15,20})>$/);
-  const id = mentionMatch?.[1] || raw.replace(/[<@!>]/g, '');
-
-  if (/^\d{15,20}$/.test(id)) {
-    const cached = message.client.users.cache.get(id);
-    if (cached) return cached;
-    return await message.client.users.fetch(id).catch(() => null);
-  }
-
-  const lowered = raw.toLowerCase();
-
-  const cachedUser = message.client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
-  );
-
-  if (cachedUser) return cachedUser;
-
-  if (message.guild) {
-    const member = message.guild.members.cache.find(m =>
-      m?.displayName?.toLowerCase() === lowered ||
-      m?.user?.username?.toLowerCase() === lowered ||
-      m?.user?.globalName?.toLowerCase() === lowered
-    );
-
-    if (member?.user) return member.user;
-
-    const fetchedMembers = await message.guild.members.fetch({
-      query: raw,
-      limit: 10
-    }).catch(() => null);
-
-    if (fetchedMembers?.size) {
-      const exact = fetchedMembers.find(m =>
-        m?.displayName?.toLowerCase() === lowered ||
-        m?.user?.username?.toLowerCase() === lowered ||
-        m?.user?.globalName?.toLowerCase() === lowered
-      );
-
-      return exact?.user || fetchedMembers.first()?.user || null;
-    }
-  }
-
-  return null;
-}
-
-async function resolveTargetMember(message, input) {
-  if (!message.guild) return null;
-
-  if (typeof message.resolveMember === 'function') {
-    return await message.resolveMember(input);
-  }
-
-  const user = await resolveTargetUser(message, input);
-  if (!user) return null;
-
-  return (
-    message.guild.members.cache.get(user.id) ||
-    await message.guild.members.fetch(user.id).catch(() => null)
+    `**Usage:** \`${prefix}ban <@user|userID|username> [reason]\`\n\n**Examples:**\n${prefix}ban @User spamming\n${prefix}ban 123456789012345678 breaking rules\n${prefix}ban xusion being annoying`
   );
 }
 
 module.exports = {
   name: 'ban',
   aliases: ['B', 'b'],
-  description: 'Ban a user by mention, ID, username, or display name.',
+  description: 'Ban a user by mention, ID, or exact username.',
   category: 'mod',
-  usage: '$ban <@user|userID|username|display name> [reason]',
+  usage: '$ban <@user|userID|username> [reason]',
   async execute(client, message, args) {
     if (!message.guild) {
       return message.reply({
@@ -130,10 +59,10 @@ module.exports = {
     const targetInput = args[0];
     const reason = args.slice(1).join(' ').trim() || 'No reason provided';
 
-    const targetUser = await resolveTargetUser(message, targetInput);
+    const targetUser = await resolveUser(client, message, targetInput);
     if (!targetUser) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Ban Failed', 'User not found. Try a mention, user ID, exact username, or display name.')]
+        embeds: [makeEmbed('#f59e0b', 'Ban Failed', 'User not found. Try a mention, user ID, or exact username.')]
       });
     }
 
@@ -145,7 +74,7 @@ module.exports = {
       return message.reply({ embeds: [makeEmbed('#ef4444', 'Ban Failed', 'I cannot ban myself.')] });
     }
 
-    const targetMember = await resolveTargetMember(message, targetInput);
+    const targetMember = await resolveMember(client, message, targetInput);
     const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
 
     if (targetMember && isOwner(message.guild, targetMember) && !isOwner(message.guild, message.member)) {
