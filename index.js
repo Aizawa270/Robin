@@ -33,9 +33,34 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 // Prefixless DB
 const prefixlessDB = new Database(path.join(DATA_DIR, 'prefixless.sqlite'));
 prefixlessDB.pragma('journal_mode = WAL');
-prefixlessDB.prepare('CREATE TABLE IF NOT EXISTS prefixless (user_id TEXT PRIMARY KEY)').run();
+
+// per-server prefixless table
+prefixlessDB.prepare(`
+  CREATE TABLE IF NOT EXISTS prefixless_guild (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+  )
+`).run();
+
 client.prefixlessDB = prefixlessDB;
-client.prefixless = new Set(prefixlessDB.prepare('SELECT user_id FROM prefixless').all().map(r => r.user_id));
+client.prefixlessByGuild = new Map();
+
+for (const row of prefixlessDB.prepare('SELECT guild_id, user_id FROM prefixless_guild').all()) {
+  const guildId = String(row.guild_id);
+  const userId = String(row.user_id);
+
+  if (!client.prefixlessByGuild.has(guildId)) {
+    client.prefixlessByGuild.set(guildId, new Set());
+  }
+
+  client.prefixlessByGuild.get(guildId).add(userId);
+}
+
+client.isPrefixless = (guildId, userId) => {
+  if (!guildId || !userId) return false;
+  return client.prefixlessByGuild.get(String(guildId))?.has(String(userId)) ?? false;
+};
 
 // Bot Blacklist (same DB, separate table)
 prefixlessDB.prepare('CREATE TABLE IF NOT EXISTS bot_blacklist (user_id TEXT PRIMARY KEY)').run();
@@ -302,10 +327,8 @@ client.once('ready', async () => {
   birthdayService(client);
   welcomeHandler(client);
 
-  // Restore AFK statuses from DB
   afkModule.restoreAfk(client);
 
-  // Hydrate blacklist cache
   try {
     const guilds = automodDB.prepare(`
       SELECT DISTINCT guild_id FROM blacklist_hard
@@ -324,7 +347,6 @@ client.once('ready', async () => {
     console.error('[Blacklist] Cache failed:', e);
   }
 
-  // Automod init
   try {
     const automod = require('./handlers/automodHandler');
     if (automod?.initAutomod) automod.initAutomod(client);
@@ -332,7 +354,6 @@ client.once('ready', async () => {
     console.error('Automod init failed:', e);
   }
 
-  // Restore giveaways
   try {
     const startGiveaway = require('./commands/startgiveaway');
     const all = giveawayDB.prepare('SELECT * FROM giveaways').all();
@@ -361,9 +382,7 @@ client.once('ready', async () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  // AFK system — must run before command handler so $afk command itself isn't blocked
   await afkModule.handleMessage(client, message);
-
   await handleMessage(client, message);
 
   try {
@@ -374,65 +393,14 @@ client.on('messageCreate', async (message) => {
     console.error('Automod error:', e);
   }
 
-  // ===== WATCHWORD SYSTEM =====
   try {
     const watchwordCommand = require('./commands/misc/watchword');
     if (watchwordCommand?.checkWatchwords) {
       await watchwordCommand.checkWatchwords(client, message);
     }
-  } catch (e) {
-    // Watchword system is optional
-  }
-
-  // ===== VANESSA RNG / FLIRTY REPLIES =====
-  const VANESSA_USERS = {
-    '852839588689870879': 'astrix',
-    '908521674700390430': 'jeo',
-  };
-
-  if (message.guild && message.content.toLowerCase().includes('vanessa') && VANESSA_USERS[message.author.id]) {
-    if (!client.vanessaCooldown) client.vanessaCooldown = new Map();
-
-    const last = client.vanessaCooldown.get(message.author.id) || 0;
-    if (Date.now() - last < 7000) return;
-    client.vanessaCooldown.set(message.author.id, Date.now());
-
-    const responses = {
-      astrix: [
-        { text: 'suck my titties master Astrix', weight: 3 },
-        { text: 'Master Astrix eat my pussy please', weight: 3 },
-        { text: 'Master Astrix.... dont act like you did not miss me', weight: 4 },
-        { text: 'Careful master Astrix, the way you show up has me melting', weight: 4 },
-        { text: 'master Astrix put it in me already..', weight: 2 },
-        { text: 'master Astrix can I suck it?', weight: 3 },
-        { text: 'master Astrix everytime I see you I cannot think straight..', weight: 4 },
-      ],
-      jeo: [
-        { text: 'what are we going for, handy or blowy', weight: 4 },
-        { text: 'Careful, jeo... keep calling me and I might start blushing', weight: 4 },
-        { text: 'Hello daddy whenever you say my name i can feel my tits bouncing... you have got that charm again, jeo... It is dangerous you know', weight: 1 },
-        { text: 'Daddy jeo im bent over for you..', weight: 3 },
-        { text: 'jeo.. you are turning me on', weight: 4 },
-      ],
-    };
-
-    const pool = responses[VANESSA_USERS[message.author.id]];
-    if (!pool?.length) return;
-
-    const weighted = pool.flatMap(r => Array(r.weight).fill(r.text));
-    const line = weighted[Math.floor(Math.random() * weighted.length)];
-
-    const embed = new EmbedBuilder()
-      .setColor('#ec4899')
-      .setAuthor({ name: 'Vanessa' })
-      .setDescription(line)
-      .setFooter({ text: 'mood: unpredictable' });
-
-    await message.channel.send({ embeds: [embed] });
-  }
+  } catch (e) {}
 });
 
-// ===== 1v1 BUTTON HANDLER =====
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
@@ -452,7 +420,6 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// ===== SNIPES =====
 client.on('messageDelete', (message) => {
   if (!message.guild || message.author?.bot) return;
 
@@ -470,7 +437,6 @@ client.on('messageDelete', (message) => {
   if (arr.length > 15) arr.pop();
 });
 
-// ===== EDIT SNIPES =====
 client.on('messageUpdate', (oldMsg, newMsg) => {
   if (!oldMsg.guild || oldMsg.author?.bot || oldMsg.content === newMsg.content) return;
 
@@ -488,7 +454,6 @@ client.on('messageUpdate', (oldMsg, newMsg) => {
   if (arr.length > 15) arr.pop();
 });
 
-// ===== REACTION SNIPES =====
 client.on('messageReactionAdd', (reaction, user) => {
   if (user.bot) return;
 
@@ -501,22 +466,20 @@ client.on('messageReactionAdd', (reaction, user) => {
   if (arr.length > 15) arr.pop();
 });
 
-// ===== LOAD COMMANDS =====
 loadCommands(client);
 
-// ===== GRACEFUL SHUTDOWN =====
 process.on('SIGINT', () => {
   console.log('[Shutdown] Closing databases...');
   try {
     if (prefixlessDB) prefixlessDB.close();
     if (quarantineDB) quarantineDB.close();
-    if (giveawayDB)   giveawayDB.close();
-    if (prefixDB)     prefixDB.close();
-    if (fameDB)       fameDB.close();
-    if (watchwordDB)  watchwordDB.close();
-    if (automodDB)    automodDB.close();
-    if (battleDB)     battleDB.close();
-    if (spyDB)        spyDB.close();
+    if (giveawayDB) giveawayDB.close();
+    if (prefixDB) prefixDB.close();
+    if (fameDB) fameDB.close();
+    if (watchwordDB) watchwordDB.close();
+    if (automodDB) automodDB.close();
+    if (battleDB) battleDB.close();
+    if (spyDB) spyDB.close();
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
@@ -529,13 +492,13 @@ process.on('SIGTERM', () => {
   try {
     if (prefixlessDB) prefixlessDB.close();
     if (quarantineDB) quarantineDB.close();
-    if (giveawayDB)   giveawayDB.close();
-    if (prefixDB)     prefixDB.close();
-    if (fameDB)       fameDB.close();
-    if (watchwordDB)  watchwordDB.close();
-    if (automodDB)    automodDB.close();
-    if (battleDB)     battleDB.close();
-    if (spyDB)        spyDB.close();
+    if (giveawayDB) giveawayDB.close();
+    if (prefixDB) prefixDB.close();
+    if (fameDB) fameDB.close();
+    if (watchwordDB) watchwordDB.close();
+    if (automodDB) automodDB.close();
+    if (battleDB) battleDB.close();
+    if (spyDB) spyDB.close();
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
@@ -543,7 +506,6 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
 
 module.exports = client;
