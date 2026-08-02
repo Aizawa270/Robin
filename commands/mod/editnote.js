@@ -1,4 +1,3 @@
-// commands/mod/editnote.js
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const path = require('path');
 const fs = require('fs');
@@ -10,6 +9,16 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = new Database(path.join(DATA_DIR, 'notes.sqlite'));
 db.pragma('journal_mode = WAL');
 
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id TEXT NOT NULL,
+    moderator_id TEXT NOT NULL,
+    note_text TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )
+`).run();
+
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
   if (title) embed.setTitle(title);
@@ -19,10 +28,6 @@ function makeEmbed(color, title, description) {
 
 async function resolveTargetUser(message, raw) {
   if (!raw) return null;
-
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(raw);
-  }
 
   const query = String(raw).trim();
   if (!query) return null;
@@ -37,18 +42,23 @@ async function resolveTargetUser(message, raw) {
   const lowered = query.toLowerCase();
 
   const cachedUser = message.client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
+    u?.username?.toLowerCase() === lowered
   );
   if (cachedUser) return cachedUser;
 
   if (message.guild) {
-    const member = message.guild.members.cache.find(mm =>
-      mm?.displayName?.toLowerCase() === lowered ||
-      mm?.user?.username?.toLowerCase() === lowered ||
-      mm?.user?.globalName?.toLowerCase() === lowered
+    const cachedMember = message.guild.members.cache.find(m =>
+      m?.user?.username?.toLowerCase() === lowered
     );
-    if (member?.user) return member.user;
+    if (cachedMember?.user) return cachedMember.user;
+
+    const fetched = await message.guild.members.fetch().catch(() => null);
+    if (fetched?.size) {
+      const exact = fetched.find(m =>
+        m?.user?.username?.toLowerCase() === lowered
+      );
+      if (exact?.user) return exact.user;
+    }
   }
 
   return null;
@@ -56,7 +66,7 @@ async function resolveTargetUser(message, raw) {
 
 module.exports = {
   name: 'editnote',
-  description: 'Edit a note by number. Usage: !editnote <id|@user|username> <noteNumber> <new text>',
+  description: 'Edit a note by number. Usage: !editnote <user> <noteNumber> <new text>',
   category: 'mod',
   usage: '!editnote <user> <noteNumber> <new text>',
   aliases: [],
@@ -89,7 +99,7 @@ module.exports = {
     const targetUser = await resolveTargetUser(message, targetArg);
     if (!targetUser) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'User Not Found', 'Could not find that user. Try a mention, ID, username, or display name.')]
+        embeds: [makeEmbed('#f59e0b', 'User Not Found', 'Could not find that user. Try a mention, ID, or exact username.')]
       });
     }
 
