@@ -8,14 +8,10 @@ function makeEmbed(color, title, description) {
   return embed;
 }
 
-async function resolveTargetUser(client, message, raw) {
-  if (!raw) return null;
+async function resolveTargetUserStrict(client, message, input) {
+  if (!input) return null;
 
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(raw);
-  }
-
-  const query = String(raw).trim();
+  const query = String(input).trim();
   if (!query) return null;
 
   const id = query.replace(/[<@!>]/g, '');
@@ -28,18 +24,23 @@ async function resolveTargetUser(client, message, raw) {
   const lowered = query.toLowerCase();
 
   const cachedUser = client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
+    u?.username?.toLowerCase() === lowered
   );
   if (cachedUser) return cachedUser;
 
   if (message.guild) {
-    const member = message.guild.members.cache.find(m =>
-      m?.displayName?.toLowerCase() === lowered ||
-      m?.user?.username?.toLowerCase() === lowered ||
-      m?.user?.globalName?.toLowerCase() === lowered
+    const cachedMember = message.guild.members.cache.find(m =>
+      m?.user?.username?.toLowerCase() === lowered
     );
-    if (member?.user) return member.user;
+    if (cachedMember?.user) return cachedMember.user;
+
+    const fetched = await message.guild.members.fetch().catch(() => null);
+    if (fetched?.size) {
+      const exact = fetched.find(m =>
+        m?.user?.username?.toLowerCase() === lowered
+      );
+      if (exact?.user) return exact.user;
+    }
   }
 
   return null;
@@ -49,7 +50,7 @@ module.exports = {
   name: 'modstats',
   description: 'View your moderation statistics.',
   category: 'mod',
-  usage: '$modstats [@user|userID|username|display name]',
+  usage: '$modstats [@user|userID|username]',
   aliases: ['moderatorstats', 'modstat', 'mystats'],
   async execute(client, message, args) {
     if (!message.guild) {
@@ -72,11 +73,11 @@ module.exports = {
       }
 
       const targetQuery = args.join(' ').trim();
-      targetUser = await resolveTargetUser(client, message, targetQuery);
+      targetUser = await resolveTargetUserStrict(client, message, targetQuery);
 
       if (!targetUser) {
         return message.reply({
-          embeds: [makeEmbed('#f59e0b', 'User Not Found', 'Could not find that user. Try a mention, ID, username, or display name.')]
+          embeds: [makeEmbed('#f59e0b', 'User Not Found', 'Could not find that user. Try a mention, ID, or exact username.')]
         });
       }
     } else {
@@ -93,16 +94,6 @@ module.exports = {
         });
       }
 
-      try {
-        const test = client.automodDB.prepare('SELECT COUNT(*) as count FROM modstats').get();
-        console.log(`[ModStats] Database has ${test.count} total entries`);
-      } catch (dbError) {
-        console.error('[ModStats] Database error:', dbError);
-        return message.reply({
-          embeds: [makeEmbed('#ef4444', 'Modstats Error', 'Modstats database error. Please check bot setup.')]
-        });
-      }
-
       const stats = getModStats(client, guildId, moderatorId);
 
       if (!stats) {
@@ -112,10 +103,10 @@ module.exports = {
       }
 
       const allModerators = client.automodDB.prepare(`
-        SELECT moderator_id, COUNT(*) as total 
-        FROM modstats 
+        SELECT moderator_id, COUNT(*) as total
+        FROM modstats
         WHERE guild_id = ? AND action_type != 'unmute'
-        GROUP BY moderator_id 
+        GROUP BY moderator_id
         ORDER BY total DESC
       `).all(guildId);
 
@@ -143,8 +134,6 @@ module.exports = {
       return message.reply({ embeds: [embed] });
     } catch (error) {
       console.error('Modstats command error:', error);
-      console.error(error.stack);
-
       return message.reply({
         embeds: [makeEmbed('#ef4444', 'Modstats Failed', 'Failed to fetch moderation statistics.')]
       });
