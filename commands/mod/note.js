@@ -26,38 +26,39 @@ function makeEmbed(color, title, description) {
   return embed;
 }
 
-async function resolveTargetUser(client, message, raw) {
+async function resolveTargetUser(message, raw) {
   if (!raw) return null;
-
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(raw);
-  }
 
   const query = String(raw).trim();
   if (!query) return null;
 
   const id = query.replace(/[<@!>]/g, '');
   if (/^\d{15,20}$/.test(id)) {
-    const cached = client.users.cache.get(id);
+    const cached = message.client.users.cache.get(id);
     if (cached) return cached;
-    return await client.users.fetch(id).catch(() => null);
+    return await message.client.users.fetch(id).catch(() => null);
   }
 
   const lowered = query.toLowerCase();
 
-  const cachedUser = client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered
+  const cachedUser = message.client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered
   );
   if (cachedUser) return cachedUser;
 
   if (message.guild) {
-    const member = message.guild.members.cache.find(mm =>
-      mm?.displayName?.toLowerCase() === lowered ||
-      mm?.user?.username?.toLowerCase() === lowered ||
-      mm?.user?.globalName?.toLowerCase() === lowered
+    const cachedMember = message.guild.members.cache.find(m =>
+      m?.user?.username?.toLowerCase() === lowered
     );
-    if (member?.user) return member.user;
+    if (cachedMember?.user) return cachedMember.user;
+
+    const fetched = await message.guild.members.fetch().catch(() => null);
+    if (fetched?.size) {
+      const exact = fetched.find(m =>
+        m?.user?.username?.toLowerCase() === lowered
+      );
+      if (exact?.user) return exact.user;
+    }
   }
 
   return null;
@@ -65,7 +66,7 @@ async function resolveTargetUser(client, message, raw) {
 
 module.exports = {
   name: 'note',
-  description: 'Add a moderation note to a user. Usage: !note <id|@user|username> <note...>',
+  description: 'Add a moderation note to a user. Usage: !note <user> <note...>',
   category: 'mod',
   usage: '!note <user> <note>',
   aliases: [],
@@ -88,14 +89,14 @@ module.exports = {
     const targetArg = args.shift();
     if (!targetArg) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Note Usage', '`!note <id|@user|username> <note...>`')]
+        embeds: [makeEmbed('#f59e0b', 'Note Usage', '`!note <user> <note...>`')]
       });
     }
 
-    const targetUser = await resolveTargetUser(client, message, targetArg);
+    const targetUser = await resolveTargetUser(message, targetArg);
     if (!targetUser) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'User Not Found', 'Could not find that user. Try a mention, ID, username, or display name.')]
+        embeds: [makeEmbed('#f59e0b', 'User Not Found', 'Could not find that user. Try a mention, ID, or exact username.')]
       });
     }
 
