@@ -1,21 +1,29 @@
-// commands/utility/birthday.js
+// commands/misc/birthday.js
 const { EmbedBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
+// ─── Optional config (bot owner) ─────────────────────────────
+let config = null;
+try { config = require('../../config'); } catch {}
+
+// ─── Data folder and database ─────────────────────────────────
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, 'birthdays.sqlite'));
 db.pragma('journal_mode = WAL');
 
+// Create / update the birthdays table (now includes guild_id)
 db.prepare(`
   CREATE TABLE IF NOT EXISTS birthdays (
-    user_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     day INTEGER NOT NULL,
     month INTEGER NOT NULL,
-    last_sent_year INTEGER
+    last_sent_year INTEGER,
+    PRIMARY KEY (guild_id, user_id)
   )
 `).run();
 
@@ -26,6 +34,7 @@ db.prepare(`
   )
 `).run();
 
+// ─── Helpers ──────────────────────────────────────────────────
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
   if (title) embed.setTitle(title);
@@ -81,11 +90,26 @@ function getNextBirthdayDate(day, month) {
   return date;
 }
 
-function isBotOwner(client, userId) {
-  const ownerId = process.env.OWNER_ID || client.ownerId || null;
-  return ownerId ? String(ownerId) === String(userId) : false;
+// ─── Bot owner detection (consistent with watchword.js) ─────
+function getBotOwnerIds(client) {
+  const ids = new Set();
+  if (config?.ownerId) ids.add(String(config.ownerId));
+  if (Array.isArray(config?.ownerIds)) {
+    config.ownerIds.forEach(id => ids.add(String(id)));
+  }
+  if (client?.ownerId) ids.add(String(client.ownerId));
+  if (Array.isArray(client?.ownerIds)) {
+    client.ownerIds.forEach(id => ids.add(String(id)));
+  }
+  if (process.env.OWNER_ID) ids.add(String(process.env.OWNER_ID));
+  return ids;
 }
 
+function isBotOwner(client, userId) {
+  return getBotOwnerIds(client).has(String(userId));
+}
+
+// ─── Permissions for birthday channel setup ───────────────────
 function canManageBirthdayChannel(client, message) {
   if (!message.guild || !message.member) return false;
   if (message.guild.ownerId === message.author.id) return true;
@@ -101,6 +125,7 @@ function getBirthdayChannelId(guildId) {
   `).get(guildId)?.channel_id || null;
 }
 
+// ─── Command ──────────────────────────────────────────────────
 module.exports = {
   name: 'birthday',
   category: 'utility',
@@ -163,14 +188,16 @@ module.exports = {
     }
 
     if (sub === 'calendar') {
+      // Only show birthdays from members of this server
       const rows = db.prepare(`
         SELECT user_id, day, month
         FROM birthdays
-      `).all();
+        WHERE guild_id = ?
+      `).all(message.guild.id);
 
       if (!rows.length) {
         return message.reply({
-          embeds: [makeEmbed('#f59e0b', 'Birthday Calendar', 'No birthdays have been saved yet.')]
+          embeds: [makeEmbed('#f59e0b', 'Birthday Calendar', 'No birthdays have been saved in this server yet.')]
         });
       }
 
@@ -197,6 +224,7 @@ module.exports = {
       });
     }
 
+    // View a user's birthday (only from this server)
     const target =
       message.mentions.users.first() ||
       (args[0] ? await resolveTargetUser(client, message, args[0]) : null) ||
@@ -205,8 +233,8 @@ module.exports = {
     const row = db.prepare(`
       SELECT day, month
       FROM birthdays
-      WHERE user_id = ?
-    `).get(target.id);
+      WHERE guild_id = ? AND user_id = ?
+    `).get(message.guild.id, target.id);
 
     if (!row) {
       return message.reply({
@@ -215,8 +243,8 @@ module.exports = {
             '#f59e0b',
             'Birthday Not Set',
             target.id === message.author.id
-              ? 'You have not set a birthday yet.'
-              : `**${target.username}** has not set a birthday yet.`
+              ? 'You have not set a birthday in this server.'
+              : `**${target.username}** has not set a birthday in this server.`
           )
         ]
       });
