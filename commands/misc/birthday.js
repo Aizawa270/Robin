@@ -1,4 +1,5 @@
-const { EmbedBuilder } = require('discord.js');
+// commands/utility/birthday.js
+const { EmbedBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
@@ -15,6 +16,13 @@ db.prepare(`
     day INTEGER NOT NULL,
     month INTEGER NOT NULL,
     last_sent_year INTEGER
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS birthday_channels (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL
   )
 `).run();
 
@@ -54,14 +62,6 @@ async function resolveTargetUser(client, message, input) {
   );
   if (cachedUser) return cachedUser;
 
-  if (message.guild) {
-    await message.guild.members.fetch().catch(() => {});
-    const member = message.guild.members.cache.find(m =>
-      m?.user?.username?.toLowerCase() === lowered
-    );
-    if (member?.user) return member.user;
-  }
-
   return null;
 }
 
@@ -72,30 +72,95 @@ function formatBirthday(day, month) {
 function getNextBirthdayDate(day, month) {
   const now = new Date();
   const year = now.getFullYear();
-  let date = new Date(year, month - 1, day);
+  let date = new Date(year, month - 1, day, 0, 0, 0, 0);
 
   if (date.getTime() < now.getTime()) {
-    date = new Date(year + 1, month - 1, day);
+    date = new Date(year + 1, month - 1, day, 0, 0, 0, 0);
   }
 
   return date;
 }
 
+function isBotOwner(client, userId) {
+  const ownerId = process.env.OWNER_ID || client.ownerId || null;
+  return ownerId ? String(ownerId) === String(userId) : false;
+}
+
+function canManageBirthdayChannel(client, message) {
+  if (!message.guild || !message.member) return false;
+  if (message.guild.ownerId === message.author.id) return true;
+  if (isBotOwner(client, message.author.id)) return true;
+  return false;
+}
+
+function getBirthdayChannelId(guildId) {
+  return db.prepare(`
+    SELECT channel_id
+    FROM birthday_channels
+    WHERE guild_id = ?
+  `).get(guildId)?.channel_id || null;
+}
+
 module.exports = {
   name: 'birthday',
   category: 'utility',
-  usage: '$birthday [@user|id|username] | $birthday calendar',
+  usage: '$birthday [@user|id|username] | $birthday calendar | $birthdaychannel #channel',
+  aliases: [],
 
   async execute(client, message, args) {
     if (!message.guild) {
       return message.reply({
-        embeds: [
-          makeEmbed('#ef4444', 'Birthday Failed', 'This command can only be used in a server.')
-        ]
+        embeds: [makeEmbed('#ef4444', 'Birthday Failed', 'This command can only be used in a server.')]
       });
     }
 
     const sub = (args[0] || '').toLowerCase();
+
+    if (sub === 'birthdaychannel' || sub === 'channel' || sub === 'setup') {
+      if (!canManageBirthdayChannel(client, message)) {
+        return message.reply({
+          embeds: [makeEmbed('#ef4444', 'Birthday Setup Failed', 'Only the server owner or bot owner can set the birthday channel.')]
+        });
+      }
+
+      const channelArg = args[1];
+      if (!channelArg) {
+        return message.reply({
+          embeds: [makeEmbed('#f59e0b', 'Birthday Setup', 'Use `$birthdaychannel #channel` or `$birthdaychannel channel_id`.')]
+        });
+      }
+
+      const raw = String(channelArg).trim().replace(/[<#>]/g, '');
+      let channel = message.guild.channels.cache.get(raw);
+
+      if (!channel && /^\d{15,20}$/.test(raw)) {
+        channel = await message.guild.channels.fetch(raw).catch(() => null);
+      }
+
+      if (
+        !channel ||
+        (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)
+      ) {
+        return message.reply({
+          embeds: [makeEmbed('#f59e0b', 'Birthday Setup Failed', 'Provide a valid text channel or announcement channel.')]
+        });
+      }
+
+      db.prepare(`
+        INSERT OR REPLACE INTO birthday_channels (guild_id, channel_id)
+        VALUES (?, ?)
+      `).run(message.guild.id, channel.id);
+
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            '#22c55e',
+            'Birthday Channel Set',
+            `Birthday announcements will now be sent in ${channel}.`
+          )
+        ]
+      });
+    }
 
     if (sub === 'calendar') {
       const rows = db.prepare(`
@@ -105,9 +170,7 @@ module.exports = {
 
       if (!rows.length) {
         return message.reply({
-          embeds: [
-            makeEmbed('#f59e0b', 'Birthday Calendar', 'No birthdays have been saved yet.')
-          ]
+          embeds: [makeEmbed('#f59e0b', 'Birthday Calendar', 'No birthdays have been saved yet.')]
         });
       }
 
@@ -130,9 +193,7 @@ module.exports = {
       }
 
       return message.reply({
-        embeds: [
-          makeEmbed('#38bdf8', 'Upcoming Birthdays', lines.join('\n'))
-        ]
+        embeds: [makeEmbed('#38bdf8', 'Upcoming Birthdays', lines.join('\n'))]
       });
     }
 
