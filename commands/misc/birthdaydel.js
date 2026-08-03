@@ -9,12 +9,15 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = new Database(path.join(DATA_DIR, 'birthdays.sqlite'));
 db.pragma('journal_mode = WAL');
 
+// Updated schema
 db.prepare(`
   CREATE TABLE IF NOT EXISTS birthdays (
-    user_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     day INTEGER NOT NULL,
     month INTEGER NOT NULL,
-    last_sent_year INTEGER
+    last_sent_year INTEGER,
+    PRIMARY KEY (guild_id, user_id)
   )
 `).run();
 
@@ -37,19 +40,22 @@ module.exports = {
       });
     }
 
-    const res = db.prepare('DELETE FROM birthdays WHERE user_id = ?').run(message.author.id);
+    // Delete the birthday only for this guild + user
+    const res = db.prepare(
+      'DELETE FROM birthdays WHERE guild_id = ? AND user_id = ?'
+    ).run(message.guild.id, message.author.id);
 
     if (!res.changes) {
       return message.reply({
         embeds: [
-          makeEmbed('#f59e0b', 'Birthday Not Found', 'You do not have a birthday set.')
+          makeEmbed('#f59e0b', 'Birthday Not Found', 'You do not have a birthday set in this server.')
         ]
       });
     }
 
     return message.reply({
       embeds: [
-        makeEmbed('#22c55e', 'Birthday Removed', 'Your birthday has been removed.')
+        makeEmbed('#22c55e', 'Birthday Removed', 'Your birthday has been removed from this server.')
       ]
     });
   }
