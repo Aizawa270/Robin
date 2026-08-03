@@ -9,12 +9,15 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = new Database(path.join(DATA_DIR, 'birthdays.sqlite'));
 db.pragma('journal_mode = WAL');
 
+// Updated schema: per‑server birthdays
 db.prepare(`
   CREATE TABLE IF NOT EXISTS birthdays (
-    user_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     day INTEGER NOT NULL,
     month INTEGER NOT NULL,
-    last_sent_year INTEGER
+    last_sent_year INTEGER,
+    PRIMARY KEY (guild_id, user_id)
   )
 `).run();
 
@@ -75,22 +78,23 @@ module.exports = {
       });
     }
 
+    // Insert or update birthday for this guild + user
     db.prepare(`
-      INSERT INTO birthdays (user_id, day, month, last_sent_year)
-      VALUES (?, ?, ?, NULL)
-      ON CONFLICT(user_id)
+      INSERT INTO birthdays (guild_id, user_id, day, month, last_sent_year)
+      VALUES (?, ?, ?, ?, NULL)
+      ON CONFLICT(guild_id, user_id)
       DO UPDATE SET
         day = excluded.day,
         month = excluded.month,
         last_sent_year = NULL
-    `).run(message.author.id, day, month);
+    `).run(message.guild.id, message.author.id, day, month);
 
     return message.reply({
       embeds: [
         makeEmbed(
           '#22c55e',
           'Birthday Saved',
-          `Your birthday has been set to **${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}**.`
+          `Your birthday has been set to **${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}** in this server.`
         )
       ]
     });
