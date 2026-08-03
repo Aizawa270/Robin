@@ -1,133 +1,134 @@
-const { PermissionFlagsBits } = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+
+let config = null;
+try {
+config = require('../../config');
+} catch {}
+
+function getBotOwnerIds(client) {
+const ids = new Set();
+
+if (config?.ownerId) ids.add(String(config.ownerId));
+if (client?.ownerId) ids.add(String(client.ownerId));
+if (Array.isArray(client?.ownerIds)) {
+for (const id of client.ownerIds) ids.add(String(id));
+}
+if (process.env.OWNER_ID) ids.add(String(process.env.OWNER_ID));
+
+return ids;
+}
+
+function isBotOwner(client, userId) {
+return getBotOwnerIds(client).has(String(userId));
+}
+
+function makeEmbed(color, title, description) {
+return new EmbedBuilder()
+.setColor(color)
+.setTitle(title)
+.setDescription(description)
+.setTimestamp();
+}
 
 module.exports = {
-  name: 'changeprefix',
-  aliases: ['cp'],
-  hidden: true,
-  description: 'Change the bot prefix for this server.',
-  usage: '$changeprefix <newPrefix>',
-  category: 'Utility',
+name: 'changeprefix',
+aliases: ['cp'],
+hidden: true,
+description: 'Change the bot prefix for this server.',
+usage: '$changeprefix <newPrefix>',
+category: 'utility',
 
-  async execute(client, message, args) {
-    // ============================================================
-    // ONLY THESE USERS CAN CHANGE THE PREFIX
-    // ============================================================
+async execute(client, message, args) {
+if (!message.guild) {
+return message.reply({
+embeds: [
+makeEmbed('#ef4444', 'Prefix Change Failed', 'This command can only be used inside a server.')
+]
+});
+}
 
-    const allowedUsers = [
-      '852839588689870879',
-      '965303319784464454',
-    ];
+const isServerOwner = message.author.id === message.guild.ownerId;
+const isOwner = isBotOwner(client, message.author.id);
 
-    if (!allowedUsers.includes(message.author.id)) {
-      return message.reply(
-        '❌ You are not authorized to change the bot prefix.'
-      );
-    }
+if (!isServerOwner && !isOwner) {
+  return message.reply({
+    embeds: [
+      makeEmbed('#ef4444', 'Prefix Change Failed', 'Only the bot owner or server owner can change the prefix.')
+    ]
+  });
+}
 
-    // ============================================================
-    // SERVER ONLY
-    // ============================================================
+const newPrefix = args[0];
 
-    if (!message.guild) {
-      return message.reply(
-        '❌ This command can only be used inside a server.'
-      );
-    }
+if (!newPrefix) {
+  return message.reply({
+    embeds: [
+      makeEmbed(
+        '#f59e0b',
+        'Prefix Change Usage',
+        `Provide a new prefix.\n\nExample:\n\`${message.prefix || '$'}changeprefix !\``
+      )
+    ]
+  });
+}
 
-    // ============================================================
-    // GET NEW PREFIX
-    // ============================================================
+if (newPrefix.length > 5) {
+  return message.reply({
+    embeds: [
+      makeEmbed('#ef4444', 'Prefix Change Failed', 'The prefix cannot be longer than 5 characters.')
+    ]
+  });
+}
 
-    const newPrefix = args[0];
+if (/\s/.test(newPrefix)) {
+  return message.reply({
+    embeds: [
+      makeEmbed('#ef4444', 'Prefix Change Failed', 'The prefix cannot contain spaces.')
+    ]
+  });
+}
 
-    if (!newPrefix) {
-      return message.reply(
-        `❌ Provide a new prefix.\n\nExample:\n\`$changeprefix !\``
-      );
-    }
+if (newPrefix.includes('<@') || newPrefix.includes('>')) {
+  return message.reply({
+    embeds: [
+      makeEmbed('#ef4444', 'Prefix Change Failed', 'Mention-based prefixes are not allowed.')
+    ]
+  });
+}
 
-    // ============================================================
-    // PREFIX VALIDATION
-    // ============================================================
+if (!client.prefixDB) {
+  return message.reply({
+    embeds: [
+      makeEmbed('#ef4444', 'Prefix Change Failed', 'Prefix database is not initialized.')
+    ]
+  });
+}
 
-    if (newPrefix.length > 5) {
-      return message.reply(
-        '❌ The prefix cannot be longer than 5 characters.'
-      );
-    }
+try {
+  const oldPrefix = client.getPrefix?.(message.guild.id) || '$';
 
-    if (/\s/.test(newPrefix)) {
-      return message.reply(
-        '❌ The prefix cannot contain spaces.'
-      );
-    }
+  client.prefixDB.prepare(`
+    INSERT OR REPLACE INTO prefixes (guild_id, prefix)
+    VALUES (?, ?)
+  `).run(message.guild.id, newPrefix);
 
-    // ============================================================
-    // PREVENT MENTION PREFIXES
-    // ============================================================
+  return message.reply({
+    embeds: [
+      makeEmbed(
+        '#22c55e',
+        'Prefix Updated',
+        `Server prefix updated successfully.\n\n**Old prefix:** \`${oldPrefix}\`\n**New prefix:** \`${newPrefix}\`\n\nUse \`${newPrefix}help\` to open the help menu.`
+      )
+    ]
+  });
+} catch (error) {
+  console.error('[ChangePrefix] Failed to change prefix:', error);
+  return message.reply({
+    embeds: [
+      makeEmbed('#ef4444', 'Prefix Change Failed', 'Failed to change the server prefix.')
+    ]
+  });
+}
 
-    if (
-      newPrefix.includes('<@') ||
-      newPrefix.includes('>')
-    ) {
-      return message.reply(
-        '❌ Mention-based prefixes are not allowed.'
-      );
-    }
-
-    // ============================================================
-    // MAKE SURE PREFIX DATABASE EXISTS
-    // ============================================================
-
-    if (!client.prefixDB) {
-      return message.reply(
-        '❌ Prefix database is not initialized. Please restart the bot and try again.'
-      );
-    }
-
-    try {
-      // ==========================================================
-      // GET OLD PREFIX
-      // ==========================================================
-
-      const oldPrefix =
-        client.getPrefix(message.guild.id) || '$';
-
-      // ==========================================================
-      // SAVE NEW PREFIX
-      // ==========================================================
-
-      client.prefixDB
-        .prepare(`
-          INSERT OR REPLACE INTO prefixes
-          (guild_id, prefix)
-          VALUES (?, ?)
-        `)
-        .run(
-          message.guild.id,
-          newPrefix
-        );
-
-      // ==========================================================
-      // CONFIRM
-      // ==========================================================
-
-      return message.reply(
-        `✅ Server prefix updated successfully.\n\n` +
-        `**Old prefix:** \`${oldPrefix}\`\n` +
-        `**New prefix:** \`${newPrefix}\`\n\n` +
-        `Use \`${newPrefix}help\` for the help menu.`
-      );
-
-    } catch (error) {
-      console.error(
-        '[ChangePrefix] Failed to change prefix:',
-        error
-      );
-
-      return message.reply(
-        '❌ Failed to change the server prefix. Check the bot console for the error.'
-      );
-    }
-  },
+},
 };
