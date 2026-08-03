@@ -321,6 +321,40 @@ client.getPrefix = (guildId) => {
   return row?.prefix || '$';
 };
 
+function isImageUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  return /\.(png|jpe?g|gif|webp|bmp|avif)(\?.*)?$/i.test(url);
+}
+
+function buildSnipeMedia(source) {
+  const media = [];
+
+  for (const a of source.attachments?.values?.() || []) {
+    media.push({
+      type: 'attachment',
+      url: a.url,
+      proxyURL: a.proxyURL,
+      contentType: a.contentType || null,
+      name: a.name || null,
+    });
+  }
+
+  for (const e of source.embeds || []) {
+    const imageUrl = e.image?.url || e.thumbnail?.url || e.url;
+    if (imageUrl) {
+      media.push({
+        type: 'embed',
+        url: imageUrl,
+        proxyURL: imageUrl,
+        contentType: e.type === 'gifv' ? 'image/gif' : null,
+        name: e.title || e.provider?.name || 'embedded media',
+      });
+    }
+  }
+
+  return media;
+}
+
 // ===== READY EVENT =====
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
@@ -427,18 +461,41 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-client.on('messageDelete', (message) => {
+client.on('messageDelete', async (message) => {
   if (!message.guild || message.author?.bot) return;
 
-  const id = message.channel.id;
-  if (!client.snipes.has(id)) client.snipes.set(id, []);
+  const channelId = message.channel.id;
+  if (!client.snipes.has(channelId)) client.snipes.set(channelId, []);
 
-  const arr = client.snipes.get(id);
+  let source = message;
+
+  // Try to fetch partials so attachments/embeds/stickers are preserved when possible.
+  if (message.partial) {
+    const fetched = await message.fetch().catch(() => null);
+    if (fetched) source = fetched;
+  }
+
+  const media = buildSnipeMedia(source);
+  const stickers = [...(source.stickers?.values?.() || [])].map(s => ({
+    name: s.name || 'sticker',
+  }));
+
+  const arr = client.snipes.get(channelId);
   arr.unshift({
-    content: message.content || '',
-    author: message.author,
-    attachments: [...message.attachments.values()].map(a => a.url),
-    createdAt: message.createdAt,
+    content: source.content || '',
+    author: source.author || message.author,
+    attachments: [...(source.attachments?.values?.() || [])].map(a => a.url),
+    media,
+    stickers,
+    embeds: (source.embeds || []).map(e => ({
+      type: e.type || null,
+      url: e.url || null,
+      title: e.title || null,
+      image: e.image ? { url: e.image.url } : null,
+      thumbnail: e.thumbnail ? { url: e.thumbnail.url } : null,
+      provider: e.provider ? { name: e.provider.name || null } : null,
+    })),
+    createdAt: source.createdAt || message.createdAt || new Date(),
   });
 
   if (arr.length > 15) arr.pop();
