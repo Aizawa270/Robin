@@ -1,40 +1,56 @@
-// commands/misc/birthday.js
-const { EmbedBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
+const { EmbedBuilder, ChannelType } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-// ─── Optional config (bot owner) ─────────────────────────────
 let config = null;
-try { config = require('../../config'); } catch {}
+try {
+  config = require('../../config');
+} catch {}
 
-// ─── Data folder and database ─────────────────────────────────
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, 'birthdays.sqlite'));
 db.pragma('journal_mode = WAL');
 
-// Create / update the birthdays table (now includes guild_id)
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS birthdays (
-    guild_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    day INTEGER NOT NULL,
-    month INTEGER NOT NULL,
-    last_sent_year INTEGER,
-    PRIMARY KEY (guild_id, user_id)
-  )
-`).run();
+function ensureBirthdaySchema() {
+  const birthdayTableInfo = db.prepare(`PRAGMA table_info(birthdays)`).all();
+  const birthdayColumns = birthdayTableInfo.map(c => c.name);
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS birthday_channels (
-    guild_id TEXT PRIMARY KEY,
-    channel_id TEXT NOT NULL
-  )
-`).run();
+  const hasGuildSchema =
+    birthdayColumns.includes('guild_id') &&
+    birthdayColumns.includes('user_id') &&
+    birthdayColumns.includes('day') &&
+    birthdayColumns.includes('month');
 
-// ─── Helpers ──────────────────────────────────────────────────
+  if (birthdayColumns.length > 0 && !hasGuildSchema) {
+    try {
+      db.exec(`ALTER TABLE birthdays RENAME TO birthdays_legacy`);
+    } catch {}
+  }
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS birthdays (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      day INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      last_sent_year INTEGER,
+      PRIMARY KEY (guild_id, user_id)
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS birthday_channels (
+      guild_id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL
+    )
+  `).run();
+}
+
+ensureBirthdaySchema();
+
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
   if (title) embed.setTitle(title);
@@ -65,7 +81,6 @@ async function resolveTargetUser(client, message, input) {
   }
 
   const lowered = query.toLowerCase();
-
   const cachedUser = client.users.cache.find(u =>
     u?.username?.toLowerCase() === lowered
   );
@@ -90,18 +105,19 @@ function getNextBirthdayDate(day, month) {
   return date;
 }
 
-// ─── Bot owner detection (consistent with watchword.js) ─────
 function getBotOwnerIds(client) {
   const ids = new Set();
+
   if (config?.ownerId) ids.add(String(config.ownerId));
   if (Array.isArray(config?.ownerIds)) {
-    config.ownerIds.forEach(id => ids.add(String(id)));
+    for (const id of config.ownerIds) ids.add(String(id));
   }
   if (client?.ownerId) ids.add(String(client.ownerId));
   if (Array.isArray(client?.ownerIds)) {
-    client.ownerIds.forEach(id => ids.add(String(id)));
+    for (const id of client.ownerIds) ids.add(String(id));
   }
   if (process.env.OWNER_ID) ids.add(String(process.env.OWNER_ID));
+
   return ids;
 }
 
@@ -109,7 +125,6 @@ function isBotOwner(client, userId) {
   return getBotOwnerIds(client).has(String(userId));
 }
 
-// ─── Permissions for birthday channel setup ───────────────────
 function canManageBirthdayChannel(client, message) {
   if (!message.guild || !message.member) return false;
   if (message.guild.ownerId === message.author.id) return true;
@@ -117,19 +132,10 @@ function canManageBirthdayChannel(client, message) {
   return false;
 }
 
-function getBirthdayChannelId(guildId) {
-  return db.prepare(`
-    SELECT channel_id
-    FROM birthday_channels
-    WHERE guild_id = ?
-  `).get(guildId)?.channel_id || null;
-}
-
-// ─── Command ──────────────────────────────────────────────────
 module.exports = {
   name: 'birthday',
   category: 'utility',
-  usage: '$birthday [@user|id|username] | $birthday calendar | $birthdaychannel #channel',
+  usage: '$birthday [@user|id|username] | $birthday calendar | $birthday birthdaychannel #channel',
   aliases: [],
 
   async execute(client, message, args) {
@@ -151,7 +157,7 @@ module.exports = {
       const channelArg = args[1];
       if (!channelArg) {
         return message.reply({
-          embeds: [makeEmbed('#f59e0b', 'Birthday Setup', 'Use `$birthdaychannel #channel` or `$birthdaychannel channel_id`.')]
+          embeds: [makeEmbed('#f59e0b', 'Birthday Setup', 'Use `$birthday birthdaychannel #channel` or `$birthday birthdaychannel channel_id`.')]
         });
       }
 
@@ -188,7 +194,6 @@ module.exports = {
     }
 
     if (sub === 'calendar') {
-      // Only show birthdays from members of this server
       const rows = db.prepare(`
         SELECT user_id, day, month
         FROM birthdays
@@ -201,19 +206,16 @@ module.exports = {
         });
       }
 
-      const upcoming = [];
-      for (const row of rows) {
-        const date = getNextBirthdayDate(row.day, row.month);
-        upcoming.push({
-          ...row,
-          timestamp: date.getTime()
-        });
-      }
-
-      upcoming.sort((a, b) => a.timestamp - b.timestamp);
+      const upcoming = rows
+        .map(row => {
+          const date = getNextBirthdayDate(row.day, row.month);
+          return { ...row, timestamp: date.getTime() };
+        })
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(0, 10);
 
       const lines = [];
-      for (const row of upcoming.slice(0, 10)) {
+      for (const row of upcoming) {
         const user = await client.users.fetch(row.user_id).catch(() => null);
         const name = user?.username || row.user_id;
         lines.push(`**${name}** — ${formatBirthday(row.day, row.month)} — <t:${Math.floor(row.timestamp / 1000)}:R>`);
@@ -224,7 +226,6 @@ module.exports = {
       });
     }
 
-    // View a user's birthday (only from this server)
     const target =
       message.mentions.users.first() ||
       (args[0] ? await resolveTargetUser(client, message, args[0]) : null) ||
