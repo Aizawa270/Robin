@@ -1,3 +1,4 @@
+// commands/misc/birthday.js
 const { EmbedBuilder, ChannelType } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
@@ -15,16 +16,16 @@ const db = new Database(path.join(DATA_DIR, 'birthdays.sqlite'));
 db.pragma('journal_mode = WAL');
 
 function ensureBirthdaySchema() {
-  const birthdayTableInfo = db.prepare(`PRAGMA table_info(birthdays)`).all();
-  const birthdayColumns = birthdayTableInfo.map(c => c.name);
+  const tableInfo = db.prepare(`PRAGMA table_info(birthdays)`).all();
+  const columns = tableInfo.map(c => c.name);
 
   const hasGuildSchema =
-    birthdayColumns.includes('guild_id') &&
-    birthdayColumns.includes('user_id') &&
-    birthdayColumns.includes('day') &&
-    birthdayColumns.includes('month');
+    columns.includes('guild_id') &&
+    columns.includes('user_id') &&
+    columns.includes('day') &&
+    columns.includes('month');
 
-  if (birthdayColumns.length > 0 && !hasGuildSchema) {
+  if (columns.length > 0 && !hasGuildSchema) {
     try {
       db.exec(`ALTER TABLE birthdays RENAME TO birthdays_legacy`);
     } catch {}
@@ -58,6 +59,22 @@ function makeEmbed(color, title, description) {
   return embed;
 }
 
+function formatBirthday(day, month) {
+  return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}`;
+}
+
+function getNextBirthdayDate(day, month) {
+  const now = new Date();
+  const year = now.getFullYear();
+  let date = new Date(year, month - 1, day, 0, 0, 0, 0);
+
+  if (date.getTime() < now.getTime()) {
+    date = new Date(year + 1, month - 1, day, 0, 0, 0, 0);
+  }
+
+  return date;
+}
+
 async function resolveTargetUser(client, message, input) {
   if (!input) return null;
 
@@ -81,28 +98,24 @@ async function resolveTargetUser(client, message, input) {
   }
 
   const lowered = query.toLowerCase();
+
   const cachedUser = client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered
+    u?.username?.toLowerCase() === lowered ||
+    u?.globalName?.toLowerCase() === lowered ||
+    u?.tag?.toLowerCase() === lowered
   );
   if (cachedUser) return cachedUser;
 
-  return null;
-}
-
-function formatBirthday(day, month) {
-  return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}`;
-}
-
-function getNextBirthdayDate(day, month) {
-  const now = new Date();
-  const year = now.getFullYear();
-  let date = new Date(year, month - 1, day, 0, 0, 0, 0);
-
-  if (date.getTime() < now.getTime()) {
-    date = new Date(year + 1, month - 1, day, 0, 0, 0, 0);
+  if (message.guild) {
+    await message.guild.members.fetch().catch(() => {});
+    const member = message.guild.members.cache.find(m =>
+      m?.user?.username?.toLowerCase() === lowered ||
+      m?.displayName?.toLowerCase() === lowered
+    );
+    if (member?.user) return member.user;
   }
 
-  return date;
+  return null;
 }
 
 function getBotOwnerIds(client) {
@@ -141,23 +154,70 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Birthday Failed', 'This command can only be used in a server.')]
+        embeds: [
+          makeEmbed('#ef4444', 'Birthday Failed', 'This command can only be used in a server.')
+        ]
       });
     }
 
     const sub = (args[0] || '').toLowerCase();
 
+    if (sub === 'calendar' || sub === 'calender') {
+      const rows = db.prepare(`
+        SELECT user_id, day, month
+        FROM birthdays
+        WHERE guild_id = ?
+      `).all(message.guild.id);
+
+      if (!rows.length) {
+        return message.reply({
+          embeds: [
+            makeEmbed('#f59e0b', 'Upcoming Birthdays', 'No birthdays have been saved in this server yet.')
+          ]
+        });
+      }
+
+      const upcoming = rows
+        .map(row => {
+          const date = getNextBirthdayDate(row.day, row.month);
+          return { ...row, timestamp: date.getTime() };
+        })
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .slice(0, 10);
+
+      const lines = [];
+      for (const row of upcoming) {
+        const member = message.guild.members.cache.get(row.user_id);
+        const user = member?.user || await client.users.fetch(row.user_id).catch(() => null);
+        const name = member?.displayName || user?.username || row.user_id;
+
+        lines.push(
+          `**${name}** — ${formatBirthday(row.day, row.month)} — <t:${Math.floor(row.timestamp / 1000)}:R>`
+        );
+      }
+
+      return message.reply({
+        embeds: [
+          makeEmbed('#38bdf8', 'Upcoming Birthdays', lines.join('\n'))
+        ]
+      });
+    }
+
     if (sub === 'birthdaychannel' || sub === 'channel' || sub === 'setup') {
       if (!canManageBirthdayChannel(client, message)) {
         return message.reply({
-          embeds: [makeEmbed('#ef4444', 'Birthday Setup Failed', 'Only the server owner or bot owner can set the birthday channel.')]
+          embeds: [
+            makeEmbed('#ef4444', 'Birthday Setup Failed', 'Only the server owner or bot owner can set the birthday channel.')
+          ]
         });
       }
 
       const channelArg = args[1];
       if (!channelArg) {
         return message.reply({
-          embeds: [makeEmbed('#f59e0b', 'Birthday Setup', 'Use `$birthday birthdaychannel #channel` or `$birthday birthdaychannel channel_id`.')]
+          embeds: [
+            makeEmbed('#f59e0b', 'Birthday Setup', 'Use `$birthday birthdaychannel #channel` or `$birthday birthdaychannel channel_id`.')
+          ]
         });
       }
 
@@ -173,7 +233,9 @@ module.exports = {
         (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)
       ) {
         return message.reply({
-          embeds: [makeEmbed('#f59e0b', 'Birthday Setup Failed', 'Provide a valid text channel or announcement channel.')]
+          embeds: [
+            makeEmbed('#f59e0b', 'Birthday Setup Failed', 'Provide a valid text channel or announcement channel.')
+          ]
         });
       }
 
@@ -184,45 +246,8 @@ module.exports = {
 
       return message.reply({
         embeds: [
-          makeEmbed(
-            '#22c55e',
-            'Birthday Channel Set',
-            `Birthday announcements will now be sent in ${channel}.`
-          )
+          makeEmbed('#22c55e', 'Birthday Channel Set', `Birthday announcements will now be sent in ${channel}.`)
         ]
-      });
-    }
-
-    if (sub === 'calendar') {
-      const rows = db.prepare(`
-        SELECT user_id, day, month
-        FROM birthdays
-        WHERE guild_id = ?
-      `).all(message.guild.id);
-
-      if (!rows.length) {
-        return message.reply({
-          embeds: [makeEmbed('#f59e0b', 'Birthday Calendar', 'No birthdays have been saved in this server yet.')]
-        });
-      }
-
-      const upcoming = rows
-        .map(row => {
-          const date = getNextBirthdayDate(row.day, row.month);
-          return { ...row, timestamp: date.getTime() };
-        })
-        .sort((a, b) => a.timestamp - b.timestamp)
-        .slice(0, 10);
-
-      const lines = [];
-      for (const row of upcoming) {
-        const user = await client.users.fetch(row.user_id).catch(() => null);
-        const name = user?.username || row.user_id;
-        lines.push(`**${name}** — ${formatBirthday(row.day, row.month)} — <t:${Math.floor(row.timestamp / 1000)}:R>`);
-      }
-
-      return message.reply({
-        embeds: [makeEmbed('#38bdf8', 'Upcoming Birthdays', lines.join('\n'))]
       });
     }
 
