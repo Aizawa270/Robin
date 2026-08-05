@@ -23,6 +23,12 @@ function buildEmbed(data = {}) {
   return embed;
 }
 
+function money(client, amount) {
+  return client?.economy?.formatCurrency
+    ? client.economy.formatCurrency(amount)
+    : `${Number(amount || 0).toLocaleString('en-US')} Crowns`;
+}
+
 function createDeck() {
   const suits = ['♠', '♥', '♦', '♣'];
   const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
@@ -89,7 +95,7 @@ function renderEmbed(session, revealDealer = false, status = 'Your move') {
   return buildEmbed({
     title: 'Blackjack',
     description:
-      `Bet\n↳ ${formatNumber(session.bet)} Crowns\n\n` +
+      `Bet\n↳ ${money(session.client, session.bet)}\n\n` +
       `Your Hand\n↳ ${playerHand || '—'}\n` +
       `Total\n↳ ${playerTotal}\n\n` +
       `Dealer\n↳ ${dealerHand || '—'}\n` +
@@ -169,14 +175,14 @@ async function finalizeGame(session, messageLike = null, reason = 'stand') {
   const embed = buildEmbed({
     title: 'Blackjack',
     description:
-      `Bet\n↳ ${formatNumber(session.bet)} Crowns\n\n` +
+      `Bet\n↳ ${money(session.client, session.bet)}\n\n` +
       `Your Hand\n↳ ${session.playerHand.map(cardString).join('  ')}\n` +
       `Total\n↳ ${finalPlayerTotal}\n\n` +
       `Dealer\n↳ ${session.dealerHand.map(cardString).join('  ')}\n` +
       `Total\n↳ ${finalDealerTotal}\n\n` +
       `Result\n↳ ${
         outcome === 'win'
-          ? `You won ${formatNumber(payout - session.bet)} Crowns`
+          ? `You won ${money(session.client, payout - session.bet)}`
           : outcome === 'push'
             ? 'Bet refunded'
             : 'You lost'
@@ -204,7 +210,9 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
     if (!client.economy) {
-      return message.reply({ embeds: [buildEmbed({ title: 'Economy Unavailable', description: 'The economy system is not ready.' })] });
+      return message.reply({
+        embeds: [buildEmbed({ title: 'Economy Unavailable', description: 'The economy system is not ready.' })],
+      });
     }
 
     if (activeGames.has(message.channel.id)) {
@@ -235,7 +243,7 @@ module.exports = {
         embeds: [
           buildEmbed({
             title: 'Blackjack',
-            description: `Maximum bet is **${formatNumber(MAX_BET)} Crowns**.`,
+            description: `Maximum bet is **${money(client, MAX_BET)}**.`,
           }),
         ],
       });
@@ -247,7 +255,7 @@ module.exports = {
         embeds: [
           buildEmbed({
             title: 'Blackjack',
-            description: `You only have **${formatNumber(balance)} Crowns**.`,
+            description: `You only have **${money(client, balance)}**.`,
           }),
         ],
       });
@@ -298,8 +306,6 @@ module.exports = {
 
     activeGames.set(message.channel.id, session);
 
-    const playerTotal = handValue(session.playerHand);
-    const dealerTotal = handValue(session.dealerHand);
     session.message = await message.reply({
       embeds: [renderEmbed(session, false, 'Your move')],
       components: [activeRow()],
