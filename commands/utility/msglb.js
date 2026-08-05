@@ -44,7 +44,7 @@ function buildEmbed(message, data = {}) {
 
 function scopeToColumn(scope) {
   const normalized = String(scope || 'total').toLowerCase();
-  if (['daily', 'weekly', 'monthly', 'total'].includes(normalized)) return normalized;
+  if (['total', 'daily', 'weekly', 'monthly'].includes(normalized)) return normalized;
   return 'total';
 }
 
@@ -53,15 +53,14 @@ function formatNumber(n) {
 }
 
 async function resolvePagePrompt(message, totalPages) {
-  const promptEmbed = buildEmbed(message, {
-    title: 'Go To Page',
-    description: `Send a page number between 1 and ${totalPages}.`,
-    footer: footerText(message.client),
-  });
-
   const prompt = await message.channel.send({
-    embeds: [promptEmbed],
-    allowedMentions: { repliedUser: false },
+    embeds: [
+      buildEmbed(message, {
+        title: 'Go To Page',
+        description: `Send a page number between 1 and ${totalPages}.`,
+        footer: footerText(message.client),
+      }),
+    ],
   }).catch(() => null);
 
   if (!prompt) return null;
@@ -77,14 +76,7 @@ async function resolvePagePrompt(message, totalPages) {
   if (!collected || !collected.size) return null;
 
   const reply = collected.first();
-  const raw = String(reply.content || '').trim().toLowerCase();
-
-  if (raw === 'cancel') {
-    reply.delete().catch(() => {});
-    return null;
-  }
-
-  const page = parseInt(raw, 10);
+  const page = parseInt(String(reply.content || '').trim(), 10);
   reply.delete().catch(() => {});
 
   if (!Number.isInteger(page)) return null;
@@ -118,6 +110,7 @@ module.exports = {
 
     if (args[0]) {
       const first = String(args[0]).toLowerCase();
+
       if (['total', 'daily', 'weekly', 'monthly'].includes(first)) {
         scope = first;
         page = parseInt(args[1], 10) || 1;
@@ -126,10 +119,11 @@ module.exports = {
       }
     }
 
-    page = Math.max(1, page);
     scope = scopeToColumn(scope);
+    page = Math.max(1, page);
 
     const perPage = 10;
+
     const totalRows = client.msgTrackerDB.prepare(`
       SELECT COUNT(*) AS count
       FROM message_stats
@@ -141,18 +135,15 @@ module.exports = {
 
     const offset = (page - 1) * perPage;
 
-    const rows = client.messageTracker.getLeaderboard(
-      message.guild.id,
-      scope,
-      perPage,
-      offset
-    ).filter(row => Number(row[scope] || 0) > 0);
+    const rows = client.messageTracker
+      .getLeaderboard(message.guild.id, scope, perPage, offset)
+      .filter(row => Number(row[scope] || 0) > 0);
 
     if (!rows.length) {
       return message.reply({
         embeds: [
           buildEmbed(message, {
-            title: `Leaderboard Messages (Page ${page}/${totalPages})`,
+            title: `Leaderboard Messages (Page 1/1)`,
             description: 'No tracked messages found in this server yet.',
             footer: footerText(client),
           }),
@@ -212,10 +203,9 @@ module.exports = {
     collector.on('collect', async interaction => {
       if (interaction.customId === 'msglb_page') {
         await interaction.deferUpdate().catch(() => {});
-        const requested = await resolvePagePrompt(message, totalPages);
-        if (!requested) return;
-
-        page = Math.max(1, Math.min(totalPages, requested));
+        const requestedPage = await resolvePagePrompt(message, totalPages);
+        if (!requestedPage) return;
+        page = Math.max(1, Math.min(totalPages, requestedPage));
       } else if (interaction.customId === 'msglb_prev') {
         page = Math.max(1, page - 1);
         await interaction.deferUpdate().catch(() => {});
@@ -227,12 +217,9 @@ module.exports = {
       }
 
       const newOffset = (page - 1) * perPage;
-      const newRows = client.messageTracker.getLeaderboard(
-        message.guild.id,
-        scope,
-        perPage,
-        newOffset
-      ).filter(row => Number(row[scope] || 0) > 0);
+      const newRows = client.messageTracker
+        .getLeaderboard(message.guild.id, scope, perPage, newOffset)
+        .filter(row => Number(row[scope] || 0) > 0);
 
       const newLines = [];
       for (let i = 0; i < newRows.length; i++) {
