@@ -19,6 +19,12 @@ function buildEmbed(message, data = {}) {
   return embed;
 }
 
+function money(client, amount) {
+  return client?.economy?.formatCurrency
+    ? client.economy.formatCurrency(amount)
+    : `${Number(amount || 0).toLocaleString('en-US')} Crowns`;
+}
+
 function parseChoice(raw) {
   const value = String(raw || '').toLowerCase();
   if (['h', 'head', 'heads'].includes(value)) return 'heads';
@@ -36,7 +42,9 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
     if (!client.economy) {
-      return message.reply({ embeds: [buildEmbed(message, { title: 'Economy Unavailable', description: 'The economy system is not ready.' })] });
+      return message.reply({
+        embeds: [buildEmbed(message, { title: 'Economy Unavailable', description: 'The economy system is not ready.' })],
+      });
     }
 
     const amount = parseInt(args[0], 10);
@@ -58,7 +66,7 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: 'Coin Flip',
-            description: `Maximum bet is **${formatNumber(MAX_BET)} Crowns**.`,
+            description: `Maximum bet is **${money(client, MAX_BET)}**.`,
           }),
         ],
       });
@@ -70,7 +78,7 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: 'Coin Flip',
-            description: `You only have **${formatNumber(balance)} Crowns**.`,
+            description: `You only have **${money(client, balance)}**.`,
           }),
         ],
       });
@@ -126,11 +134,11 @@ module.exports = {
     const embed = buildEmbed(message, {
       title: 'Coin Flip',
       description:
-        `Bet\n↳ ${formatNumber(amount)} Crowns\n\n` +
+        `Bet\n↳ ${money(client, amount)}\n\n` +
         `Choice\n↳ ${choice}\n\n` +
         `Flip\n↳ ${flip}\n\n` +
-        `Result\n↳ ${won ? `You won ${formatNumber(winnings - amount)} Crowns` : 'You lost'}\n\n` +
-        `Balance\n↳ ${formatNumber(newBalance)} Crowns`,
+        `Result\n↳ ${won ? `You won ${money(client, winnings - amount)}` : 'You lost'}\n\n` +
+        `Balance\n↳ ${money(client, newBalance)}`,
       thumbnail: message.author.displayAvatarURL({ size: 256 }),
     });
 
