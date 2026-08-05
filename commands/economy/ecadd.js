@@ -5,6 +5,12 @@ function formatNumber(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
+function money(client, amount) {
+  return client?.economy?.formatCurrency
+    ? client.economy.formatCurrency(amount)
+    : `${formatNumber(amount)} Crowns`;
+}
+
 function buildEmbed(message, data = {}) {
   if (typeof message.createEmbed === 'function') {
     const embed = message.createEmbed({
@@ -132,8 +138,8 @@ module.exports = {
         buildEmbed(message, {
           title: 'Crowns Added',
           description:
-            `Added **${formatNumber(amount)} Crowns** to **${displayName}**.\n\n` +
-            `New Balance: **${formatNumber(result.balance)} Crowns**`,
+            `Added **${money(client, amount)}** to **${displayName}**.\n\n` +
+            `New Balance: **${money(client, result.balance)}**`,
           thumbnail: target.displayAvatarURL({ size: 256 }),
         }),
       ],
