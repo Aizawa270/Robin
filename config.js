@@ -1,11 +1,13 @@
 module.exports = {
   prefix: '$',
-  ownerId: '852839588689870879', // your ID
-  // Users who should always have prefixless on startup
+  ownerId: '852839588689870879',
   defaultPrefixless: [
-    '852839588689870879', // you
-    // add other staff IDs here if you want them always prefixless
+    '852839588689870879',
   ],
+  currency: {
+    name: 'Crowns',
+    emoji: '<:economy:1534588304698380298>',
+  },
   colors: {
     ping: '#00ff9d',
     userinfo: '#00eaff',
