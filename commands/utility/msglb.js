@@ -1,23 +1,45 @@
-const { EmbedBuilder } = require('discord.js');
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require('discord.js');
 
-function makeEmbed(message, options = {}) {
+function formatTime() {
+  return new Date().toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function footerText(client) {
+  return `${client.user?.username || 'Bot'} | Today at ${formatTime()}`;
+}
+
+function buildEmbed(message, data = {}) {
   if (typeof message.createEmbed === 'function') {
-    const embed = message.createEmbed(options);
-    if (options.fields) embed.addFields(options.fields);
+    const embed = message.createEmbed({
+      title: data.title,
+      description: data.description,
+      footer: data.footer,
+    });
+
+    if (data.footer) {
+      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+      else embed.setFooter(data.footer);
+    }
+
     return embed;
   }
 
   const embed = new EmbedBuilder().setColor('#FF69B4').setTimestamp();
-  if (options.title) embed.setTitle(options.title);
-  if (options.description) embed.setDescription(options.description);
-  if (options.fields) embed.addFields(options.fields);
-  if (options.footer) embed.setFooter({ text: options.footer });
-  if (options.thumbnail) embed.setThumbnail(options.thumbnail);
+  if (data.title) embed.setTitle(data.title);
+  if (data.description) embed.setDescription(data.description);
+  if (data.footer) {
+    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+    else embed.setFooter(data.footer);
+  }
   return embed;
-}
-
-function formatNumber(n) {
-  return new Intl.NumberFormat('en-US').format(Number(n) || 0);
 }
 
 function scopeToColumn(scope) {
@@ -26,42 +48,8 @@ function scopeToColumn(scope) {
   return 'total';
 }
 
-async function resolveTargetUser(client, message, input) {
-  if (!input) return null;
-
-  if (typeof message.resolveUser === 'function') {
-    return await message.resolveUser(input).catch(() => null);
-  }
-
-  const query = String(input).trim();
-  if (!query) return null;
-
-  const id = query.replace(/[<@!>]/g, '');
-  if (/^\d{15,20}$/.test(id)) {
-    const cached = client.users.cache.get(id);
-    if (cached) return cached;
-    return await client.users.fetch(id).catch(() => null);
-  }
-
-  const lowered = query.toLowerCase();
-
-  const cachedUser = client.users.cache.find(u =>
-    u?.username?.toLowerCase() === lowered ||
-    u?.globalName?.toLowerCase() === lowered ||
-    u?.tag?.toLowerCase() === lowered
-  );
-  if (cachedUser) return cachedUser;
-
-  if (message.guild) {
-    await message.guild.members.fetch().catch(() => {});
-    const member = message.guild.members.cache.find(m =>
-      m?.user?.username?.toLowerCase() === lowered ||
-      m?.displayName?.toLowerCase() === lowered
-    );
-    if (member?.user) return member.user;
-  }
-
-  return null;
+function formatNumber(n) {
+  return Number(n || 0).toLocaleString('en-US');
 }
 
 module.exports = {
@@ -69,7 +57,7 @@ module.exports = {
   description: 'Show the message leaderboard.',
   category: 'utility',
   usage: '$msglb [total|daily|weekly|monthly] [page]',
-  aliases: ['msglb', 'leaderboardmsg', 'msgleaderboard'],
+  aliases: ['leaderboardmsg', 'msgleaderboard'],
 
   async execute(client, message, args) {
     if (!message.guild) return;
@@ -77,9 +65,10 @@ module.exports = {
     if (!client.messageTracker) {
       return message.reply({
         embeds: [
-          makeEmbed(message, {
+          buildEmbed(message, {
             title: 'Message Tracker Unavailable',
             description: 'The message tracker is not initialized.',
+            footer: footerText(client),
           }),
         ],
       });
@@ -89,25 +78,44 @@ module.exports = {
     let page = 1;
 
     if (args[0]) {
-      const maybeScope = String(args[0]).toLowerCase();
-      if (['total', 'daily', 'weekly', 'monthly'].includes(maybeScope)) {
-        scope = maybeScope;
+      const first = String(args[0]).toLowerCase();
+      if (['total', 'daily', 'weekly', 'monthly'].includes(first)) {
+        scope = first;
         page = parseInt(args[1], 10) || 1;
       } else {
         page = parseInt(args[0], 10) || 1;
       }
     }
 
-    const limit = 10;
-    const offset = (page - 1) * limit;
-    const rows = client.messageTracker.getLeaderboard(message.guild.id, scope, limit, offset);
+    page = Math.max(1, page);
+    scope = scopeToColumn(scope);
+
+    const perPage = 10;
+    const offset = (page - 1) * perPage;
+
+    const rows = client.messageTracker.getLeaderboard(
+      message.guild.id,
+      scope,
+      perPage,
+      offset
+    );
+
+    const totalRows = client.messageTracker.getLeaderboard(
+      message.guild.id,
+      scope,
+      1000,
+      0
+    ).length;
+
+    const totalPages = Math.max(1, Math.ceil(totalRows / perPage));
 
     if (!rows.length) {
       return message.reply({
         embeds: [
-          makeEmbed(message, {
-            title: 'Message Leaderboard',
+          buildEmbed(message, {
+            title: `Leaderboard Messages (Page 1/1)`,
             description: 'No tracked messages found in this server yet.',
+            footer: footerText(client),
           }),
         ],
       });
@@ -116,35 +124,124 @@ module.exports = {
     const lines = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const member = message.guild.members.cache.get(row.user_id) || await message.guild.members.fetch(row.user_id).catch(() => null);
-      const user = member?.user || await client.users.fetch(row.user_id).catch(() => null);
-      const name = member?.displayName || user?.username || row.user_id;
-      const value = formatNumber(row[scope]);
-
-      const line = `${offset + i + 1}. ${name} - ${value}`;
-      lines.push(row.user_id === message.author.id ? `**${line}**` : line);
+      const rank = offset + i + 1;
+      const count = formatNumber(row[scope]);
+      lines.push(`${rank}. <@${row.user_id}> - ${count} messages`);
     }
 
-    const userRank = client.messageTracker.getRank(message.guild.id, message.author.id, scope);
+    const myRank = client.messageTracker.getRank(message.guild.id, message.author.id, scope);
 
-    const embed = makeEmbed(message, {
-      title: `Message Leaderboard`,
-      description: `Scope: ${scope}`,
-      fields: [
-        {
-          name: `Page ${page}`,
-          value: lines.join('\n'),
-          inline: false,
-        },
-        {
-          name: 'Your Position',
-          value: userRank ? `#${userRank}` : 'N/A',
-          inline: true,
-        },
-      ],
-      footer: client.user?.username ? client.user.username : 'Message tracker',
+    const embed = buildEmbed(message, {
+      title: `Leaderboard Messages (Page ${page}/${totalPages})`,
+      description: `${lines.join('\n')}\n\n${message.author.username}'s Position: ${myRank ? `#${myRank}` : 'N/A'}`,
+      footer: footerText(client),
     });
 
-    return message.reply({ embeds: [embed] });
+    const prevDisabled = page <= 1;
+    const nextDisabled = page >= totalPages;
+
+    const rowButtons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('msglb_prev')
+        .setLabel('◀')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(prevDisabled),
+      new ButtonBuilder()
+        .setCustomId('msglb_page')
+        .setLabel('Go To Page')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId('msglb_next')
+        .setLabel('▶')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(nextDisabled)
+    );
+
+    const reply = await message.reply({
+      embeds: [embed],
+      components: [rowButtons],
+    });
+
+    if (totalPages === 1) return;
+
+    const collector = reply.createMessageComponentCollector({
+      filter: i => i.user.id === message.author.id,
+      time: 120000,
+    });
+
+    collector.on('collect', async interaction => {
+      if (interaction.customId === 'msglb_prev' && page > 1) page--;
+      if (interaction.customId === 'msglb_next' && page < totalPages) page++;
+
+      const newOffset = (page - 1) * perPage;
+      const newRows = client.messageTracker.getLeaderboard(
+        message.guild.id,
+        scope,
+        perPage,
+        newOffset
+      );
+
+      const newLines = [];
+      for (let i = 0; i < newRows.length; i++) {
+        const row = newRows[i];
+        const rank = newOffset + i + 1;
+        const count = formatNumber(row[scope]);
+        newLines.push(`${rank}. <@${row.user_id}> - ${count} messages`);
+      }
+
+      const newRank = client.messageTracker.getRank(message.guild.id, message.author.id, scope);
+
+      const updatedEmbed = buildEmbed(message, {
+        title: `Leaderboard Messages (Page ${page}/${totalPages})`,
+        description: `${newLines.join('\n')}\n\n${message.author.username}'s Position: ${newRank ? `#${newRank}` : 'N/A'}`,
+        footer: footerText(client),
+      });
+
+      const updatedButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('msglb_prev')
+          .setLabel('◀')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page <= 1),
+        new ButtonBuilder()
+          .setCustomId('msglb_page')
+          .setLabel('Go To Page')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId('msglb_next')
+          .setLabel('▶')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page >= totalPages)
+      );
+
+      await interaction.update({
+        embeds: [updatedEmbed],
+        components: [updatedButtons],
+      });
+    });
+
+    collector.on('end', async () => {
+      const disabledRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('msglb_prev')
+          .setLabel('◀')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId('msglb_page')
+          .setLabel('Go To Page')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId('msglb_next')
+          .setLabel('▶')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true)
+      );
+
+      await reply.edit({ components: [disabledRow] }).catch(() => {});
+    });
   },
 };
