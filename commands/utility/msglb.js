@@ -12,8 +12,16 @@ function formatTime() {
   });
 }
 
-function footerText(client) {
-  return `${client.user?.username || 'Bot'} | Today at ${formatTime()}`;
+function scopeLabel(scope) {
+  const s = String(scope || 'total').toLowerCase();
+  if (s === 'daily') return 'Daily';
+  if (s === 'weekly') return 'Weekly';
+  if (s === 'monthly') return 'Monthly';
+  return 'All Time';
+}
+
+function footerText(client, scope) {
+  return `${client.user?.username || 'Bot'} | Today at ${formatTime()} | ${scopeLabel(scope)}`;
 }
 
 function buildEmbed(message, data = {}) {
@@ -58,7 +66,7 @@ async function resolvePagePrompt(message, totalPages) {
       buildEmbed(message, {
         title: 'Go To Page',
         description: `Send a page number between 1 and ${totalPages}.`,
-        footer: footerText(message.client),
+        footer: footerText(message.client, 'total'),
       }),
     ],
   }).catch(() => null);
@@ -99,7 +107,7 @@ module.exports = {
           buildEmbed(message, {
             title: 'Message Tracker Unavailable',
             description: 'The message tracker is not initialized.',
-            footer: footerText(client),
+            footer: footerText(client, 'total'),
           }),
         ],
       });
@@ -145,7 +153,7 @@ module.exports = {
           buildEmbed(message, {
             title: `Leaderboard Messages (Page 1/1)`,
             description: 'No tracked messages found in this server yet.',
-            footer: footerText(client),
+            footer: footerText(client, scope),
           }),
         ],
       });
@@ -170,7 +178,7 @@ module.exports = {
     const embed = buildEmbed(message, {
       title: `Leaderboard Messages (Page ${page}/${totalPages})`,
       description: `${lines.join('\n')}\n\n${message.author.username}'s Position: ${myRank ? `#${myRank}` : 'N/A'}`,
-      footer: footerText(client),
+      footer: footerText(client, scope),
     });
 
     const controls = new ActionRowBuilder().addComponents(
@@ -240,7 +248,7 @@ module.exports = {
       const updatedEmbed = buildEmbed(message, {
         title: `Leaderboard Messages (Page ${page}/${totalPages})`,
         description: `${newLines.join('\n')}\n\n${message.author.username}'s Position: ${newRank ? `#${newRank}` : 'N/A'}`,
-        footer: footerText(client),
+        footer: footerText(client, scope),
       });
 
       const updatedControls = new ActionRowBuilder().addComponents(
