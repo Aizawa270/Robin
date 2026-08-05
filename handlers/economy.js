@@ -169,7 +169,8 @@ function formatCurrency(amount) {
   const name = config?.currency?.name || 'Crowns';
   const emoji = config?.currency?.emoji || '';
   const value = Number(amount || 0).toLocaleString('en-US');
-  return emoji ? `${value} ${emoji}` : `${value} ${name}`;
+
+  return emoji ? `${value} ${name} ${emoji}` : `${value} ${name}`;
 }
 
 function ensureUser(guildId, userId, ts = Date.now()) {
