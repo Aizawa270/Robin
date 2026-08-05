@@ -4,6 +4,7 @@ const path = require('path');
 const { Client, GatewayIntentBits, Partials, ActivityType } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const messageTracker = require('./handlers/messageTracker');
+const economy = require('./handlers/economy');
 const Database = require('better-sqlite3');
 
 // 🔥 SERVICES
@@ -322,36 +323,6 @@ client.getPrefix = (guildId) => {
   return row?.prefix || '$';
 };
 
-function buildSnipeMedia(source) {
-  const media = [];
-
-  for (const a of source.attachments?.values?.() || []) {
-    media.push({
-      type: 'attachment',
-      url: a.url,
-      proxyURL: a.proxyURL,
-      contentType: a.contentType || null,
-      name: a.name || null,
-    });
-  }
-
-  for (const e of source.embeds || []) {
-    const imageUrl = e.image?.url || e.thumbnail?.url || e.url;
-    if (imageUrl) {
-      media.push({
-        type: 'embed',
-        url: imageUrl,
-        proxyURL: imageUrl,
-        contentType: e.type === 'gifv' ? 'image/gif' : null,
-        name: e.title || e.provider?.name || 'embedded media',
-      });
-    }
-  }
-
-  return media;
-}
-
-// ===== READY EVENT =====
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
@@ -361,6 +332,7 @@ client.once('ready', async () => {
   });
   console.log('[Status] Set to: .gg/hanging');
 
+  economy.init(client);
   await messageTracker.init(client);
 
   birthdayService(client);
@@ -417,7 +389,6 @@ client.once('ready', async () => {
   console.log('🚀 Bot fully operational');
 });
 
-// ===== MESSAGE EVENT =====
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
@@ -468,13 +439,35 @@ client.on('messageDelete', async (message) => {
 
   let source = message;
 
-  // Try to fetch partials so attachments/embeds/stickers are preserved when possible.
   if (message.partial) {
     const fetched = await message.fetch().catch(() => null);
     if (fetched) source = fetched;
   }
 
-  const media = buildSnipeMedia(source);
+  const media = [];
+  for (const a of source.attachments?.values?.() || []) {
+    media.push({
+      type: 'attachment',
+      url: a.url,
+      proxyURL: a.proxyURL,
+      contentType: a.contentType || null,
+      name: a.name || null,
+    });
+  }
+
+  for (const e of source.embeds || []) {
+    const imageUrl = e.image?.url || e.thumbnail?.url || e.url;
+    if (imageUrl) {
+      media.push({
+        type: 'embed',
+        url: imageUrl,
+        proxyURL: imageUrl,
+        contentType: e.type === 'gifv' ? 'image/gif' : null,
+        name: e.title || e.provider?.name || 'embedded media',
+      });
+    }
+  }
+
   const stickers = [...(source.stickers?.values?.() || [])].map(s => ({
     name: s.name || 'sticker',
   }));
@@ -544,6 +537,7 @@ process.on('SIGINT', () => {
     if (battleDB) battleDB.close();
     if (spyDB) spyDB.close();
     if (client.msgTrackerDB) client.msgTrackerDB.close();
+    if (client.economyDB) client.economyDB.close();
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
@@ -564,6 +558,7 @@ process.on('SIGTERM', () => {
     if (battleDB) battleDB.close();
     if (spyDB) spyDB.close();
     if (client.msgTrackerDB) client.msgTrackerDB.close();
+    if (client.economyDB) client.economyDB.close();
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
