@@ -25,6 +25,7 @@ function buildEmbed(message, data = {}) {
       if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
       else embed.setFooter(data.footer);
     }
+
     return embed;
   }
 
@@ -114,7 +115,6 @@ module.exports = {
     const embed = buildEmbed(message, {
       title: `${displayName}'s Messages`,
       description:
-        `Messages Sent:\n\n` +
         `Today: ${stats.daily || 0}\n` +
         `This Week: ${stats.weekly || 0}\n` +
         `This Month: ${stats.monthly || 0}\n` +
