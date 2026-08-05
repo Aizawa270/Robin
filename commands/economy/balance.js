@@ -5,6 +5,12 @@ function formatNumber(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
+function money(client, amount) {
+  return client?.economy?.formatCurrency
+    ? client.economy.formatCurrency(amount)
+    : `${formatNumber(amount)} Crowns`;
+}
+
 function buildEmbed(message, data = {}) {
   if (typeof message.createEmbed === 'function') {
     const embed = message.createEmbed({
@@ -82,11 +88,11 @@ module.exports = {
       title: `${displayName}'s Balance`,
       description:
         `Balance\n` +
-        `↳ ${formatNumber(stats.balance || 0)} Crowns\n\n` +
+        `↳ ${money(client, stats.balance || 0)}\n\n` +
         `Lifetime Earned\n` +
-        `↳ ${formatNumber(stats.lifetime_earned || 0)} Crowns\n\n` +
+        `↳ ${money(client, stats.lifetime_earned || 0)}\n\n` +
         `Lifetime Spent\n` +
-        `↳ ${formatNumber(stats.lifetime_spent || 0)} Crowns`,
+        `↳ ${money(client, stats.lifetime_spent || 0)}`,
       thumbnail: target.displayAvatarURL({ size: 256 }),
       footer: footerText(client),
     });
