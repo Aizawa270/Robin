@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const TZ_OFFSET_MS = 6 * 60 * 60 * 1000; // UTC+6 (Asia/Dhaka standard offset)
+const TZ_OFFSET_MS = 6 * 60 * 60 * 1000; // UTC+6
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -57,6 +57,22 @@ function ensureSchema() {
       last_message_at INTEGER NOT NULL
     )
   `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS message_tracker_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      period_key TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      placement INTEGER NOT NULL,
+      gross_payout INTEGER NOT NULL DEFAULT 0,
+      tax_amount INTEGER NOT NULL DEFAULT 0,
+      net_payout INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
+      UNIQUE(guild_id, scope, period_key, user_id)
+    )
+  `).run();
 }
 
 ensureSchema();
@@ -106,8 +122,14 @@ function isTrackableMessage(client, message) {
   if (!message || !message.guild) return false;
   if (!message.author || message.author.bot) return false;
   if (message.webhookId) return false;
-  if (message.commandName) return false; // ignore commands
+  if (message.commandName) return false; // ignore live commands
   if (client?.botBlacklist?.has?.(message.author.id)) return false;
+
+  const prefix = client?.getPrefix?.(message.guild.id);
+  if (prefix && typeof message.content === 'string' && message.content.trim().startsWith(prefix)) {
+    return false;
+  }
+
   return true;
 }
 
@@ -123,13 +145,30 @@ function ensureMetaRow(guildId, keys) {
       INSERT INTO message_tracker_meta (guild_id, daily_key, weekly_key, monthly_key)
       VALUES (?, ?, ?, ?)
     `).run(guildId, keys.daily, keys.weekly, keys.monthly);
+
     return { daily_key: keys.daily, weekly_key: keys.weekly, monthly_key: keys.monthly };
   }
 
   return row;
 }
 
-function syncGuildPeriods(guildId, keys) {
+function payoutScope(client, guildId, scope, periodKey) {
+  if (!client?.economy?.maybePayoutLeaderboard) return;
+
+  try {
+    const payouts = client.economy.maybePayoutLeaderboard(client, guildId, scope, periodKey);
+    if (payouts?.length) {
+      console.log(
+        `[MessageTracker] Paid ${scope} leaderboard for guild ${guildId}: ` +
+        payouts.map(p => `#${p.placement} ${p.net}`).join(', ')
+      );
+    }
+  } catch (err) {
+    console.error(`[MessageTracker] ${scope} payout failed for guild ${guildId}:`, err);
+  }
+}
+
+function syncGuildPeriods(client, guildId, keys) {
   const row = ensureMetaRow(guildId, keys);
 
   const dailyChanged = row.daily_key !== keys.daily;
@@ -141,6 +180,14 @@ function syncGuildPeriods(guildId, keys) {
   }
 
   const tx = db.transaction(() => {
+    if (weeklyChanged) {
+      payoutScope(client, guildId, 'weekly', row.weekly_key);
+    }
+
+    if (monthlyChanged) {
+      payoutScope(client, guildId, 'monthly', row.monthly_key);
+    }
+
     if (dailyChanged) {
       db.prepare(`
         UPDATE message_stats
@@ -231,8 +278,7 @@ function trackMessage(client, message, opts = {}) {
   const userId = message.author.id;
   const keys = buildKeys(ts);
 
-  syncGuildPeriods(guildId, keys);
-
+  syncGuildPeriods(client, guildId, keys);
   insertUserRow.run(guildId, userId, ts);
 
   const row = getUserRow.get(guildId, userId);
@@ -251,7 +297,6 @@ function trackMessage(client, message, opts = {}) {
     nextStreak = 1;
   }
 
-  const nextTotal = (row.total || 0) + 1;
   const nextDaily = (row.daily || 0) + 1;
   const nextWeekly = (row.weekly || 0) + 1;
   const nextMonthly = (row.monthly || 0) + 1;
@@ -276,6 +321,14 @@ function trackMessage(client, message, opts = {}) {
 
   if (message.channel?.id) {
     upsertCursor.run(message.channel.id, guildId, message.id, ts);
+  }
+
+  if (client?.economy?.rewardPassiveMessage) {
+    try {
+      client.economy.rewardPassiveMessage(client, message, ts);
+    } catch (err) {
+      console.error('[MessageTracker] Passive reward failed:', err);
+    }
   }
 
   return true;
@@ -332,10 +385,10 @@ async function backfillAll(client, cutoffTs = Date.now()) {
 }
 
 function getUserStats(guildId, userId) {
-  const row = getUserRow.get(guildId, userId);
+  const row = getUserRow.get(String(guildId), String(userId));
   return row || {
-    guild_id: guildId,
-    user_id: userId,
+    guild_id: String(guildId),
+    user_id: String(userId),
     total: 0,
     daily: 0,
     weekly: 0,
@@ -362,7 +415,7 @@ function getGuildStats(guildId) {
       COALESCE(SUM(monthly), 0) AS monthly
     FROM message_stats
     WHERE guild_id = ?
-  `).get(guildId);
+  `).get(String(guildId));
 
   return row || {
     tracked_users: 0,
@@ -384,7 +437,7 @@ function getRank(guildId, userId, scope = 'total') {
     SELECT COUNT(*) + 1 AS rank
     FROM message_stats
     WHERE guild_id = ? AND ${col} > ?
-  `).get(guildId, value);
+  `).get(String(guildId), value);
 
   return result?.rank || null;
 }
@@ -398,7 +451,7 @@ function getLeaderboard(guildId, scope = 'total', limit = 10, offset = 0) {
     WHERE guild_id = ?
     ORDER BY ${col} DESC, total DESC, last_message_at DESC, user_id ASC
     LIMIT ? OFFSET ?
-  `).all(guildId, limit, offset);
+  `).all(String(guildId), Number(limit), Number(offset));
 }
 
 function resetGuild(guildId, scope = 'all') {
@@ -419,44 +472,44 @@ function resetGuild(guildId, scope = 'all') {
             peak_monthly = 0,
             last_active_date = NULL
         WHERE guild_id = ?
-      `).run(guildId);
+      `).run(String(guildId));
 
       db.prepare(`
         UPDATE message_tracker_meta
         SET daily_key = ?, weekly_key = ?, monthly_key = ?
         WHERE guild_id = ?
-      `).run(keys.daily, keys.weekly, keys.monthly, guildId);
+      `).run(keys.daily, keys.weekly, keys.monthly, String(guildId));
 
       return;
     }
 
     if (scope === 'daily') {
-      db.prepare(`UPDATE message_stats SET daily = 0 WHERE guild_id = ?`).run(guildId);
+      db.prepare(`UPDATE message_stats SET daily = 0 WHERE guild_id = ?`).run(String(guildId));
       db.prepare(`
         UPDATE message_tracker_meta
         SET daily_key = ?
         WHERE guild_id = ?
-      `).run(keys.daily, guildId);
+      `).run(keys.daily, String(guildId));
       return;
     }
 
     if (scope === 'weekly') {
-      db.prepare(`UPDATE message_stats SET weekly = 0 WHERE guild_id = ?`).run(guildId);
+      db.prepare(`UPDATE message_stats SET weekly = 0 WHERE guild_id = ?`).run(String(guildId));
       db.prepare(`
         UPDATE message_tracker_meta
         SET weekly_key = ?
         WHERE guild_id = ?
-      `).run(keys.weekly, guildId);
+      `).run(keys.weekly, String(guildId));
       return;
     }
 
     if (scope === 'monthly') {
-      db.prepare(`UPDATE message_stats SET monthly = 0 WHERE guild_id = ?`).run(guildId);
+      db.prepare(`UPDATE message_stats SET monthly = 0 WHERE guild_id = ?`).run(String(guildId));
       db.prepare(`
         UPDATE message_tracker_meta
         SET monthly_key = ?
         WHERE guild_id = ?
-      `).run(keys.monthly, guildId);
+      `).run(keys.monthly, String(guildId));
     }
   });
 
@@ -477,23 +530,53 @@ function resetUser(guildId, userId) {
         peak_monthly = 0,
         last_active_date = NULL
     WHERE guild_id = ? AND user_id = ?
-  `).run(guildId, userId);
+  `).run(String(guildId), String(userId));
+}
+
+async function tick(client) {
+  if (client._msgTrackerBackfilling) return;
+
+  const keys = buildKeys(Date.now());
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      syncGuildPeriods(client, guild.id, keys);
+    } catch (err) {
+      console.error(`[MessageTracker] Tick failed for ${guild.id}:`, err);
+    }
+  }
 }
 
 async function init(client) {
-  if (client._msgTrackerReady) return client.messageTracker;
+  if (client._msgTrackerReady) return module.exports;
   client._msgTrackerReady = true;
   client.msgTrackerDB = db;
   client.messageTracker = module.exports;
 
+  if (!client._msgTrackerTickInterval) {
+    client._msgTrackerTickInterval = setInterval(() => {
+      tick(client).catch(err => {
+        console.error('[MessageTracker] Tick failed:', err);
+      });
+    }, 60_000);
+
+    client._msgTrackerTickInterval.unref?.();
+  }
+
   const cutoff = Date.now();
   client._msgTrackerBackfillCutoff = cutoff;
+  client._msgTrackerBackfilling = true;
 
-  // Start backfill after the bot is ready, but do not block the process.
-  setImmediate(() => {
-    backfillAll(client, cutoff).catch(err => {
+  setImmediate(async () => {
+    try {
+      await backfillAll(client, cutoff);
+    } catch (err) {
       console.error('[MessageTracker] Backfill failed:', err);
-    });
+    } finally {
+      client._msgTrackerBackfilling = false;
+      tick(client).catch(err => {
+        console.error('[MessageTracker] Post-backfill tick failed:', err);
+      });
+    }
   });
 
   return module.exports;
@@ -512,4 +595,5 @@ module.exports = {
   isTrackableMessage,
   buildKeys,
   getDateKey,
+  tick,
 };
