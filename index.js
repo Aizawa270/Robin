@@ -1,8 +1,9 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, ActivityType } = require('discord.js');
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
+const messageTracker = require('./handlers/messageTracker');
 const Database = require('better-sqlite3');
 
 // 🔥 SERVICES
@@ -321,11 +322,6 @@ client.getPrefix = (guildId) => {
   return row?.prefix || '$';
 };
 
-function isImageUrl(url) {
-  if (!url || typeof url !== 'string') return false;
-  return /\.(png|jpe?g|gif|webp|bmp|avif)(\?.*)?$/i.test(url);
-}
-
 function buildSnipeMedia(source) {
   const media = [];
 
@@ -364,6 +360,8 @@ client.once('ready', async () => {
     status: 'dnd'
   });
   console.log('[Status] Set to: .gg/hanging');
+
+  await messageTracker.init(client);
 
   birthdayService(client);
   welcomeHandler(client);
@@ -425,6 +423,7 @@ client.on('messageCreate', async (message) => {
 
   await afkModule.handleMessage(client, message);
   await handleMessage(client, message);
+  await messageTracker.handleMessage(client, message);
 
   try {
     if (client.automod?.checkMessage) {
@@ -544,6 +543,7 @@ process.on('SIGINT', () => {
     if (automodDB) automodDB.close();
     if (battleDB) battleDB.close();
     if (spyDB) spyDB.close();
+    if (client.msgTrackerDB) client.msgTrackerDB.close();
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
@@ -563,6 +563,7 @@ process.on('SIGTERM', () => {
     if (automodDB) automodDB.close();
     if (battleDB) battleDB.close();
     if (spyDB) spyDB.close();
+    if (client.msgTrackerDB) client.msgTrackerDB.close();
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
