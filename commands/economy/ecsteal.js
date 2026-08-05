@@ -1,6 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
 const {
-  canManageEconomy,
   resolveTargetUser,
 } = require('../../handlers/economyHelpers');
 const {
@@ -13,6 +12,12 @@ const {
 
 const STEAL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const IMMUNITY_MS = 24 * 60 * 60 * 1000;
+
+function money(client, amount) {
+  return client?.economy?.formatCurrency
+    ? client.economy.formatCurrency(amount)
+    : `${Number(amount || 0).toLocaleString('en-US')} Crowns`;
+}
 
 function buildEmbed(message, data = {}) {
   const embed = new EmbedBuilder().setColor('#FF69B4').setTimestamp();
@@ -180,9 +185,9 @@ module.exports = {
           buildEmbed(message, {
             title: 'Steal',
             description:
-              `Success\n↳ You stole **${formatNumber(amount)} Crowns** from **${displayName}**.\n\n` +
-              `Your Balance\n↳ ${formatNumber(newThiefBalance)} Crowns\n\n` +
-              `Their Balance\n↳ ${formatNumber(newTargetBalance)} Crowns`,
+              `Success\n↳ You stole **${money(client, amount)}** from **${displayName}**.\n\n` +
+              `Your Balance\n↳ ${money(client, newThiefBalance)}\n\n` +
+              `Their Balance\n↳ ${money(client, newTargetBalance)}`,
             thumbnail: target.displayAvatarURL({ size: 256 }),
           }),
         ],
@@ -218,8 +223,8 @@ module.exports = {
         buildEmbed(message, {
           title: 'Steal',
           description:
-            `Failed\n↳ You lost **${formatNumber(amount)} Crowns**.\n\n` +
-            `Your Balance\n↳ ${formatNumber(newThiefBalance)} Crowns`,
+            `Failed\n↳ You lost **${money(client, amount)}**.\n\n` +
+            `Your Balance\n↳ ${money(client, newThiefBalance)}`,
           thumbnail: target.displayAvatarURL({ size: 256 }),
         }),
       ],
