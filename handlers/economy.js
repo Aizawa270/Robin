@@ -57,6 +57,22 @@ function ensureSchema() {
       PRIMARY KEY (guild_id, user_id)
     )
   `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS message_tracker_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      period_key TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      placement INTEGER NOT NULL,
+      gross_payout INTEGER NOT NULL DEFAULT 0,
+      tax_amount INTEGER NOT NULL DEFAULT 0,
+      net_payout INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000),
+      UNIQUE(guild_id, scope, period_key, user_id)
+    )
+  `).run();
 }
 
 ensureSchema();
