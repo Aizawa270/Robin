@@ -5,6 +5,12 @@ function formatNumber(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
+function money(client, amount) {
+  return client?.economy?.formatCurrency
+    ? client.economy.formatCurrency(amount)
+    : `${formatNumber(amount)} Crowns`;
+}
+
 function buildEmbed(message, data = {}) {
   if (typeof message.createEmbed === 'function') {
     const embed = message.createEmbed({
@@ -118,7 +124,7 @@ module.exports = {
             title: 'Failed',
             description:
               `That user does not have enough Crowns.\n` +
-              `Current Balance: **${formatNumber(current)} Crowns**`,
+              `Current Balance: **${money(client, current)}**`,
           }),
         ],
       });
@@ -135,8 +141,8 @@ module.exports = {
         buildEmbed(message, {
           title: 'Crowns Removed',
           description:
-            `Removed **${formatNumber(amount)} Crowns** from **${displayName}**.\n\n` +
-            `New Balance: **${formatNumber(result.balance)} Crowns**`,
+            `Removed **${money(client, amount)}** from **${displayName}**.\n\n` +
+            `New Balance: **${money(client, result.balance)}**`,
           thumbnail: target.displayAvatarURL({ size: 256 }),
         }),
       ],
