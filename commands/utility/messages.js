@@ -1,33 +1,42 @@
 const { EmbedBuilder } = require('discord.js');
 
-function makeEmbed(message, options = {}) {
+function formatTime() {
+  return new Date().toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function footerText(client) {
+  return `${client.user?.username || 'Bot'} | Today at ${formatTime()}`;
+}
+
+function buildEmbed(message, data = {}) {
   if (typeof message.createEmbed === 'function') {
-    const embed = message.createEmbed(options);
-    if (options.fields) embed.addFields(options.fields);
+    const embed = message.createEmbed({
+      title: data.title,
+      description: data.description,
+      thumbnail: data.thumbnail,
+      footer: data.footer,
+    });
+
+    if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+    if (data.footer) {
+      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+      else embed.setFooter(data.footer);
+    }
     return embed;
   }
 
   const embed = new EmbedBuilder().setColor('#FF69B4').setTimestamp();
-  if (options.title) embed.setTitle(options.title);
-  if (options.description) embed.setDescription(options.description);
-  if (options.fields) embed.addFields(options.fields);
-  if (options.footer) embed.setFooter({ text: options.footer });
-  if (options.thumbnail) embed.setThumbnail(options.thumbnail);
+  if (data.title) embed.setTitle(data.title);
+  if (data.description) embed.setDescription(data.description);
+  if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+  if (data.footer) {
+    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+    else embed.setFooter(data.footer);
+  }
   return embed;
-}
-
-function formatNumber(n) {
-  return new Intl.NumberFormat('en-US').format(Number(n) || 0);
-}
-
-function formatDate(ts) {
-  if (!ts) return 'Never';
-  return `<t:${Math.floor(ts / 1000)}:D>`;
-}
-
-function formatRelative(ts) {
-  if (!ts) return 'Never';
-  return `<t:${Math.floor(ts / 1000)}:R>`;
 }
 
 async function resolveTargetUser(client, message, input) {
@@ -81,9 +90,10 @@ module.exports = {
     if (!client.messageTracker) {
       return message.reply({
         embeds: [
-          makeEmbed(message, {
+          buildEmbed(message, {
             title: 'Message Tracker Unavailable',
             description: 'The message tracker is not initialized.',
+            footer: footerText(client),
           }),
         ],
       });
@@ -96,75 +106,21 @@ module.exports = {
 
     const guildId = message.guild.id;
     const stats = client.messageTracker.getUserStats(guildId, target.id);
-    const guildStats = client.messageTracker.getGuildStats(guildId);
-    const rank = client.messageTracker.getRank(guildId, target.id, 'total');
 
-    const daysTracked = stats.first_seen_at
-      ? Math.max(1, Math.ceil((Date.now() - stats.first_seen_at) / 86400000))
-      : 1;
+    const displayName =
+      message.guild.members.cache.get(target.id)?.displayName ||
+      target.username;
 
-    const averagePerDay = stats.total > 0
-      ? (stats.total / daysTracked).toFixed(1)
-      : '0.0';
-
-    const activityShare = guildStats.total > 0
-      ? ((stats.total / guildStats.total) * 100).toFixed(1)
-      : '0.0';
-
-    const displayName = message.guild.members.cache.get(target.id)?.displayName || target.username;
-
-    const embed = makeEmbed(message, {
-      title: `${displayName} Message Stats`,
-      description: `Message tracking for this server.`,
-      fields: [
-        {
-          name: 'Messages',
-          value: [
-            `Today: ${formatNumber(stats.daily)}`,
-            `Week: ${formatNumber(stats.weekly)}`,
-            `Month: ${formatNumber(stats.monthly)}`,
-            `Total: ${formatNumber(stats.total)}`,
-          ].join('\n'),
-          inline: true,
-        },
-        {
-          name: 'Standing',
-          value: [
-            `Rank: ${rank ? `#${rank}` : 'N/A'}`,
-            `Activity: ${activityShare}%`,
-            `Tracked Users: ${formatNumber(guildStats.tracked_users)}`,
-          ].join('\n'),
-          inline: true,
-        },
-        {
-          name: 'Activity',
-          value: [
-            `Average/Day: ${averagePerDay}`,
-            `Current Streak: ${formatNumber(stats.current_streak)}`,
-            `Longest Streak: ${formatNumber(stats.longest_streak)}`,
-          ].join('\n'),
-          inline: true,
-        },
-        {
-          name: 'Records',
-          value: [
-            `Peak Day: ${formatNumber(stats.peak_daily)}`,
-            `Peak Week: ${formatNumber(stats.peak_weekly)}`,
-            `Peak Month: ${formatNumber(stats.peak_monthly)}`,
-          ].join('\n'),
-          inline: true,
-        },
-        {
-          name: 'Dates',
-          value: [
-            `First Seen: ${formatDate(stats.first_seen_at)}`,
-            `Last Message: ${formatRelative(stats.last_message_at)}`,
-          ].join('\n'),
-          inline: true,
-        },
-      ],
-      footer: client.user?.username ? client.user.username : 'Message tracker',
+    const embed = buildEmbed(message, {
+      title: `${displayName}'s Messages`,
+      description:
+        `Messages Sent:\n\n` +
+        `Today: ${stats.daily || 0}\n` +
+        `This Week: ${stats.weekly || 0}\n` +
+        `This Month: ${stats.monthly || 0}\n` +
+        `Total: ${stats.total || 0}`,
       thumbnail: target.displayAvatarURL({ size: 256 }),
+      footer: footerText(client),
     });
 
     return message.reply({ embeds: [embed] });
