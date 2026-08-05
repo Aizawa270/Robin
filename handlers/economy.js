@@ -2,6 +2,11 @@ const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 
+let config = null;
+try {
+  config = require('../config');
+} catch {}
+
 const BASE_PASSIVE_REWARD = 30;
 const PASSIVE_COOLDOWN_MS = 60_000;
 const BOOST_MULTIPLIER = 2;
@@ -159,6 +164,13 @@ const getRankStmt = db.prepare(`
   FROM economy_users
   WHERE guild_id = ? AND balance > ?
 `);
+
+function formatCurrency(amount) {
+  const name = config?.currency?.name || 'Crowns';
+  const emoji = config?.currency?.emoji || '';
+  const value = Number(amount || 0).toLocaleString('en-US');
+  return emoji ? `${value} ${emoji}` : `${value} ${name}`;
+}
 
 function ensureUser(guildId, userId, ts = Date.now()) {
   insertUser.run(String(guildId), String(userId), Number(ts));
@@ -426,4 +438,5 @@ module.exports = {
   setBoost,
   getBoostStatus,
   maybePayoutLeaderboard,
+  formatCurrency,
 };
