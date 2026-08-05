@@ -12,6 +12,12 @@ function formatTime() {
   });
 }
 
+function money(client, amount) {
+  return client?.economy?.formatCurrency
+    ? client.economy.formatCurrency(amount)
+    : `${Number(amount || 0).toLocaleString('en-US')} Crowns`;
+}
+
 function footerText(client) {
   return `${client.user?.username || 'Bot'} | Today at ${formatTime()}`;
 }
@@ -43,10 +49,6 @@ function buildEmbed(message, data = {}) {
     else embed.setFooter(data.footer);
   }
   return embed;
-}
-
-function formatNumber(n) {
-  return Number(n || 0).toLocaleString('en-US');
 }
 
 async function resolvePagePrompt(message, totalPages) {
@@ -138,7 +140,7 @@ module.exports = {
         await message.guild.members.fetch(row.user_id).catch(() => null);
 
       const name = member?.displayName || member?.user?.username || row.user_id;
-      lines.push(`${rank}. ${name} - ${formatNumber(row.balance)} Crowns`);
+      lines.push(`${rank}. ${name} - ${money(client, row.balance)}`);
     }
 
     const myRank = client.economy.getRank(message.guild.id, message.author.id);
@@ -206,7 +208,7 @@ module.exports = {
           await message.guild.members.fetch(row.user_id).catch(() => null);
 
         const name = member?.displayName || member?.user?.username || row.user_id;
-        newLines.push(`${rank}. ${name} - ${formatNumber(row.balance)} Crowns`);
+        newLines.push(`${rank}. ${name} - ${money(client, row.balance)}`);
       }
 
       const newRank = client.economy.getRank(message.guild.id, message.author.id);
