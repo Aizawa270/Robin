@@ -52,6 +52,45 @@ function formatNumber(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
+async function resolvePagePrompt(message, totalPages) {
+  const promptEmbed = buildEmbed(message, {
+    title: 'Go To Page',
+    description: `Send a page number between 1 and ${totalPages}.`,
+    footer: footerText(message.client),
+  });
+
+  const prompt = await message.channel.send({
+    embeds: [promptEmbed],
+    allowedMentions: { repliedUser: false },
+  }).catch(() => null);
+
+  if (!prompt) return null;
+
+  const collected = await message.channel.awaitMessages({
+    filter: m => m.author.id === message.author.id && !m.author.bot,
+    max: 1,
+    time: 15000,
+  }).catch(() => null);
+
+  if (prompt) prompt.delete().catch(() => {});
+
+  if (!collected || !collected.size) return null;
+
+  const reply = collected.first();
+  const raw = String(reply.content || '').trim().toLowerCase();
+
+  if (raw === 'cancel') {
+    reply.delete().catch(() => {});
+    return null;
+  }
+
+  const page = parseInt(raw, 10);
+  reply.delete().catch(() => {});
+
+  if (!Number.isInteger(page)) return null;
+  return page;
+}
+
 module.exports = {
   name: 'msglb',
   description: 'Show the message leaderboard.',
@@ -62,7 +101,7 @@ module.exports = {
   async execute(client, message, args) {
     if (!message.guild) return;
 
-    if (!client.messageTracker) {
+    if (!client.messageTracker || !client.msgTrackerDB) {
       return message.reply({
         embeds: [
           buildEmbed(message, {
@@ -91,6 +130,15 @@ module.exports = {
     scope = scopeToColumn(scope);
 
     const perPage = 10;
+    const totalRows = client.msgTrackerDB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM message_stats
+      WHERE guild_id = ? AND ${scope} > 0
+    `).get(message.guild.id).count || 0;
+
+    const totalPages = Math.max(1, Math.ceil(totalRows / perPage));
+    if (page > totalPages) page = totalPages;
+
     const offset = (page - 1) * perPage;
 
     const rows = client.messageTracker.getLeaderboard(
@@ -98,22 +146,13 @@ module.exports = {
       scope,
       perPage,
       offset
-    );
-
-    const totalRows = client.messageTracker.getLeaderboard(
-      message.guild.id,
-      scope,
-      1000,
-      0
-    ).length;
-
-    const totalPages = Math.max(1, Math.ceil(totalRows / perPage));
+    ).filter(row => Number(row[scope] || 0) > 0);
 
     if (!rows.length) {
       return message.reply({
         embeds: [
           buildEmbed(message, {
-            title: `Leaderboard Messages (Page 1/1)`,
+            title: `Leaderboard Messages (Page ${page}/${totalPages})`,
             description: 'No tracked messages found in this server yet.',
             footer: footerText(client),
           }),
@@ -126,7 +165,13 @@ module.exports = {
       const row = rows[i];
       const rank = offset + i + 1;
       const count = formatNumber(row[scope]);
-      lines.push(`${rank}. <@${row.user_id}> - ${count} messages`);
+
+      const member =
+        message.guild.members.cache.get(row.user_id) ||
+        await message.guild.members.fetch(row.user_id).catch(() => null);
+
+      const name = member?.displayName || member?.user?.username || row.user_id;
+      lines.push(`${rank}. ${name} - ${count} messages`);
     }
 
     const myRank = client.messageTracker.getRank(message.guild.id, message.author.id, scope);
@@ -137,33 +182,27 @@ module.exports = {
       footer: footerText(client),
     });
 
-    const prevDisabled = page <= 1;
-    const nextDisabled = page >= totalPages;
-
-    const rowButtons = new ActionRowBuilder().addComponents(
+    const controls = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('msglb_prev')
         .setLabel('◀')
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(prevDisabled),
+        .setDisabled(page <= 1),
       new ButtonBuilder()
         .setCustomId('msglb_page')
         .setLabel('Go To Page')
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(true),
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId('msglb_next')
         .setLabel('▶')
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(nextDisabled)
+        .setDisabled(page >= totalPages)
     );
 
     const reply = await message.reply({
       embeds: [embed],
-      components: [rowButtons],
+      components: [controls],
     });
-
-    if (totalPages === 1) return;
 
     const collector = reply.createMessageComponentCollector({
       filter: i => i.user.id === message.author.id,
@@ -171,8 +210,21 @@ module.exports = {
     });
 
     collector.on('collect', async interaction => {
-      if (interaction.customId === 'msglb_prev' && page > 1) page--;
-      if (interaction.customId === 'msglb_next' && page < totalPages) page++;
+      if (interaction.customId === 'msglb_page') {
+        await interaction.deferUpdate().catch(() => {});
+        const requested = await resolvePagePrompt(message, totalPages);
+        if (!requested) return;
+
+        page = Math.max(1, Math.min(totalPages, requested));
+      } else if (interaction.customId === 'msglb_prev') {
+        page = Math.max(1, page - 1);
+        await interaction.deferUpdate().catch(() => {});
+      } else if (interaction.customId === 'msglb_next') {
+        page = Math.min(totalPages, page + 1);
+        await interaction.deferUpdate().catch(() => {});
+      } else {
+        return;
+      }
 
       const newOffset = (page - 1) * perPage;
       const newRows = client.messageTracker.getLeaderboard(
@@ -180,14 +232,20 @@ module.exports = {
         scope,
         perPage,
         newOffset
-      );
+      ).filter(row => Number(row[scope] || 0) > 0);
 
       const newLines = [];
       for (let i = 0; i < newRows.length; i++) {
         const row = newRows[i];
         const rank = newOffset + i + 1;
         const count = formatNumber(row[scope]);
-        newLines.push(`${rank}. <@${row.user_id}> - ${count} messages`);
+
+        const member =
+          message.guild.members.cache.get(row.user_id) ||
+          await message.guild.members.fetch(row.user_id).catch(() => null);
+
+        const name = member?.displayName || member?.user?.username || row.user_id;
+        newLines.push(`${rank}. ${name} - ${count} messages`);
       }
 
       const newRank = client.messageTracker.getRank(message.guild.id, message.author.id, scope);
@@ -198,7 +256,7 @@ module.exports = {
         footer: footerText(client),
       });
 
-      const updatedButtons = new ActionRowBuilder().addComponents(
+      const updatedControls = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('msglb_prev')
           .setLabel('◀')
@@ -207,8 +265,7 @@ module.exports = {
         new ButtonBuilder()
           .setCustomId('msglb_page')
           .setLabel('Go To Page')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true),
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('msglb_next')
           .setLabel('▶')
@@ -216,14 +273,14 @@ module.exports = {
           .setDisabled(page >= totalPages)
       );
 
-      await interaction.update({
+      await interaction.message.edit({
         embeds: [updatedEmbed],
-        components: [updatedButtons],
-      });
+        components: [updatedControls],
+      }).catch(() => {});
     });
 
     collector.on('end', async () => {
-      const disabledRow = new ActionRowBuilder().addComponents(
+      const disabled = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('msglb_prev')
           .setLabel('◀')
@@ -241,7 +298,7 @@ module.exports = {
           .setDisabled(true)
       );
 
-      await reply.edit({ components: [disabledRow] }).catch(() => {});
+      await reply.edit({ components: [disabled] }).catch(() => {});
     });
   },
 };
