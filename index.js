@@ -5,6 +5,7 @@ const { Client, GatewayIntentBits, Partials, ActivityType } = require('discord.j
 const { loadCommands, handleMessage } = require('./handlers/commandHandler');
 const messageTracker = require('./handlers/messageTracker');
 const economy = require('./handlers/economy');
+const shopSystem = require('./handlers/shopSystem');
 const Database = require('better-sqlite3');
 
 // 🔥 SERVICES
@@ -333,6 +334,7 @@ client.once('ready', async () => {
   console.log('[Status] Set to: .gg/hanging');
 
   economy.init(client);
+  shopSystem.init(client);
   await messageTracker.init(client);
 
   birthdayService(client);
@@ -538,6 +540,7 @@ process.on('SIGINT', () => {
     if (spyDB) spyDB.close();
     if (client.msgTrackerDB) client.msgTrackerDB.close();
     if (client.economyDB) client.economyDB.close();
+    if (client.shopDB) client.shopDB.close();
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
@@ -559,6 +562,7 @@ process.on('SIGTERM', () => {
     if (spyDB) spyDB.close();
     if (client.msgTrackerDB) client.msgTrackerDB.close();
     if (client.economyDB) client.economyDB.close();
+    if (client.shopDB) client.shopDB.close();
     console.log('[Shutdown] Databases closed successfully');
   } catch (err) {
     console.error('[Shutdown] Error closing databases:', err);
