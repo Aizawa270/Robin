@@ -11,7 +11,7 @@ const {
 
 function buildEmbed(message, data = {}) {
   const embed = new EmbedBuilder()
-    .setColor('#111827')
+    .setColor('#0f172a')
     .setTimestamp();
 
   if (data.title) embed.setTitle(data.title);
@@ -25,68 +25,56 @@ function buildEmbed(message, data = {}) {
   return embed;
 }
 
-function chunkLines(lines, size = 6) {
-  const chunks = [];
-  for (let i = 0; i < lines.length; i += size) {
-    chunks.push(lines.slice(i, i + size));
-  }
-  return chunks;
-}
-
-function formatItemLine(client, item) {
+function itemLine(client, item) {
   const price = money(client, item.price);
   const cooldown = item.custom_duration_ms
     ? '30 days'
     : formatDuration(Number(item.cooldown_ms || 0));
 
-  return `**${item.item_id}**  ${item.name}\n` +
+  return `**${item.item_id}.** ${item.name}\n` +
          `Price: ${price}\n` +
          `Cooldown: ${cooldown}`;
 }
 
 function buildShopEmbed(message, client, items) {
-  const title = 'Shop';
   const icon = message.guild.iconURL({ size: 256 });
+  const sorted = [...items].sort((a, b) => Number(a.item_id) - Number(b.item_id));
 
-  if (!items.length) {
-    return buildEmbed(message, {
-      title,
-      description: 'No items are available right now.',
-      thumbnail: icon,
-      footer: `${message.guild.name} • ${items.length} item(s)`,
-    });
-  }
+  const desc =
+    sorted.length > 0
+      ? sorted.map(item => itemLine(client, item)).join('\n\n')
+      : 'No items are available right now.';
 
-  const lines = items.map(item => formatItemLine(client, item));
-  const chunks = chunkLines(lines, 6);
-
-  const embed = buildEmbed(message, {
-    title,
+  return buildEmbed(message, {
+    title: 'Shop',
     description:
-      `Available items: **${items.length}**\n` +
-      `Use \`$buy <id>\` to purchase an item.\n` +
-      `Custom roles are included in the same list.`,
+      `Use \`$buy <id>\` to purchase an item.\n\n` +
+      desc,
     thumbnail: icon,
-    footer: `${message.guild.name} • ${items.length} item(s)`,
+    footer: `${message.guild.name} • ${sorted.length} item(s)`,
   });
+}
 
-  const fieldNames = [
-    'Items',
-    'Items',
-    'Items',
-    'Items',
-    'Items',
-  ];
-
-  for (let i = 0; i < chunks.length; i++) {
-    embed.addFields({
-      name: fieldNames[i] || 'Items',
-      value: chunks[i].join('\n\n'),
-      inline: false,
-    });
-  }
-
-  return embed;
+function buildHelpEmbed(message) {
+  return buildEmbed(message, {
+    title: 'Shop Help',
+    description:
+      `**View shop**\n` +
+      `\`$shop\`\n\n` +
+      `**Buy item**\n` +
+      `\`$buy <id>\`\n\n` +
+      `**Add item**\n` +
+      `\`$shop setup <price> <cooldown> <item name>\`\n\n` +
+      `**Add custom role item**\n` +
+      `\`$shop custom <price> <item name>\`\n\n` +
+      `**Delete item**\n` +
+      `\`$shop delete <id>\`\n\n` +
+      `**Notes**\n` +
+      `IDs are sequential and renumber after deletion.\n` +
+      `Custom roles are bought with the same shop list and use Discord role IDs for editing.`,
+    thumbnail: message.guild.iconURL({ size: 256 }),
+    footer: `${message.guild.name} • Shop commands`,
+  });
 }
 
 module.exports = {
@@ -94,18 +82,16 @@ module.exports = {
   aliases: [],
   description: 'Server shop commands.',
   category: 'economy',
-  usage: '$shop | $shop setup <price> <cooldown> <name> | $shop customsetup <price> <name> | $shop delete <id>',
+  usage: '$shop | $shop help | $shop setup <price> <cooldown> <name> | $shop custom <price> <name> | $shop delete <id>',
 
   async execute(client, message, args) {
     if (!message.guild) return;
 
     const sub = String(args[0] || '').toLowerCase();
 
-    if (!sub) {
+    if (!sub || sub === 'help') {
       const items = listShopItems('normal', message.guild.id);
-      const embed = buildShopEmbed(message, client, items);
-
-      return message.reply({ embeds: [embed] });
+      return message.reply({ embeds: [buildShopEmbed(message, client, items)] });
     }
 
     if (sub === 'setup') {
@@ -148,8 +134,7 @@ module.exports = {
           buildEmbed(message, {
             title: 'Item Created',
             description:
-              `ID: **${item.item_id}**\n` +
-              `Name: **${item.name}**\n` +
+              `**${item.item_id}.** ${item.name}\n` +
               `Price: ${money(client, item.price)}\n` +
               `Cooldown: ${formatDuration(item.cooldown_ms)}`,
             thumbnail: message.guild.iconURL({ size: 256 }),
@@ -158,7 +143,7 @@ module.exports = {
       });
     }
 
-    if (sub === 'customsetup') {
+    if (sub === 'custom' || sub === 'customsetup') {
       if (!canManageShop(client, message)) {
         return message.reply({
           embeds: [
@@ -179,7 +164,7 @@ module.exports = {
           embeds: [
             buildEmbed(message, {
               title: 'Setup Failed',
-              description: 'Use: `$shop customsetup <price> <item name>`',
+              description: 'Use: `$shop custom <price> <item name>`',
               thumbnail: message.guild.iconURL({ size: 256 }),
             }),
           ],
@@ -198,11 +183,10 @@ module.exports = {
           buildEmbed(message, {
             title: 'Custom Item Created',
             description:
-              `ID: **${item.item_id}**\n` +
-              `Name: **${item.name}**\n` +
+              `**${item.item_id}.** ${item.name}\n` +
               `Price: ${money(client, item.price)}\n` +
               `Duration: 30 days`,
-              thumbnail: message.guild.iconURL({ size: 256 }),
+            thumbnail: message.guild.iconURL({ size: 256 }),
           }),
         ],
       });
@@ -251,7 +235,7 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: 'Item Deleted',
-            description: `Deleted **${deleted.item_id}** • **${deleted.name}**.\nThe shop was renumbered.`,
+            description: `Deleted **${deleted.item_id}.** ${deleted.name}\nThe shop was renumbered.`,
             thumbnail: message.guild.iconURL({ size: 256 }),
           }),
         ],
@@ -259,14 +243,7 @@ module.exports = {
     }
 
     return message.reply({
-      embeds: [
-        buildEmbed(message, {
-          title: 'Shop Help',
-          description:
-            '`$shop`\n`$shop setup <price> <cooldown> <item name>`\n`$shop customsetup <price> <item name>`\n`$shop delete <item id>`',
-          thumbnail: message.guild.iconURL({ size: 256 }),
-        }),
-      ],
+      embeds: [buildHelpEmbed(message)],
     });
   },
 };
