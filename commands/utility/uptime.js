@@ -1,5 +1,4 @@
 const { EmbedBuilder } = require('discord.js');
-const { colors } = require('../../config');
 
 function formatDuration(ms) {
   const totalSeconds = Math.floor(ms / 1000);
@@ -22,14 +21,20 @@ module.exports = {
   description: 'Shows how long the bot has been online.',
   category: 'utility',
   usage: '$uptime',
+
   async execute(client, message) {
     const uptimeMs = client.uptime ?? 0;
     const formatted = formatDuration(uptimeMs);
 
-    const embed = new EmbedBuilder()
-      .setColor(colors.uptime)
-      .setTitle('Uptime')
-      .setDescription(`I have been online for **${formatted}**.`);
+    const embed = typeof message.createEmbed === 'function'
+      ? message.createEmbed({
+          title: 'Uptime',
+          description: `I have been online for **${formatted}**.`,
+        })
+      : new EmbedBuilder()
+          .setColor('#5b0000')
+          .setTitle('Uptime')
+          .setDescription(`I have been online for **${formatted}**.`);
 
     await message.reply({ embeds: [embed] });
   },
