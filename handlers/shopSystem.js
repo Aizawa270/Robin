@@ -45,6 +45,8 @@ function canManageShop(client, message) {
 function parseDurationMs(input) {
   if (!input) return null;
   const raw = String(input).trim().toLowerCase();
+  if (raw === '0') return 0;
+
   const match = raw.match(/^(\d+)(s|m|h|d|w)$/);
   if (!match) return null;
 
@@ -193,6 +195,13 @@ function padId(n) {
   return String(n).padStart(2, '0');
 }
 
+function normalizeItemId(itemId) {
+  const raw = String(itemId || '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return padId(Number(raw));
+  return raw;
+}
+
 function getNextItemId(shopKey, guildId) {
   const row = nextItemIdStmt[shopKey].get(String(guildId));
   const next = Number(row?.max_id || 0) + 1;
@@ -205,11 +214,18 @@ function listShopItems(shopKey, guildId) {
 
 function getItemById(shopKey, guildId, itemId) {
   const table = shopKey === 'ec' ? 'ec_shop_items' : 'normal_shop_items';
-  return db.prepare(`
+  const gid = String(guildId);
+  const normalized = normalizeItemId(itemId);
+  if (!normalized) return null;
+
+  const row = db.prepare(`
     SELECT *
     FROM ${table}
-    WHERE guild_id = ? AND item_id = ?
-  `).get(String(guildId), String(itemId).padStart(2, '0'));
+    WHERE guild_id = ? AND (item_id = ? OR item_id = ? OR CAST(item_id AS INTEGER) = CAST(? AS INTEGER))
+    LIMIT 1
+  `).get(gid, normalized, String(itemId).trim(), normalized);
+
+  return row || null;
 }
 
 function setupItem(shopKey, guildId, data) {
@@ -243,12 +259,12 @@ function renumberShop(shopKey, guildId) {
     ORDER BY CAST(item_id AS INTEGER) ASC
   `).all(String(guildId));
 
-  const tx = db.transaction(() => {
+  db.transaction(() => {
     rows.forEach((row, index) => {
-      const oldId = String(row.item_id).padStart(2, '0');
+      const oldId = normalizeItemId(row.item_id);
       const newId = padId(index + 1);
 
-      if (oldId === newId) return;
+      if (!oldId || oldId === newId) return;
 
       db.prepare(`UPDATE ${table} SET item_id = ? WHERE guild_id = ? AND item_id = ?`)
         .run(newId, String(guildId), oldId);
@@ -267,9 +283,7 @@ function renumberShop(shopKey, guildId) {
         `).run(newId, String(guildId), oldId);
       }
     });
-  });
-
-  tx();
+  })();
 }
 
 function deleteItem(shopKey, guildId, itemId) {
@@ -298,11 +312,15 @@ function getInventory(shopKey, guildId, userId) {
 
 function getPurchaseCooldown(shopKey, guildId, userId, itemId) {
   const table = shopKey === 'ec' ? 'ec_shop_purchases' : 'normal_shop_purchases';
+  const normalized = normalizeItemId(itemId);
+  if (!normalized) return 0;
+
   return db.prepare(`
     SELECT last_bought_at
     FROM ${table}
-    WHERE guild_id = ? AND user_id = ? AND item_id = ?
-  `).get(String(guildId), String(userId), String(itemId).padStart(2, '0'))?.last_bought_at || 0;
+    WHERE guild_id = ? AND user_id = ? AND (item_id = ? OR item_id = ? OR CAST(item_id AS INTEGER) = CAST(? AS INTEGER))
+    LIMIT 1
+  `).get(String(guildId), String(userId), normalized, String(itemId).trim(), normalized)?.last_bought_at || 0;
 }
 
 function setPurchaseCooldown(shopKey, guildId, userId, itemId, timestamp) {
@@ -312,7 +330,7 @@ function setPurchaseCooldown(shopKey, guildId, userId, itemId, timestamp) {
     VALUES (?, ?, ?, ?)
     ON CONFLICT(guild_id, user_id, item_id) DO UPDATE SET
       last_bought_at = excluded.last_bought_at
-  `).run(String(guildId), String(userId), String(itemId).padStart(2, '0'), Number(timestamp));
+  `).run(String(guildId), String(userId), normalizeItemId(itemId), Number(timestamp));
 }
 
 function addInventory(shopKey, guildId, userId, itemId, amount = 1) {
@@ -323,7 +341,7 @@ function addInventory(shopKey, guildId, userId, itemId, amount = 1) {
     ON CONFLICT(guild_id, user_id, item_id) DO UPDATE SET
       quantity = quantity + excluded.quantity,
       last_updated = excluded.last_updated
-  `).run(String(guildId), String(userId), String(itemId).padStart(2, '0'), Number(amount), Date.now());
+  `).run(String(guildId), String(userId), normalizeItemId(itemId), Number(amount), Date.now());
 }
 
 function setCustomRole(guildId, userId, itemId, roleId, expiresAt, purchasedAt = Date.now()) {
@@ -339,7 +357,7 @@ function setCustomRole(guildId, userId, itemId, roleId, expiresAt, purchasedAt =
       expires_at = excluded.expires_at,
       active = 1,
       deleted_by_bot = 0
-  `).run(String(guildId), String(userId), String(itemId).padStart(2, '0'), String(roleId), Number(purchasedAt), Number(expiresAt));
+  `).run(String(guildId), String(userId), normalizeItemId(itemId), String(roleId), Number(purchasedAt), Number(expiresAt));
 }
 
 function getCustomRoleByUser(guildId, userId) {
@@ -409,6 +427,11 @@ async function buyItem(shopKey, client, guild, user, itemId) {
   if (shopKey === 'normal' && item.custom_duration_ms) {
     const existing = getCustomRoleByUser(guild.id, user.id);
     if (existing) {
+      client.economy.addCrowns(guild.id, user.id, price, {
+        type: 'refund',
+        reason: 'Already owns a custom role',
+        actorId: user.id,
+      });
       return { ok: false, reason: 'already_has_custom' };
     }
 
@@ -458,7 +481,6 @@ async function sweepExpiredCustomRoles(client) {
     if (isExpired) {
       await role.delete('Custom role expired').catch(() => {});
       deactivateCustomRole(row.guild_id, row.user_id, 1);
-      continue;
     }
   }
 }
