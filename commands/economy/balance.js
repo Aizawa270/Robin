@@ -29,7 +29,7 @@ function buildEmbed(message, data = {}) {
     return embed;
   }
 
-  const embed = new EmbedBuilder().setColor('#FF69B4').setTimestamp();
+  const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
   if (data.thumbnail) embed.setThumbnail(data.thumbnail);
@@ -77,6 +77,8 @@ module.exports = {
       message.author;
 
     const stats = client.economy.getUserStats(message.guild.id, target.id);
+    const bank = client.economy.getServerBank(message.guild.id);
+    const netWorth = Number(stats.balance || 0) + Number(bank.balance || 0);
 
     const member =
       message.guild.members.cache.get(target.id) ||
@@ -89,10 +91,10 @@ module.exports = {
       description:
         `Balance\n` +
         `↳ ${money(client, stats.balance || 0)}\n\n` +
-        `Lifetime Earned\n` +
-        `↳ ${money(client, stats.lifetime_earned || 0)}\n\n` +
-        `Lifetime Spent\n` +
-        `↳ ${money(client, stats.lifetime_spent || 0)}`,
+        `Bank\n` +
+        `↳ ${money(client, bank.balance || 0)}\n\n` +
+        `Networth\n` +
+        `↳ ${money(client, netWorth)}`,
       thumbnail: target.displayAvatarURL({ size: 256 }),
       footer: footerText(client),
     });
