@@ -1,6 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
 const {
-  formatNumber,
   formatDuration,
   useCooldown,
   boostProfit,
@@ -10,12 +9,31 @@ const MAX_BET = 50_000;
 const COOLDOWN_MS = 60_000;
 
 function buildEmbed(message, data = {}) {
-  const embed = new EmbedBuilder().setColor('#FF69B4').setTimestamp();
+  if (typeof message.createEmbed === 'function') {
+    const embed = message.createEmbed({
+      title: data.title,
+      description: data.description,
+      thumbnail: data.thumbnail,
+      footer: data.footer,
+    });
 
+    if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+    if (data.footer) {
+      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+      else embed.setFooter(data.footer);
+    }
+
+    return embed;
+  }
+
+  const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
   if (data.thumbnail) embed.setThumbnail(data.thumbnail);
-
+  if (data.footer) {
+    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+    else embed.setFooter(data.footer);
+  }
   return embed;
 }
 
@@ -43,6 +61,7 @@ module.exports = {
 
   async execute(client, message, args) {
     if (!message.guild) return;
+
     if (!client.economy) {
       return message.reply({
         embeds: [buildEmbed(message, { title: 'Economy Unavailable', description: 'The economy system is not ready.' })],
@@ -143,15 +162,17 @@ module.exports = {
     const newBalance = client.economy.getBalance(message.guild.id, message.author.id);
 
     const embed = buildEmbed(message, {
-      title: 'Dice',
+      title: '🎲 Dice Rolled',
       description:
-        `Bet\n↳ ${money(client, amount)}\n\n` +
-        `Your Numbers\n↳ ${pick1} and ${pick2}\n\n` +
-        `Roll\n↳ ${rollA} and ${rollB}\n\n` +
-        `Matches\n↳ ${matchCount}\n\n` +
-        `Result\n↳ ${baseProfit > 0 ? `You won ${money(client, winnings - amount)}` : 'You lost'}\n\n` +
-        `Balance\n↳ ${money(client, newBalance)}`,
+        `**Bet:** ${money(client, amount)}\n` +
+        `**Your Picks:** ${pick1}, ${pick2}\n` +
+        `**Rolled:** ${rollA}, ${rollB}\n\n` +
+        `${matchCount > 0
+          ? `### ✅ Good Guess!\nYou matched **${matchCount}** number${matchCount === 1 ? '' : 's'} and won **${money(client, winnings - amount)}**.`
+          : `### ❌ Bad Guess!\nYou matched **0** numbers and lost **${money(client, amount)}**.`}\n\n` +
+        `**Balance:** ${money(client, newBalance)}`,
       thumbnail: message.author.displayAvatarURL({ size: 256 }),
+      footer: `Requested by ${message.author.username}`,
     });
 
     return message.reply({ embeds: [embed] });
