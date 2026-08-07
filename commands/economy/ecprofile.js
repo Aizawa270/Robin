@@ -9,11 +9,13 @@ function buildEmbed(message, data = {}) {
       thumbnail: data.thumbnail,
       footer: data.footer,
     });
+
     if (data.thumbnail) embed.setThumbnail(data.thumbnail);
     if (data.footer) {
       if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
       else embed.setFooter(data.footer);
     }
+
     return embed;
   }
 
@@ -47,25 +49,20 @@ module.exports = {
     const job = user.current_job_id ? client.economy.getJobConfig(message.guild.id, user.current_job_id) : null;
     const bank = client.economy.getServerBank(message.guild.id);
 
-    const todayCount = Number(user.today_work_count || 0);
-    const workLine = job
-      ? `${todayCount}/${job.works_per_day} today`
-      : 'Unemployed';
+    const netWorth = Number(user.balance || 0) + Number(bank.balance || 0);
+    const workStatus = job ? `Employed as ${job.name}` : 'Unemployed';
 
     return message.reply({
       embeds: [
         buildEmbed(message, {
-          title: `${target.username}'s Economy Profile`,
+          title: '⚜ Economic Profile ⚜',
           description:
-            `**Balance:** ${client.economy.formatCurrency(user.balance)}\n` +
-            `**Current Job:** ${job ? job.name : 'Unemployed'}\n` +
-            `**Work Streak:** ${Number(user.work_streak || 0)}/7\n` +
-            `**Today:** ${workLine}\n` +
-            `**Lifetime Earned:** ${client.economy.formatCurrency(user.lifetime_earned)}\n` +
-            `**Lifetime Tax Paid:** ${client.economy.formatCurrency(user.lifetime_tax_paid)}\n` +
-            `**Server Bank:** ${client.economy.formatCurrency(bank.balance)}`,
+            `**Net Worth:** ${client.economy.formatCurrency(netWorth)}\n` +
+            `**Lifetime Earnings:** ${client.economy.formatCurrency(user.lifetime_earned)}\n` +
+            `**Lifetime Spendings:** ${client.economy.formatCurrency(user.lifetime_spent)}\n` +
+            `**Work Status:** ${workStatus}`,
           thumbnail: target.displayAvatarURL({ size: 256 }),
-          footer: `${message.guild.name} • Economy profile`,
+          footer: `Requested by ${message.author.username}`,
         }),
       ],
     });
