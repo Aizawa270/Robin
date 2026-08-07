@@ -5,8 +5,8 @@ const {
   boostProfit,
 } = require('../../handlers/gamblingHelpers');
 
-const MAX_BET = 50_000;
-const COOLDOWN_MS = 60_000;
+const MAX_BET = 25_000;
+const COOLDOWN_MS = 10_000;
 
 function buildEmbed(message, data = {}) {
   if (typeof message.createEmbed === 'function') {
