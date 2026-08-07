@@ -6,12 +6,45 @@ const {
   ButtonBuilder,
   ButtonStyle,
 } = require('discord.js');
+const Database = require('better-sqlite3');
+const fs = require('fs');
+const path = require('path');
+
+let config = null;
+try {
+  config = require('../../config');
+} catch {}
+
+const DATA_DIR = path.join(__dirname, '..', '..', 'data');
+const DB_PATH = path.join(DATA_DIR, 'nukeaccess.sqlite');
 
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
   if (title) embed.setTitle(title);
   if (description) embed.setDescription(description);
   return embed;
+}
+
+function ensureDb(client) {
+  if (client.nukeAccessDB) return client.nukeAccessDB;
+
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+
+  const db = new Database(DB_PATH);
+  db.pragma('journal_mode = WAL');
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS nuke_access (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    )
+  `).run();
+
+  client.nukeAccessDB = db;
+  return db;
 }
 
 function isTextNukeableChannel(channel) {
@@ -55,13 +88,10 @@ function buildChannelData(channel) {
 function getBotOwnerIds(client) {
   const ids = new Set();
 
-  try {
-    const config = require('../../config');
-    if (config?.ownerId) ids.add(String(config.ownerId));
-    if (Array.isArray(config?.ownerIds)) {
-      for (const id of config.ownerIds) ids.add(String(id));
-    }
-  } catch {}
+  if (config?.ownerId) ids.add(String(config.ownerId));
+  if (Array.isArray(config?.ownerIds)) {
+    for (const id of config.ownerIds) ids.add(String(id));
+  }
 
   if (client?.ownerId) ids.add(String(client.ownerId));
   if (Array.isArray(client?.ownerIds)) {
@@ -81,37 +111,8 @@ function isServerOwner(message) {
   return !!message.guild?.ownerId && String(message.author.id) === String(message.guild.ownerId);
 }
 
-function canUseNuke(client, message) {
-  return isBotOwner(client, message.author.id) || isServerOwner(message);
-}
-
-function ensureNukeAccessDb(client) {
-  if (client.nukeAccessDB) return client.nukeAccessDB;
-
-  const Database = require('better-sqlite3');
-  const fs = require('fs');
-  const path = require('path');
-
-  const DATA_DIR = path.join(__dirname, '..', '..', 'data');
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-  const db = new Database(path.join(DATA_DIR, 'nukeaccess.sqlite'));
-  db.pragma('journal_mode = WAL');
-
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS nuke_access (
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      PRIMARY KEY (guild_id, user_id)
-    )
-  `).run();
-
-  client.nukeAccessDB = db;
-  return db;
-}
-
 function hasNukeAccess(client, guildId, userId) {
-  const db = ensureNukeAccessDb(client);
+  const db = ensureDb(client);
   const row = db.prepare(
     'SELECT 1 FROM nuke_access WHERE guild_id = ? AND user_id = ?'
   ).get(String(guildId), String(userId));
@@ -119,9 +120,46 @@ function hasNukeAccess(client, guildId, userId) {
   return !!row;
 }
 
-function canUseNukeCommand(client, message) {
-  if (!message.guild) return false;
-  return canUseNuke(client, message) || hasNukeAccess(client, message.guild.id, message.author.id);
+function canUseNuke(client, message) {
+  return isBotOwner(client, message.author.id) || isServerOwner(message) || hasNukeAccess(client, message.guild.id, message.author.id);
+}
+
+async function resolveTargetUser(client, message, input) {
+  if (!input) return null;
+
+  if (typeof message.resolveUser === 'function') {
+    const resolved = await message.resolveUser(input).catch(() => null);
+    if (resolved) return resolved;
+  }
+
+  const raw = String(input).trim();
+  if (!raw) return null;
+
+  const mention = raw.match(/^<@!?(\d{15,20})>$/);
+  if (mention) {
+    const id = mention[1];
+    const cached = client.users.cache.get(id);
+    if (cached) return cached;
+    return await client.users.fetch(id).catch(() => null);
+  }
+
+  const idOnly = raw.replace(/[<@!>]/g, '');
+  if (/^\d{15,20}$/.test(idOnly)) {
+    const cached = client.users.cache.get(idOnly);
+    if (cached) return cached;
+    return await client.users.fetch(idOnly).catch(() => null);
+  }
+
+  const lowered = raw.toLowerCase();
+  const cachedUser = client.users.cache.find(u =>
+    u?.username?.toLowerCase() === lowered ||
+    u?.globalName?.toLowerCase() === lowered ||
+    u?.tag?.toLowerCase() === lowered
+  );
+
+  if (cachedUser) return cachedUser;
+
+  return null;
 }
 
 async function executeNuke(message, targetChannel, channelData) {
@@ -160,20 +198,119 @@ async function executeNukeWithDelay(message, targetChannel, channelData, index) 
   return executeNuke(message, targetChannel, channelData);
 }
 
+function usageEmbed(prefix) {
+  return makeEmbed(
+    '#f59e0b',
+    'Nuke Usage',
+    [
+      `\`${prefix}nuke #channel [more channels...]\``,
+      `\`${prefix}nuke access add @user|userID|username\``,
+      `\`${prefix}nuke access remove @user|userID|username\``,
+      `\`${prefix}nuke access list\``,
+      '',
+      'Example:',
+      `\`${prefix}nuke #general #spam #logs\``,
+    ].join('\n')
+  );
+}
+
 module.exports = {
   name: 'nuke',
   description: 'Completely wipes one or more channels by deleting and recreating them.',
   category: 'mod',
   usage: '$nuke #channel [more channels...]',
 
-  async execute(client, message) {
+  async execute(client, message, args) {
     if (!message.guild) {
       return message.reply({
         embeds: [makeEmbed('#ef4444', 'Nuke Failed', 'This command can only be used in a server.')],
       });
     }
 
-    if (!canUseNukeCommand(client, message)) {
+    const db = ensureDb(client);
+    const prefix = client.getPrefix?.(message.guild.id) || '$';
+    const sub = String(args[0] || '').toLowerCase();
+
+    if (sub === 'access') {
+      if (!isBotOwner(client, message.author.id)) {
+        return message.reply({
+          embeds: [makeEmbed('#ef4444', 'Access Denied', 'Only the bot owner can manage nuke access.')],
+        });
+      }
+
+      const action = String(args[1] || '').toLowerCase();
+
+      if (!['add', 'remove', 'list'].includes(action)) {
+        return message.reply({ embeds: [usageEmbed(prefix)] });
+      }
+
+      if (action === 'list') {
+        const rows = db.prepare(
+          'SELECT user_id FROM nuke_access WHERE guild_id = ? ORDER BY user_id ASC'
+        ).all(message.guild.id);
+
+        if (!rows.length) {
+          return message.reply({
+            embeds: [
+              makeEmbed('#3b82f6', 'Nuke Access List', 'No users have nuke access in this server.'),
+            ],
+          });
+        }
+
+        const users = await Promise.all(rows.map(async row => {
+          try {
+            const user = await client.users.fetch(row.user_id);
+            return user ? `<@${user.id}>` : null;
+          } catch {
+            return null;
+          }
+        }));
+
+        const clean = users.filter(Boolean).join('\n') || 'No valid users found.';
+        return message.reply({
+          embeds: [makeEmbed('#3b82f6', 'Nuke Access List', clean)],
+        });
+      }
+
+      const target = await resolveTargetUser(client, message, args[2]);
+      if (!target) {
+        return message.reply({
+          embeds: [
+            makeEmbed('#f59e0b', 'Nuke Access Failed', 'Provide a valid user mention, ID, or exact username.'),
+          ],
+        });
+      }
+
+      if (target.bot) {
+        return message.reply({
+          embeds: [makeEmbed('#f59e0b', 'Nuke Access Failed', 'Bots do not need nuke access.')],
+        });
+      }
+
+      if (action === 'add') {
+        db.prepare(
+          'INSERT OR IGNORE INTO nuke_access (guild_id, user_id) VALUES (?, ?)'
+        ).run(message.guild.id, target.id);
+
+        return message.reply({
+          embeds: [
+            makeEmbed('#22c55e', 'Access Added', `**${target.tag}** can now use \`${prefix}nuke\` in this server.`),
+          ],
+        });
+      }
+
+      db.prepare(
+        'DELETE FROM nuke_access WHERE guild_id = ? AND user_id = ?'
+      ).run(message.guild.id, target.id);
+
+      return message.reply({
+        embeds: [
+          makeEmbed('#ef4444', 'Access Removed', `**${target.tag}** can no longer use \`${prefix}nuke\` in this server.`),
+        ],
+      });
+    }
+
+    if (!canUseNuke(client, message)) {
       return message.reply({
         embeds: [makeEmbed('#ef4444', 'Nuke Failed', 'You are not authorized to use this command.')],
       });
@@ -190,13 +327,7 @@ module.exports = {
 
     if (!targetChannels.length) {
       return message.reply({
-        embeds: [
-          makeEmbed(
-            '#f59e0b',
-            'Nuke Usage',
-            `Use \`${message.prefix || '$'}nuke #channel [more channels...]\`\n\nExample:\n\`${message.prefix || '$'}nuke #general #spam #logs\``
-          ),
-        ],
+        embeds: [usageEmbed(prefix)],
       });
     }
 
