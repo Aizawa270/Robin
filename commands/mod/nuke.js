@@ -1,4 +1,11 @@
-const { PermissionFlagsBits, EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const {
+  PermissionFlagsBits,
+  EmbedBuilder,
+  ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require('discord.js');
 
 function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder().setColor(color).setTimestamp();
@@ -45,22 +52,76 @@ function buildChannelData(channel) {
   };
 }
 
-async function getBotOwnerId(client) {
+function getBotOwnerIds(client) {
+  const ids = new Set();
+
   try {
-    const app = client.application?.partial ? await client.application.fetch() : client.application;
-    const owner = app?.owner;
+    const config = require('../../config');
+    if (config?.ownerId) ids.add(String(config.ownerId));
+    if (Array.isArray(config?.ownerIds)) {
+      for (const id of config.ownerIds) ids.add(String(id));
+    }
+  } catch {}
 
-    if (!owner) return null;
-
-    if (owner.id) return owner.id;
-
-    if (owner.ownerUserId) return owner.ownerUserId;
-
-    return null;
-  } catch (err) {
-    console.error('[Nuke] Failed to fetch application owner:', err);
-    return null;
+  if (client?.ownerId) ids.add(String(client.ownerId));
+  if (Array.isArray(client?.ownerIds)) {
+    for (const id of client.ownerIds) ids.add(String(id));
   }
+
+  if (process.env.OWNER_ID) ids.add(String(process.env.OWNER_ID));
+
+  return ids;
+}
+
+function isBotOwner(client, userId) {
+  return getBotOwnerIds(client).has(String(userId));
+}
+
+function isServerOwner(message) {
+  return !!message.guild?.ownerId && String(message.author.id) === String(message.guild.ownerId);
+}
+
+function canUseNuke(client, message) {
+  return isBotOwner(client, message.author.id) || isServerOwner(message);
+}
+
+function ensureNukeAccessDb(client) {
+  if (client.nukeAccessDB) return client.nukeAccessDB;
+
+  const Database = require('better-sqlite3');
+  const fs = require('fs');
+  const path = require('path');
+
+  const DATA_DIR = path.join(__dirname, '..', '..', 'data');
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+  const db = new Database(path.join(DATA_DIR, 'nukeaccess.sqlite'));
+  db.pragma('journal_mode = WAL');
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS nuke_access (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    )
+  `).run();
+
+  client.nukeAccessDB = db;
+  return db;
+}
+
+function hasNukeAccess(client, guildId, userId) {
+  const db = ensureNukeAccessDb(client);
+  const row = db.prepare(
+    'SELECT 1 FROM nuke_access WHERE guild_id = ? AND user_id = ?'
+  ).get(String(guildId), String(userId));
+
+  return !!row;
+}
+
+function canUseNukeCommand(client, message) {
+  if (!message.guild) return false;
+  return canUseNuke(client, message) || hasNukeAccess(client, message.guild.id, message.author.id);
 }
 
 async function executeNuke(message, targetChannel, channelData) {
@@ -104,23 +165,24 @@ module.exports = {
   description: 'Completely wipes one or more channels by deleting and recreating them.',
   category: 'mod',
   usage: '$nuke #channel [more channels...]',
-  async execute(client, message, args) {
+
+  async execute(client, message) {
     if (!message.guild) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Nuke Failed', 'This command can only be used in a server.')]
+        embeds: [makeEmbed('#ef4444', 'Nuke Failed', 'This command can only be used in a server.')],
       });
     }
 
-    const ownerId = await getBotOwnerId(client);
-    if (!ownerId || message.author.id !== ownerId) {
+    if (!canUseNukeCommand(client, message)) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Nuke Failed', 'You are not authorized to use this command.')]
+        embeds: [makeEmbed('#ef4444', 'Nuke Failed', 'You are not authorized to use this command.')],
       });
     }
 
-    if (!message.guild.members.me?.permissions?.has(PermissionFlagsBits.ManageChannels)) {
+    const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+    if (!botMember?.permissions?.has(PermissionFlagsBits.ManageChannels)) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Nuke Failed', 'I need **Manage Channels** permission.')]
+        embeds: [makeEmbed('#ef4444', 'Nuke Failed', 'I need **Manage Channels** permission.')],
       });
     }
 
@@ -143,7 +205,7 @@ module.exports = {
 
     if (!valid.length) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Nuke Failed', 'None of the provided channels can be nuked.')]
+        embeds: [makeEmbed('#f59e0b', 'Nuke Failed', 'None of the provided channels can be nuked.')],
       });
     }
 
@@ -172,30 +234,28 @@ module.exports = {
 
     const collector = prompt.createMessageComponentCollector({ time: 30000 });
 
-    collector.on('collect', async (interaction) => {
-      // Only the bot owner can click
-      if (interaction.user.id !== ownerId) {
+    collector.on('collect', async interaction => {
+      if (interaction.user.id !== message.author.id) {
         return interaction.reply({
           content: 'You are not authorized to use this.',
           ephemeral: true,
-        });
+        }).catch(() => {});
       }
 
       if (interaction.customId === 'nuke_cancel') {
         await interaction.update({
           embeds: [makeEmbed('#6b7280', 'Nuke Cancelled', 'The nuke has been cancelled.')],
           components: [],
-        });
+        }).catch(() => {});
         collector.stop();
         return;
       }
 
       if (interaction.customId === 'nuke_confirm') {
-        // Acknowledge immediately so the interaction doesn't time out
         await interaction.update({
           embeds: [makeEmbed('#f59e0b', 'Nuking...', 'Nuke in progress, please wait...')],
           components: [],
-        });
+        }).catch(() => {});
         collector.stop();
 
         const channelDataMap = valid.map(ch => ({
@@ -203,7 +263,6 @@ module.exports = {
           data: buildChannelData(ch),
         }));
 
-        // 3+ channels: staggered parallel nuke
         if (valid.length >= 3) {
           const results = await Promise.allSettled(
             channelDataMap.map(({ channel, data }, index) =>
@@ -211,13 +270,8 @@ module.exports = {
             )
           );
 
-          const formattedResults = results.map((r, i) => ({
-            name: channelDataMap[i].channel.name,
-            ok: r.status === 'fulfilled' && r.value.ok,
-          }));
-
-          const successCount = formattedResults.filter(r => r.ok).length;
-          const failCount = formattedResults.length - successCount;
+          const successCount = results.filter(r => r.status === 'fulfilled' && r.value?.ok).length;
+          const failCount = results.length - successCount;
 
           return prompt.edit({
             embeds: [
@@ -225,20 +279,16 @@ module.exports = {
                 failCount ? '#f59e0b' : '#10b981',
                 'Nuke Complete',
                 `Nuked **${successCount}** channel${successCount === 1 ? '' : 's'} successfully.${failCount ? ` **${failCount}** failed.` : ''}`
-              )
+              ),
             ],
             components: [],
           }).catch(() => {});
         }
 
-        // 1-2 channels: sequential nuke
         const results = [];
         for (const { channel, data } of channelDataMap) {
           const result = await executeNuke(message, channel, data);
-          results.push({
-            name: channel.name,
-            ok: result.ok,
-          });
+          results.push({ name: channel.name, ok: result.ok });
         }
 
         const successCount = results.filter(r => r.ok).length;
@@ -250,14 +300,14 @@ module.exports = {
               failCount ? '#f59e0b' : '#10b981',
               'Nuke Complete',
               `Nuked **${successCount}** channel${successCount === 1 ? '' : 's'} successfully.${failCount ? ` **${failCount}** failed.` : ''}`
-            )
+            ),
           ],
           components: [],
         }).catch(() => {});
       }
     });
 
-    collector.on('end', async (collected, reason) => {
+    collector.on('end', async (_, reason) => {
       if (reason === 'time') {
         await prompt.edit({
           embeds: [makeEmbed('#6b7280', 'Nuke Timed Out', 'The nuke confirmation timed out.')],
