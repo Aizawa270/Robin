@@ -5,21 +5,41 @@ const {
   ButtonStyle,
 } = require('discord.js');
 const {
-  formatNumber,
   formatDuration,
   useCooldown,
   boostProfit,
 } = require('../../handlers/gamblingHelpers');
 
-const MAX_BET = 50_000;
-const COOLDOWN_MS = 60_000;
+const MAX_BET = 25_000;
+const COOLDOWN_MS = 10_000;
 const activeGames = new Map();
 
-function buildEmbed(data = {}) {
-  const embed = new EmbedBuilder().setColor('#FF69B4').setTimestamp();
+function buildEmbed(message, data = {}) {
+  if (typeof message?.createEmbed === 'function') {
+    const embed = message.createEmbed({
+      title: data.title,
+      description: data.description,
+      thumbnail: data.thumbnail,
+      footer: data.footer,
+    });
+
+    if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+    if (data.footer) {
+      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+      else embed.setFooter(data.footer);
+    }
+
+    return embed;
+  }
+
+  const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
   if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+  if (data.footer) {
+    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+    else embed.setFooter(data.footer);
+  }
   return embed;
 }
 
@@ -83,26 +103,11 @@ function isNaturalBlackjack(hand) {
   return hand.length === 2 && handValue(hand) === 21;
 }
 
-function renderEmbed(session, revealDealer = false, status = 'Your move') {
-  const playerHand = session.playerHand.map(cardString).join('  ');
-  const dealerHand = revealDealer
-    ? session.dealerHand.map(cardString).join('  ')
-    : `${cardString(session.dealerHand[0])}  Hidden`;
-
-  const playerTotal = handValue(session.playerHand);
-  const dealerTotal = revealDealer ? handValue(session.dealerHand) : handValue([session.dealerHand[0]]);
-
-  return buildEmbed({
-    title: 'Blackjack',
-    description:
-      `Bet\n↳ ${money(session.client, session.bet)}\n\n` +
-      `Your Hand\n↳ ${playerHand || '—'}\n` +
-      `Total\n↳ ${playerTotal}\n\n` +
-      `Dealer\n↳ ${dealerHand || '—'}\n` +
-      `Total\n↳ ${revealDealer ? dealerTotal : 'Hidden'}\n\n` +
-      `Status\n↳ ${status}`,
-    thumbnail: session.user.displayAvatarURL({ size: 256 }),
-  });
+function activeRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary),
+  );
 }
 
 function disabledRow() {
@@ -112,11 +117,27 @@ function disabledRow() {
   );
 }
 
-function activeRow() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary),
-  );
+function renderEmbed(session, revealDealer = false, status = 'Your move') {
+  const playerHand = session.playerHand.map(cardString).join('  ');
+  const dealerHand = revealDealer
+    ? session.dealerHand.map(cardString).join('  ')
+    : `${cardString(session.dealerHand[0])}  Hidden`;
+
+  const playerTotal = handValue(session.playerHand);
+  const dealerTotal = revealDealer ? handValue(session.dealerHand) : handValue([session.dealerHand[0]]);
+
+  return buildEmbed(session.messageRef || session.message || session.clientMessage, {
+    title: '🃏 Blackjack',
+    description:
+      `**Bet:** ${money(session.client, session.bet)}\n\n` +
+      `**Your Hand:**\n${playerHand || '—'}\n` +
+      `**Total:** ${playerTotal}\n\n` +
+      `**Dealer Hand:**\n${dealerHand || '—'}\n` +
+      `**Total:** ${revealDealer ? dealerTotal : 'Hidden'}\n\n` +
+      `**Status:** ${status}`,
+    thumbnail: session.user.displayAvatarURL({ size: 256 }),
+    footer: `Requested by ${session.user.username}`,
+  });
 }
 
 async function finalizeGame(session, messageLike = null, reason = 'stand') {
@@ -172,23 +193,22 @@ async function finalizeGame(session, messageLike = null, reason = 'stand') {
   const finalPlayerTotal = handValue(session.playerHand);
   const finalDealerTotal = handValue(session.dealerHand);
 
-  const embed = buildEmbed({
-    title: 'Blackjack',
+  const resultText =
+    outcome === 'win'
+      ? `### ✅ You Won!\nYou earned **${money(session.client, payout - session.bet)}**.`
+      : outcome === 'push'
+        ? `### 🤝 Push!\nYour bet has been refunded.`
+        : `### ❌ You Lost!\nYou lost **${money(session.client, session.bet)}**.`;
+
+  const embed = buildEmbed(session.messageRef || messageLike || session.message, {
+    title: '🃏 Blackjack',
     description:
-      `Bet\n↳ ${money(session.client, session.bet)}\n\n` +
-      `Your Hand\n↳ ${session.playerHand.map(cardString).join('  ')}\n` +
-      `Total\n↳ ${finalPlayerTotal}\n\n` +
-      `Dealer\n↳ ${session.dealerHand.map(cardString).join('  ')}\n` +
-      `Total\n↳ ${finalDealerTotal}\n\n` +
-      `Result\n↳ ${
-        outcome === 'win'
-          ? `You won ${money(session.client, payout - session.bet)}`
-          : outcome === 'push'
-            ? 'Bet refunded'
-            : 'You lost'
-      }\n\n` +
-      `Status\n↳ ${status}`,
+      `**Bet:** ${money(session.client, session.bet)}\n\n` +
+      `**Your Hand:**\n${session.playerHand.map(cardString).join('  ')} (**${finalPlayerTotal}**)\n\n` +
+      `**Dealer Hand:**\n${session.dealerHand.map(cardString).join('  ')} (**${finalDealerTotal}**)\n\n` +
+      `${resultText}`,
     thumbnail: session.user.displayAvatarURL({ size: 256 }),
+    footer: `Requested by ${session.user.username}`,
   });
 
   const payload = { embeds: [embed], components: [disabledRow()] };
@@ -209,16 +229,22 @@ module.exports = {
 
   async execute(client, message, args) {
     if (!message.guild) return;
+
     if (!client.economy) {
       return message.reply({
-        embeds: [buildEmbed({ title: 'Economy Unavailable', description: 'The economy system is not ready.' })],
+        embeds: [
+          buildEmbed(message, {
+            title: 'Economy Unavailable',
+            description: 'The economy system is not ready.',
+          }),
+        ],
       });
     }
 
     if (activeGames.has(message.channel.id)) {
       return message.reply({
         embeds: [
-          buildEmbed({
+          buildEmbed(message, {
             title: 'Blackjack',
             description: 'A blackjack game is already running in this channel.',
           }),
@@ -230,7 +256,7 @@ module.exports = {
     if (!Number.isInteger(bet) || bet <= 0) {
       return message.reply({
         embeds: [
-          buildEmbed({
+          buildEmbed(message, {
             title: 'Blackjack',
             description: 'Use: `$blackjack <amount>`',
           }),
@@ -241,7 +267,7 @@ module.exports = {
     if (bet > MAX_BET) {
       return message.reply({
         embeds: [
-          buildEmbed({
+          buildEmbed(message, {
             title: 'Blackjack',
             description: `Maximum bet is **${money(client, MAX_BET)}**.`,
           }),
@@ -253,7 +279,7 @@ module.exports = {
     if (balance < bet) {
       return message.reply({
         embeds: [
-          buildEmbed({
+          buildEmbed(message, {
             title: 'Blackjack',
             description: `You only have **${money(client, balance)}**.`,
           }),
@@ -265,7 +291,7 @@ module.exports = {
     if (remaining > 0) {
       return message.reply({
         embeds: [
-          buildEmbed({
+          buildEmbed(message, {
             title: 'Blackjack',
             description: `You are on cooldown for **${formatDuration(remaining)}**.`,
           }),
@@ -282,7 +308,7 @@ module.exports = {
     if (!removed) {
       return message.reply({
         embeds: [
-          buildEmbed({
+          buildEmbed(message, {
             title: 'Blackjack',
             description: 'You do not have enough Crowns.',
           }),
@@ -302,6 +328,7 @@ module.exports = {
       playerHand: [drawCard(deck), drawCard(deck)],
       dealerHand: [drawCard(deck), drawCard(deck)],
       ended: false,
+      messageRef: message,
     };
 
     activeGames.set(message.channel.id, session);
