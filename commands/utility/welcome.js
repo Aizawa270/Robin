@@ -37,14 +37,17 @@ function resolveTextChannel(message, input) {
   if (!input) return null;
 
   const mention = message.mentions.channels.first();
+
   if (mention && isValidTextChannel(mention)) {
     return mention;
   }
 
   const raw = input.replace(/[<#>]/g, '').trim();
+
   if (!raw) return null;
 
   const byId = message.guild.channels.cache.get(raw);
+
   if (isValidTextChannel(byId)) {
     return byId;
   }
@@ -107,7 +110,6 @@ function buildHelpEmbed(prefix) {
 
         `**${prefix}welcomechat off**`,
         `Disables the chat welcome embed.`,
-
       ].join('\n\n')
     )
     .setFooter({
@@ -116,7 +118,9 @@ function buildHelpEmbed(prefix) {
 }
 
 function buildConfigEmbed(guild, settings, prefix) {
-  const redirectIds = parseChannelIdList(settings.redirect_channel_ids);
+  const redirectIds = parseChannelIdList(
+    settings.redirect_channel_ids
+  );
 
   const redirects = redirectIds.length
     ? redirectIds
@@ -180,10 +184,13 @@ function buildConfigEmbed(guild, settings, prefix) {
 }
 
 module.exports = {
-  name: 'welcome',
+  // FIX: welcomehelp is now the primary command.
+  // Typing just "welcome" will no longer match this command.
+  name: 'welcomehelp',
 
+  // Keep every functional command as an alias.
+  // Do not add "welcome" to this list.
   aliases: [
-    'welcomehelp',
     'welcomeconfig',
     'welcomeset',
     'welcomeimageset',
@@ -250,11 +257,15 @@ module.exports = {
       );
     }
 
+    // ==========================================
+    // MAIN WELCOME SETTINGS
+    // ==========================================
+
     if (rawCommand === 'welcomeset') {
       if (!args[0]) {
         return message.reply(
           [
-            `Usage:`,
+            'Usage:',
             `\`${prefix}welcomeset #channel\``,
             `\`${prefix}welcomeset rules #channel\``,
             `\`${prefix}welcomeset info #channel\``,
@@ -333,6 +344,10 @@ module.exports = {
       );
     }
 
+    // ==========================================
+    // WELCOME IMAGE SETTINGS
+    // ==========================================
+
     if (rawCommand === 'welcomeimageset') {
       const mode = (args[0] || '').toLowerCase();
 
@@ -351,8 +366,7 @@ module.exports = {
         );
       }
 
-      const attachment =
-        message.attachments.first();
+      const attachment = message.attachments.first();
 
       const imageUrl =
         attachment?.url ||
@@ -379,11 +393,15 @@ module.exports = {
       );
     }
 
+    // ==========================================
+    // CHAT WELCOME CHANNEL SETTINGS
+    // ==========================================
+
     if (rawCommand === 'welcomechatset') {
       if (!args[0]) {
         return message.reply(
           [
-            `Usage:`,
+            'Usage:',
             `\`${prefix}welcomechatset #channel\``,
             `\`${prefix}welcomechatset off\``,
           ].join('\n')
@@ -426,13 +444,19 @@ module.exports = {
       );
     }
 
+    // ==========================================
+    // CHAT WELCOME BUTTON SETTINGS
+    // ==========================================
+
     if (rawCommand === 'welcomechat') {
       const mode = (args[0] || '').toLowerCase();
 
+      // ------------------------------------------
+      // REDIRECT BUTTONS
+      // ------------------------------------------
+
       if (mode === 'redirect') {
-        if (
-          args[1]?.toLowerCase() === 'off'
-        ) {
+        if (args[1]?.toLowerCase() === 'off') {
           setSetting(
             message.guild.id,
             'redirect_channel_ids',
@@ -444,8 +468,7 @@ module.exports = {
           );
         }
 
-        const channels =
-          getMentionedChannels(message);
+        const channels = getMentionedChannels(message);
 
         if (!channels.length) {
           return message.reply(
@@ -465,7 +488,9 @@ module.exports = {
           );
         }
 
-        const ids = channels.map(channel => channel.id);
+        const ids = channels.map(
+          channel => channel.id
+        );
 
         setSetting(
           message.guild.id,
@@ -485,12 +510,17 @@ module.exports = {
         );
       }
 
-      // Ping button — set with $welcomechat ping #channel,
-      // remove with $welcomechat ping off/remove.
+      // ------------------------------------------
+      // PING BUTTON
+      // ------------------------------------------
+
       if (mode === 'ping') {
         const sub = (args[1] || '').toLowerCase();
 
-        if (sub === 'off' || sub === 'remove') {
+        if (
+          sub === 'off' ||
+          sub === 'remove'
+        ) {
           setSetting(
             message.guild.id,
             'ping_channel_id',
@@ -523,6 +553,10 @@ module.exports = {
           `✅ Ping button set to ${channel}.`
         );
       }
+
+      // ------------------------------------------
+      // DISABLE CHAT WELCOME
+      // ------------------------------------------
 
       if (mode === 'off') {
         setSetting(
