@@ -180,7 +180,6 @@ prefixDB.prepare(`
 client.prefixDB = prefixDB;
 
 // ===== FAME DATABASE =====
-// Guild-based fame system: separate stats per server
 const fameDB = new Database(
   path.join(DATA_DIR, 'fame.sqlite')
 );
@@ -386,6 +385,32 @@ spyDB.prepare(`
 
 client.spyDB = spyDB;
 
+// ===== BOOSTER ROLES DATABASE =====
+// A separate database so the existing systems remain untouched.
+const boosterRolesDB = new Database(
+  path.join(DATA_DIR, 'boosterroles.sqlite')
+);
+
+boosterRolesDB.pragma('journal_mode = WAL');
+boosterRolesDB.pragma('synchronous = NORMAL');
+
+boosterRolesDB.prepare(`
+  CREATE TABLE IF NOT EXISTS booster_roles (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+      DEFAULT (strftime('%s','now') * 1000),
+
+    PRIMARY KEY (guild_id, user_id),
+    UNIQUE (guild_id, role_id)
+  )
+`).run();
+
+client.boosterRolesDB = boosterRolesDB;
+
+console.log('[Booster Roles] Database initialized');
+
 // ===== MEMORY MAPS =====
 client.afk = new Map();
 client.snipes = new Map();
@@ -409,9 +434,6 @@ client.getPrefix = (guildId) => {
 // ============================================================
 // TIKTOK VIDEO DOWNLOADER
 // Automatically detects TikTok links and uploads the video.
-//
-// Successful messages contain only the video attachment.
-// Uses Node.js built-in fetch; no additional npm package.
 // ============================================================
 
 const tiktokDownloadsInProgress = new Set();
@@ -420,8 +442,6 @@ function getTikTokUploadLimit(message) {
   const MiB = 1024 * 1024;
   const tier = Number(message.guild?.premiumTier || 0);
 
-  // Conservative limits to reduce Discord upload failures.
-  // Videos above the selected limit receive an error.
   return tier >= 2 ? 24 * MiB : 9 * MiB;
 }
 
@@ -435,9 +455,7 @@ async function readTikTokResponse(response, maxBytes) {
     contentLength > 0 &&
     contentLength > maxBytes
   ) {
-    if (response.body) {
-      await response.body.cancel().catch(() => {});
-    }
+    await response.body?.cancel().catch(() => {});
 
     const error = new Error(
       'TikTok video exceeds the upload limit.'
@@ -493,7 +511,6 @@ async function readTikTokResponse(response, maxBytes) {
 async function handleTikTokPreview(message) {
   if (!message.guild || !message.content) return;
 
-  // Find URLs in the message.
   const urls = message.content.match(
     /https?:\/\/[^\s<>]+/gi
   );
@@ -503,14 +520,12 @@ async function handleTikTokPreview(message) {
   let originalUrl = null;
 
   for (const rawUrl of urls) {
-    // Remove punctuation accidentally included after the URL.
     const cleanedUrl = rawUrl.replace(/[.,!?;:)\]]+$/, '');
 
     try {
       const parsed = new URL(cleanedUrl);
       const hostname = parsed.hostname.toLowerCase();
 
-      // Accept TikTok and its subdomains only.
       if (
         hostname !== 'tiktok.com' &&
         !hostname.endsWith('.tiktok.com')
@@ -518,7 +533,10 @@ async function handleTikTokPreview(message) {
         continue;
       }
 
-      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      if (
+        parsed.protocol !== 'https:' &&
+        parsed.protocol !== 'http:'
+      ) {
         continue;
       }
 
@@ -531,17 +549,12 @@ async function handleTikTokPreview(message) {
 
   if (!originalUrl) return;
 
-  // Identify duplicate downloads of the same video.
-  const lockKey = `${message.guild.id}:${originalUrl.pathname}`;
+  const lockKey =
+    `${message.guild.id}:${originalUrl.pathname}`;
 
-  if (tiktokDownloadsInProgress.has(lockKey)) {
-    return;
-  }
+  if (tiktokDownloadsInProgress.has(lockKey)) return;
 
-  // Avoid downloading too many videos simultaneously.
-  if (tiktokDownloadsInProgress.size >= 3) {
-    return;
-  }
+  if (tiktokDownloadsInProgress.size >= 3) return;
 
   tiktokDownloadsInProgress.add(lockKey);
 
@@ -552,19 +565,9 @@ async function handleTikTokPreview(message) {
     controller.abort();
   }, 30000);
 
-  // Avoid keeping the process alive just because of this timeout.
   timeout.unref?.();
 
   try {
-    // Convert the TikTok URL into TikTokFix direct-media mode.
-    //
-    // Example:
-    // www.tiktok.com/@user/video/123
-    // becomes:
-    // www.tiktokfix.com/@user/video/123?isDirect=true
-    //
-    // TikTokFix documents ?isDirect=true for raw media access.
-
     const directUrl = new URL(originalUrl.toString());
 
     directUrl.protocol = 'https:';
@@ -578,9 +581,8 @@ async function handleTikTokPreview(message) {
     directUrl.username = '';
     directUrl.password = '';
     directUrl.hash = '';
-
-    // Remove TikTok tracking parameters.
     directUrl.search = '';
+
     directUrl.searchParams.set('isDirect', 'true');
 
     console.log(
@@ -602,9 +604,7 @@ async function handleTikTokPreview(message) {
     });
 
     if (!response.ok) {
-      if (response.body) {
-        await response.body.cancel().catch(() => {});
-      }
+      await response.body?.cancel().catch(() => {});
 
       throw new Error(
         `TikTokFix returned HTTP ${response.status}.`
@@ -618,28 +618,22 @@ async function handleTikTokPreview(message) {
       .trim()
       .toLowerCase();
 
-    // Only accept MP4 or generic binary responses.
-    // Never upload an HTML preview page as a video.
     if (
       contentType !== 'video/mp4' &&
       contentType !== 'application/octet-stream'
     ) {
-      if (response.body) {
-        await response.body.cancel().catch(() => {});
-      }
+      await response.body?.cancel().catch(() => {});
 
       throw new Error(
         `Unsupported media type: ${contentType || 'unknown'}.`
       );
     }
 
-    // Download the video while enforcing the size limit.
     const videoBuffer = await readTikTokResponse(
       response,
       maxBytes
     );
 
-    // Validate the MP4 signature.
     if (
       videoBuffer.length < 12 ||
       videoBuffer.toString('ascii', 4, 8) !== 'ftyp'
@@ -653,21 +647,20 @@ async function handleTikTokPreview(message) {
       `[TikTok] Downloaded ${(videoBuffer.length / 1048576).toFixed(2)} MiB`
     );
 
-    // Send ONLY the video file.
-    // No reply text, URL, or embed description is included.
+    // Reply to the original message with only the video.
     await message.reply({
-  files: [
-    {
-      attachment: videoBuffer,
-      name: 'tiktok.mp4',
-    },
-  ],
-  allowedMentions: {
-    repliedUser: false,
-    parse: [],
-  },
-});
-    
+      files: [
+        {
+          attachment: videoBuffer,
+          name: 'tiktok.mp4',
+        },
+      ],
+
+      allowedMentions: {
+        repliedUser: false,
+        parse: [],
+      },
+    });
 
     console.log('[TikTok] Video uploaded successfully.');
 
@@ -681,18 +674,18 @@ async function handleTikTokPreview(message) {
       error.name === 'TimeoutError'
     ) {
       errorMessage =
-        '❌ TikTok download timed out. Please try again later.';
+        'TikTok download timed out. Please try again later.';
     } else if (error.code === 'TIKTOK_TOO_LARGE') {
       errorMessage =
-        '❌ This TikTok is too large for Vanessa to upload directly.';
+        'This TikTok is too large for Vanessa to upload directly.';
     } else {
       errorMessage =
-        '❌ Vanessa could not retrieve this TikTok video. It may be private, unavailable, or unsupported.';
+        'Vanessa could not retrieve this TikTok video. It may be private, unavailable, or unsupported.';
     }
 
-    // Only send text when conversion fails.
     await message.channel.send({
       content: errorMessage,
+
       allowedMentions: {
         parse: [],
       },
@@ -706,6 +699,179 @@ async function handleTikTokPreview(message) {
   } finally {
     clearTimeout(timeout);
     tiktokDownloadsInProgress.delete(lockKey);
+  }
+}
+
+// ============================================================
+// BOOSTER ROLE CLEANUP
+// Deletes a user's custom booster role and its database record.
+// Never touches Discord's built-in Server Booster role.
+// ============================================================
+
+async function deleteBoosterRoleForUser(
+  guild,
+  userId,
+  reason
+) {
+  const database = client.boosterRolesDB;
+
+  const record = database.prepare(`
+    SELECT role_id
+    FROM booster_roles
+    WHERE guild_id = ? AND user_id = ?
+  `).get(guild.id, userId);
+
+  if (!record) {
+    return false;
+  }
+
+  let role = guild.roles.cache.get(record.role_id);
+
+  if (!role) {
+    try {
+      role = await guild.roles.fetch(record.role_id);
+    } catch (error) {
+      // The role was deleted manually while the bot was offline.
+      if (
+        Number(error.code) === 10011 ||
+        Number(error.status) === 404
+      ) {
+        database.prepare(`
+          DELETE FROM booster_roles
+          WHERE guild_id = ? AND user_id = ?
+        `).run(guild.id, userId);
+
+        return true;
+      }
+
+      console.error(
+        '[Booster Roles] Could not fetch role during cleanup:',
+        error
+      );
+
+      // Keep the record so a later startup can retry.
+      return false;
+    }
+  }
+
+  if (!role) {
+    database.prepare(`
+      DELETE FROM booster_roles
+      WHERE guild_id = ? AND user_id = ?
+    `).run(guild.id, userId);
+
+    return true;
+  }
+
+  if (!role.editable) {
+    console.error(
+      `[Booster Roles] Cannot delete ${role.id} in ${guild.name}; check role hierarchy and Manage Roles permission.`
+    );
+
+    return false;
+  }
+
+  try {
+    await role.delete(
+      reason || 'User is no longer boosting this server'
+    );
+
+    database.prepare(`
+      DELETE FROM booster_roles
+      WHERE guild_id = ? AND user_id = ?
+    `).run(guild.id, userId);
+
+    console.log(
+      `[Booster Roles] Deleted role for user ${userId} in ${guild.name}`
+    );
+
+    return true;
+
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Failed to delete booster role:',
+      error
+    );
+
+    // Keep ownership data if the deletion failed.
+    return false;
+  }
+}
+
+// ============================================================
+// BOOSTER ROLE STARTUP RECONCILIATION
+//
+// Existing boosters are detected, but their roles are NOT
+// automatically created. They must run !br create themselves.
+//
+// If the bot was offline when someone stopped boosting, the
+// custom role is deleted when Vanessa comes back online.
+// ============================================================
+
+async function initializeBoosterRoleTracking() {
+  const database = client.boosterRolesDB;
+
+  for (const guild of client.guilds.cache.values()) {
+    let members;
+
+    try {
+      // Requires the privileged Server Members intent to be
+      // enabled in the Discord Developer Portal.
+      members = await guild.members.fetch();
+    } catch (error) {
+      console.error(
+        `[Booster Roles] Could not fetch members in ${guild.name}. Startup reconciliation skipped for this server:`,
+        error
+      );
+
+      // Do not risk deleting ownership records when member
+      // status could not be verified.
+      continue;
+    }
+
+    const activeBoosters = members.filter(
+      member => Boolean(member.premiumSince)
+    );
+
+    console.log(
+      `[Booster Roles] Detected ${activeBoosters.size} active boosters in ${guild.name}`
+    );
+
+    const records = database.prepare(`
+      SELECT user_id, role_id
+      FROM booster_roles
+      WHERE guild_id = ?
+    `).all(guild.id);
+
+    for (const record of records) {
+      const member = members.get(record.user_id);
+
+      // A record with no current member or no current boost
+      // must be cleaned up.
+      if (!member || !member.premiumSince) {
+        await deleteBoosterRoleForUser(
+          guild,
+          record.user_id,
+          'Removing booster role because the member no longer boosts the server'
+        );
+
+        continue;
+      }
+
+      // If the custom role was deleted while Vanessa was
+      // offline, remove the stale mapping. The booster can
+      // create a new role by running !br create.
+      if (!guild.roles.cache.has(record.role_id)) {
+        database.prepare(`
+          DELETE FROM booster_roles
+          WHERE guild_id = ? AND user_id = ?
+        `).run(guild.id, record.user_id);
+
+        console.log(
+          `[Booster Roles] Removed stale role record for ${record.user_id}`
+        );
+      }
+    }
   }
 }
 
@@ -734,6 +900,16 @@ client.once('ready', async () => {
   welcomeHandler(client);
 
   afkModule.restoreAfk(client);
+
+  // Reconcile booster roles before the bot is fully operational.
+  try {
+    await initializeBoosterRoleTracking();
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Startup reconciliation failed:',
+      error
+    );
+  }
 
   try {
     const guilds = automodDB.prepare(`
@@ -825,8 +1001,7 @@ client.once('ready', async () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  // TikTok conversion runs independently so downloads do not
-  // block the existing command, AFK, and tracking systems.
+  // Run TikTok conversion independently.
   handleTikTokPreview(message).catch(error => {
     console.error('[TikTok] Unexpected error:', error);
   });
@@ -851,6 +1026,69 @@ client.on('messageCreate', async (message) => {
       await watchwordCommand.checkWatchwords(client, message);
     }
   } catch (error) {}
+});
+
+// ============================================================
+// BOOST START / BOOST REMOVAL TRACKING
+// ============================================================
+
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  try {
+    const previouslyBoosting = Boolean(
+      oldMember.premiumSince
+    );
+
+    const currentlyBoosting = Boolean(
+      newMember.premiumSince
+    );
+
+    if (!previouslyBoosting && currentlyBoosting) {
+      console.log(
+        `[Booster Roles] ${newMember.user.tag} started boosting ${newMember.guild.name}`
+      );
+
+      // Do not create a role automatically.
+      // The member must run !br create.
+      return;
+    }
+
+    if (previouslyBoosting && !currentlyBoosting) {
+      console.log(
+        `[Booster Roles] ${newMember.user.tag} stopped boosting ${newMember.guild.name}`
+      );
+
+      await deleteBoosterRoleForUser(
+        newMember.guild,
+        newMember.id,
+        'Deleting the member’s personal booster role after their boost ended'
+      );
+    }
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Member update tracking failed:',
+      error
+    );
+  }
+});
+
+// ============================================================
+// MANUAL ROLE DELETION TRACKING
+// If someone deletes their personal role manually, remove its
+// mapping so they can use !br create again while boosting.
+// ============================================================
+
+client.on('roleDelete', (role) => {
+  try {
+    client.boosterRolesDB.prepare(`
+      DELETE FROM booster_roles
+      WHERE guild_id = ? AND role_id = ?
+    `).run(role.guild.id, role.id);
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Failed to clean deleted role record:',
+      error
+    );
+  }
 });
 
 // ===== BUTTON INTERACTIONS =====
@@ -1043,6 +1281,10 @@ function closeDatabases() {
     if (automodDB) automodDB.close();
     if (battleDB) battleDB.close();
     if (spyDB) spyDB.close();
+
+    if (boosterRolesDB) {
+      boosterRolesDB.close();
+    }
 
     if (client.msgTrackerDB) {
       client.msgTrackerDB.close();
