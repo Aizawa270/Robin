@@ -12,94 +12,7 @@ const {
   resolveMember,
 } = require('../../handlers/universalHelper');
 
-// ============================================================
-// PREFIX HELPERS
-// ============================================================
-
-function getPrefixCandidates(client, message) {
-  const prefixes = [];
-
-  function addPrefix(value) {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        addPrefix(item);
-      }
-
-      return;
-    }
-
-    if (typeof value === 'string' && value.length > 0) {
-      prefixes.push(value);
-    }
-  }
-
-  addPrefix(message.prefix);
-
-  try {
-    if (typeof client.getPrefix === 'function') {
-      addPrefix(client.getPrefix(message.guild?.id));
-    }
-  } catch (error) {
-    console.error('[Warn] Could not retrieve server prefix:', error);
-  }
-
-  addPrefix(client.prefix);
-  addPrefix(client.config?.prefix);
-
-  const uniquePrefixes = [...new Set(prefixes)];
-
-  if (uniquePrefixes.length === 0) {
-    uniquePrefixes.push('$');
-  }
-
-  return uniquePrefixes;
-}
-
-// ============================================================
-// EXACT COMMAND CHECK
-// ============================================================
-
-function isExactWarnCommand(client, message) {
-  const content = String(message.content || '').trim();
-
-  if (!content) {
-    return false;
-  }
-
-  const tokens = content.split(/\s+/);
-  const firstToken = tokens[0].toLowerCase();
-
-  // Support direct bot-mention invocation, if the dispatcher
-  // accepts it.
-  if (
-    /^<@!?\d+>$/.test(firstToken) &&
-    String(tokens[1] || '').toLowerCase() === 'warn'
-  ) {
-    return true;
-  }
-
-  const prefixes = getPrefixCandidates(client, message);
-
-  return prefixes.some(prefix => {
-    const invokedName = firstToken
-      .startsWith(prefix.toLowerCase())
-      ? firstToken.slice(prefix.length).toLowerCase()
-      : '';
-
-    // Exact name only. No "w" alias and no substring matching.
-    return invokedName === 'warn';
-  });
-}
-
-// ============================================================
-// EMBEDS
-// ============================================================
-
-function makeEmbed(
-  color,
-  title,
-  description
-) {
+function makeEmbed(color, title, description) {
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTimestamp();
@@ -110,10 +23,6 @@ function makeEmbed(
   return embed;
 }
 
-// ============================================================
-// ROLE HELPERS
-// ============================================================
-
 function getRolePos(member) {
   return member?.roles?.highest?.position ?? 0;
 }
@@ -122,45 +31,28 @@ function isOwner(guild, member) {
   return guild?.ownerId === member?.id;
 }
 
-// ============================================================
-// WARNING COUNT
-// ============================================================
-
-function getWarnCount(
-  client,
-  guildId,
-  userId
-) {
+function getWarnCount(client, guildId, userId) {
   try {
-    if (!client.automodDB) {
-      return 0;
-    }
+    if (!client.automodDB) return 0;
 
     const row = client.automodDB.prepare(`
       SELECT COUNT(*) AS count
       FROM automod_warns
-      WHERE guild_id = ?
-        AND user_id = ?
-    `).get(
-      String(guildId),
-      String(userId)
-    );
+      WHERE guild_id = ? AND user_id = ?
+    `).get(guildId, userId);
 
     return row?.count || 0;
-  } catch (error) {
-    console.error('[Warn Count] error:', error);
+  } catch (err) {
+    console.error('[Warn Count] error:', err);
     return 0;
   }
 }
 
-// ============================================================
-// COMMAND
-// ============================================================
-
 module.exports = {
   name: 'warn',
 
-  // No aliases property. "w" is deliberately not supported.
+  // No aliases property. "w" is not an alias.
+
   description: 'Warn a user.',
 
   category: 'mod',
@@ -168,21 +60,21 @@ module.exports = {
   usage: '$warn <@user|ID|username> <reason>',
 
   async execute(client, message, args) {
-    // Do not silently reject a valid command just because one
-    // prefix source disagrees with another.
-    if (!message.guild || !isExactWarnCommand(client, message)) {
-      return;
+    if (!message.guild) {
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'This command can only be used in servers.'
+          ),
+        ],
+      });
     }
 
     if (!message.member) {
       return;
     }
-
-    const prefix = getPrefixCandidates(client, message)[0];
-
-    // --------------------------------------------------------
-    // PERMISSIONS
-    // --------------------------------------------------------
 
     if (
       !message.member.permissions.has(
@@ -203,9 +95,10 @@ module.exports = {
       });
     }
 
-    // --------------------------------------------------------
-    // USAGE
-    // --------------------------------------------------------
+    const prefix =
+      message.prefix ||
+      client.getPrefix?.(message.guild.id) ||
+      '$';
 
     if (!args.length) {
       return message.reply({
@@ -215,26 +108,21 @@ module.exports = {
             'Warn Usage',
             `**Usage:**\n` +
             `\`${prefix}warn <@user|ID|username> <reason>\`\n\n` +
-            `**Examples:**\n` +
-            `\`${prefix}warn @User spam\`\n` +
-            `\`${prefix}warn 123456789012345678 spam\`\n` +
-            `\`${prefix}warn username spam\``
+            `**Example:**\n` +
+            `\`${prefix}warn @User spam\``
           ),
         ],
       });
     }
 
-    // --------------------------------------------------------
-    // RESOLVE TARGET
-    // --------------------------------------------------------
+    const targetInput = args.shift();
 
-    const targetInput = args[0];
+    const reason =
+      args.join(' ').trim() ||
+      'No reason provided';
 
-    const reason = args
-      .slice(1)
-      .join(' ')
-      .trim() || 'No reason provided';
-
+    // Supports the same mentions, IDs, and username resolution
+    // supported by your existing universalHelper.js.
     const targetUser = await resolveUser(
       client,
       message,
@@ -247,7 +135,7 @@ module.exports = {
           makeEmbed(
             '#f59e0b',
             'Warn Failed',
-            'User not found. Use a mention, ID, or username.'
+            'User not found. Use a mention, ID, or exact username.'
           ),
         ],
       });
@@ -295,10 +183,6 @@ module.exports = {
       });
     }
 
-    // --------------------------------------------------------
-    // ROLE AND PERMISSION CHECKS
-    // --------------------------------------------------------
-
     const botMember =
       message.guild.members.me ||
       await message.guild.members
@@ -330,7 +214,7 @@ module.exports = {
             makeEmbed(
               '#ef4444',
               'Warn Failed',
-              'You cannot warn someone with an equal or higher role.'
+              'You cannot warn someone with equal or higher role.'
             ),
           ],
         });
@@ -368,10 +252,6 @@ module.exports = {
       });
     }
 
-    // --------------------------------------------------------
-    // DATABASE CHECK
-    // --------------------------------------------------------
-
     if (!client.automodDB) {
       return message.reply({
         embeds: [
@@ -383,10 +263,6 @@ module.exports = {
         ],
       });
     }
-
-    // --------------------------------------------------------
-    // SAVE WARNING
-    // --------------------------------------------------------
 
     try {
       client.automodDB.prepare(`
@@ -436,16 +312,18 @@ module.exports = {
         reason
       );
 
-      // ------------------------------------------------------
-      // AUTOMATIC BAN AT FIVE WARNINGS
-      // ------------------------------------------------------
-
       if (warnCount >= 5) {
-        try {
-          await member.ban({
-            reason: 'Auto-ban: reached 5 warnings',
-          });
+        const banResult = await member.ban({
+          reason: 'Auto-ban: reached 5 warnings',
+        }).then(
+          () => true,
+          err => {
+            console.error('[Warn Auto-Ban Error]', err);
+            return false;
+          }
+        );
 
+        if (banResult) {
           return message.reply({
             embeds: [
               makeEmbed(
@@ -455,24 +333,18 @@ module.exports = {
               ),
             ],
           });
-        } catch (error) {
-          console.error('[Warn Auto-Ban Error]', error);
-
-          return message.reply({
-            embeds: [
-              makeEmbed(
-                '#ef4444',
-                'Warning Added',
-                `<@${targetUser.id}> received warning **${warnCount}/5**, but the automatic ban failed. Check the bot's Ban Members permission and role hierarchy.`
-              ),
-            ],
-          });
         }
-      }
 
-      // ------------------------------------------------------
-      // SUCCESS EMBED
-      // ------------------------------------------------------
+        return message.reply({
+          embeds: [
+            makeEmbed(
+              '#ef4444',
+              'Warning Added',
+              `<@${targetUser.id}> received warning **${warnCount}/5**, but the automatic ban failed. Check the bot's Ban Members permission and role hierarchy.`
+            ),
+          ],
+        });
+      }
 
       const embed = new EmbedBuilder()
         .setColor('#facc15')
@@ -509,8 +381,8 @@ module.exports = {
       return message.reply({
         embeds: [embed],
       });
-    } catch (error) {
-      console.error('[Warn Error]', error);
+    } catch (err) {
+      console.error('[Warn Error]', err);
 
       return message.reply({
         embeds: [
