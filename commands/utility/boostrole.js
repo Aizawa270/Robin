@@ -69,6 +69,249 @@ async function fetchRequesterMember(message) {
   });
 }
 
+// ============================================================
+// BOT OWNER / SERVER OWNER CHECK
+// ============================================================
+
+async function isBotOwner(client, userId) {
+  // Optional explicit owner ID.
+  if (
+    process.env.BOT_OWNER_ID &&
+    String(process.env.BOT_OWNER_ID) === String(userId)
+  ) {
+    return true;
+  }
+
+  try {
+    if (!client.application?.owner) {
+      await client.application?.fetch();
+    }
+
+    const owner = client.application?.owner;
+
+    if (!owner) {
+      return false;
+    }
+
+    // Normal application owner
+    if (owner.user) {
+      return owner.user.id === userId;
+    }
+
+    // Team owner
+    if (owner.id) {
+      return owner.id === userId;
+    }
+
+    return false;
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Bot owner check failed:',
+      error
+    );
+
+    return false;
+  }
+}
+
+async function isSetupAuthorized(client, message) {
+  if (!message.guild) {
+    return false;
+  }
+
+  // Server owner
+  if (message.guild.ownerId === message.author.id) {
+    return true;
+  }
+
+  // Bot owner
+  return isBotOwner(client, message.author.id);
+}
+
+// ============================================================
+// ROLE RESOLUTION
+// Supports:
+// @Role
+// Role ID
+// Exact role name
+// ============================================================
+
+function resolveRole(guild, input) {
+  if (!input) {
+    return null;
+  }
+
+  const cleaned = String(input)
+    .trim()
+    .replace(/^<@&(\d+)>$/, '$1');
+
+  // Role ID
+  if (/^\d{17,20}$/.test(cleaned)) {
+    return guild.roles.cache.get(cleaned) || null;
+  }
+
+  // Exact role name
+  return (
+    guild.roles.cache.find(
+      role => role.name.toLowerCase() === cleaned.toLowerCase()
+    ) || null
+  );
+}
+
+// ============================================================
+// BOOSTER ROLE CONFIGURATION
+// ============================================================
+
+function ensureBoosterSettingsTable(database) {
+  database.prepare(`
+    CREATE TABLE IF NOT EXISTS booster_role_settings (
+      guild_id TEXT PRIMARY KEY,
+      member_category_role_id TEXT,
+      staff_gate_role_id TEXT,
+      staff_category_role_id TEXT
+    )
+  `).run();
+}
+
+function getBoosterSettings(database, guildId) {
+  ensureBoosterSettingsTable(database);
+
+  return database.prepare(`
+    SELECT
+      guild_id,
+      member_category_role_id,
+      staff_gate_role_id,
+      staff_category_role_id
+    FROM booster_role_settings
+    WHERE guild_id = ?
+  `).get(guildId) || null;
+}
+
+function saveMemberCategory(database, guildId, roleId) {
+  ensureBoosterSettingsTable(database);
+
+  database.prepare(`
+    INSERT INTO booster_role_settings (
+      guild_id,
+      member_category_role_id
+    )
+    VALUES (?, ?)
+    ON CONFLICT(guild_id)
+    DO UPDATE SET
+      member_category_role_id = excluded.member_category_role_id
+  `).run(guildId, roleId);
+}
+
+function saveStaffSettings(
+  database,
+  guildId,
+  staffGateRoleId,
+  staffCategoryRoleId
+) {
+  ensureBoosterSettingsTable(database);
+
+  database.prepare(`
+    INSERT INTO booster_role_settings (
+      guild_id,
+      staff_gate_role_id,
+      staff_category_role_id
+    )
+    VALUES (?, ?, ?)
+    ON CONFLICT(guild_id)
+    DO UPDATE SET
+      staff_gate_role_id = excluded.staff_gate_role_id,
+      staff_category_role_id = excluded.staff_category_role_id
+  `).run(
+    guildId,
+    staffGateRoleId,
+    staffCategoryRoleId
+  );
+}
+
+// ============================================================
+// ROLE POSITIONING
+// ============================================================
+
+async function positionBoosterRole(
+  boosterRole,
+  categoryRole,
+  reason
+) {
+  if (!boosterRole || !categoryRole) {
+    throw new Error(
+      'Booster role or category role is missing.'
+    );
+  }
+
+  if (categoryRole.id === boosterRole.id) {
+    throw new Error(
+      'Booster role cannot be its own category.'
+    );
+  }
+
+  if (categoryRole.managed) {
+    throw new Error(
+      'The configured category role is managed by Discord.'
+    );
+  }
+
+  // The booster role must be immediately below the category.
+  const targetPosition = categoryRole.position - 1;
+
+  if (targetPosition < 1) {
+    throw new Error(
+      'The category role must be above @everyone.'
+    );
+  }
+
+  await boosterRole.setPosition(
+    targetPosition,
+    reason
+  );
+}
+
+// ============================================================
+// BOT HIERARCHY CHECK
+// ============================================================
+
+function canBotManageCategory(guild, categoryRole) {
+  const botMember = guild.members.me;
+
+  if (!botMember) {
+    return false;
+  }
+
+  if (!categoryRole) {
+    return false;
+  }
+
+  return (
+    !categoryRole.managed &&
+    botMember.roles.highest.position >
+      categoryRole.position
+  );
+}
+
+function canBotCreateUnderCategory(
+  guild,
+  categoryRole
+) {
+  const botMember = guild.members.me;
+
+  if (!botMember || !categoryRole) {
+    return false;
+  }
+
+  return (
+    botMember.roles.highest.position >
+      categoryRole.position
+  );
+}
+
+// ============================================================
+// DATABASE OWNERSHIP
+// ============================================================
+
 function getRoleRecord(database, guildId, userId) {
   return database
     .prepare(`
@@ -79,7 +322,11 @@ function getRoleRecord(database, guildId, userId) {
     .get(guildId, userId);
 }
 
-function deleteRoleRecord(database, guildId, userId) {
+function deleteRoleRecord(
+  database,
+  guildId,
+  userId
+) {
   database.prepare(`
     DELETE FROM booster_roles
     WHERE guild_id = ? AND user_id = ?
@@ -101,11 +348,15 @@ async function getOwnedBoosterRole(
     return null;
   }
 
-  let role = guild.roles.cache.get(record.role_id);
+  let role = guild.roles.cache.get(
+    record.role_id
+  );
 
   if (!role) {
     try {
-      role = await guild.roles.fetch(record.role_id);
+      role = await guild.roles.fetch(
+        record.role_id
+      );
     } catch (error) {
       if (
         Number(error.code) === 10011 ||
@@ -137,6 +388,10 @@ async function getOwnedBoosterRole(
   return role;
 }
 
+// ============================================================
+// HEX
+// ============================================================
+
 function validateHex(input) {
   const normalized = String(input || '')
     .trim()
@@ -149,6 +404,10 @@ function validateHex(input) {
 
   return `#${normalized}`;
 }
+
+// ============================================================
+// EMOJI
+// ============================================================
 
 function parseCustomEmoji(input) {
   return input.match(
@@ -164,7 +423,9 @@ function attachmentMimeType(attachment) {
       .toLowerCase();
   }
 
-  const name = (attachment.name || '').toLowerCase();
+  const name = (
+    attachment.name || ''
+  ).toLowerCase();
 
   if (name.endsWith('.png')) return 'image/png';
   if (name.endsWith('.jpg')) return 'image/jpeg';
@@ -174,7 +435,14 @@ function attachmentMimeType(attachment) {
   return null;
 }
 
-async function requireEditableRole(message, role) {
+// ============================================================
+// EDITABLE ROLE
+// ============================================================
+
+async function requireEditableRole(
+  message,
+  role
+) {
   if (!hasManageRoles(message.guild)) {
     await sendEmbed(
       message,
@@ -199,6 +467,10 @@ async function requireEditableRole(message, role) {
 
   return true;
 }
+
+// ============================================================
+// HELP
+// ============================================================
 
 function buildHelpDescription(prefix) {
   return [
@@ -225,19 +497,31 @@ function buildHelpDescription(prefix) {
 
     `**${prefix}boostrole delete**`,
     'Deletes your personal booster role.',
+
+    `**${prefix}br setup <role/id>**`,
+    'Sets the member booster-role category.',
+
+    `**${prefix}br staffsetup <staff role> <category role>**`,
+    'Sets up the staff booster-role category.',
   ].join('\n\n');
 }
+
+// ============================================================
+// MODULE
+// ============================================================
 
 module.exports = {
   name: 'boostrole',
 
   aliases: ['br'],
 
-  description: 'Manage your personal server booster role.',
+  description:
+    'Manage your personal server booster role.',
 
   category: 'utility',
 
-  usage: 'boostrole <create|rename|hex|icon|delete>',
+  usage:
+    'boostrole <create|rename|hex|icon|delete|setup|staffsetup>',
 
   async execute(client, message, args) {
     if (!message.guild) {
@@ -264,16 +548,324 @@ module.exports = {
       );
     }
 
+    ensureBoosterSettingsTable(database);
+
     const prefix =
       message.prefix ||
       client.getPrefix(message.guild.id) ||
       '$';
 
-    // Verify current boosting status.
+    const subcommand = (
+      args[0] || ''
+    ).toLowerCase();
+
+    // ========================================================
+    // SETUP
+    // ========================================================
+
+    if (subcommand === 'setup') {
+      const authorized =
+        await isSetupAuthorized(
+          client,
+          message
+        );
+
+      if (!authorized) {
+        return sendEmbed(
+          message,
+          'Access Denied',
+          'Only the server owner or Vanessa\'s bot owner can use this command.',
+          'error'
+        );
+      }
+
+      if (!hasManageRoles(message.guild)) {
+        return sendEmbed(
+          message,
+          'Insufficient Permissions',
+          'Vanessa needs the Manage Roles permission to configure booster roles.',
+          'error'
+        );
+      }
+
+      const categoryInput = args
+        .slice(1)
+        .join(' ')
+        .trim();
+
+      if (!categoryInput) {
+        return sendEmbed(
+          message,
+          'Missing Role',
+          [
+            'Provide the role that booster roles should be placed under.',
+            '',
+            `**Example:** \`${prefix}br setup @Custom Roles\``,
+            `**Or:** \`${prefix}br setup ROLE_ID\``,
+          ].join('\n'),
+          'error'
+        );
+      }
+
+      const categoryRole =
+        resolveRole(
+          message.guild,
+          categoryInput
+        );
+
+      if (!categoryRole) {
+        return sendEmbed(
+          message,
+          'Role Not Found',
+          'I could not find that role. Use a role mention, role ID, or the exact role name.',
+          'error'
+        );
+      }
+
+      if (categoryRole.managed) {
+        return sendEmbed(
+          message,
+          'Invalid Category Role',
+          'That role is managed by Discord and cannot be used as a booster-role category.',
+          'error'
+        );
+      }
+
+      if (
+        !canBotManageCategory(
+          message.guild,
+          categoryRole
+        )
+      ) {
+        return sendEmbed(
+          message,
+          'Role Hierarchy Error',
+          [
+            `Vanessa's highest role must be **above** ${categoryRole}.`,
+            '',
+            'Move Vanessa\'s bot role above the category role, then run setup again.',
+          ].join('\n'),
+          'error'
+        );
+      }
+
+      saveMemberCategory(
+        database,
+        message.guild.id,
+        categoryRole.id
+      );
+
+      return sendEmbed(
+        message,
+        'Member Booster Roles Configured',
+        [
+          `**Category:** ${categoryRole}`,
+          '',
+          'New member booster roles will automatically be placed immediately below this role.',
+          '',
+          'Your level roles and staff roles will not be used as placement targets.',
+        ].join('\n'),
+        'success'
+      );
+    }
+
+    // ========================================================
+    // STAFF SETUP
+    // ========================================================
+
+    if (subcommand === 'staffsetup') {
+      const authorized =
+        await isSetupAuthorized(
+          client,
+          message
+        );
+
+      if (!authorized) {
+        return sendEmbed(
+          message,
+          'Access Denied',
+          'Only the server owner or Vanessa\'s bot owner can use this command.',
+          'error'
+        );
+      }
+
+      if (!hasManageRoles(message.guild)) {
+        return sendEmbed(
+          message,
+          'Insufficient Permissions',
+          'Vanessa needs the Manage Roles permission to configure booster roles.',
+          'error'
+        );
+      }
+
+      if (args.length < 3) {
+        return sendEmbed(
+          message,
+          'Missing Roles',
+          [
+            'You need to provide **two roles**:',
+            '',
+            '1. The staff role that identifies someone as staff.',
+            '2. The staff booster-role category.',
+            '',
+            `**Example:** \`${prefix}br staffsetup @Staff @Staff Booster Roles\``,
+            `**ID version:** \`${prefix}br staffsetup STAFF_ROLE_ID CATEGORY_ROLE_ID\``,
+          ].join('\n'),
+          'error'
+        );
+      }
+
+      /*
+       * Because role names can contain spaces, the cleanest
+       * universal syntax is:
+       *
+       * br staffsetup @Staff @Staff Booster Roles
+       *
+       * Mentions are converted to IDs before resolution.
+       *
+       * We therefore first look for role mentions / IDs.
+       */
+
+      const mentionedRoles =
+        message.mentions.roles;
+
+      let staffGateRole = null;
+      let staffCategoryRole = null;
+
+      if (mentionedRoles.size >= 2) {
+        const roles = [
+          ...mentionedRoles.values(),
+        ];
+
+        staffGateRole = roles[0];
+        staffCategoryRole = roles[1];
+      } else if (args.length >= 3) {
+        /*
+         * ID-based syntax:
+         * br staffsetup STAFF_ROLE_ID CATEGORY_ROLE_ID
+         */
+
+        staffGateRole =
+          resolveRole(
+            message.guild,
+            args[1]
+          );
+
+        staffCategoryRole =
+          resolveRole(
+            message.guild,
+            args[2]
+          );
+      }
+
+      if (
+        !staffGateRole ||
+        !staffCategoryRole
+      ) {
+        return sendEmbed(
+          message,
+          'Invalid Staff Roles',
+          [
+            'Vanessa could not identify both roles.',
+            '',
+            'Use **two role mentions** for the safest setup:',
+            `\`${prefix}br staffsetup @Staff @Staff-Booster-Category\``,
+            '',
+            'Or use two role IDs.',
+          ].join('\n'),
+          'error'
+        );
+      }
+
+      if (
+        staffGateRole.id ===
+        staffCategoryRole.id
+      ) {
+        return sendEmbed(
+          message,
+          'Invalid Staff Setup',
+          'The staff identification role and staff booster category cannot be the same role.',
+          'error'
+        );
+      }
+
+      if (
+        staffCategoryRole.managed
+      ) {
+        return sendEmbed(
+          message,
+          'Invalid Category Role',
+          'The staff booster category is managed by Discord and cannot be used.',
+          'error'
+        );
+      }
+
+      if (
+        !canBotManageCategory(
+          message.guild,
+          staffCategoryRole
+        )
+      ) {
+        return sendEmbed(
+          message,
+          'Role Hierarchy Error',
+          [
+            `Vanessa's highest role must be **above** ${staffCategoryRole}.`,
+            '',
+            'Move Vanessa\'s bot role above the staff booster category and run setup again.',
+          ].join('\n'),
+          'error'
+        );
+      }
+
+      saveStaffSettings(
+        database,
+        message.guild.id,
+        staffGateRole.id,
+        staffCategoryRole.id
+      );
+
+      return sendEmbed(
+        message,
+        'Staff Booster Roles Configured',
+        [
+          `**Staff identification role:** ${staffGateRole}`,
+          `**Staff booster category:** ${staffCategoryRole}`,
+          '',
+          `Anyone with ${staffGateRole} who boosts will have their personal booster role created under ${staffCategoryRole}.`,
+          '',
+          'Staff booster roles will therefore sit above the normal staff roles below the category.',
+        ].join('\n'),
+        'success'
+      );
+    }
+
+    // ========================================================
+    // HELP
+    // ========================================================
+
+    if (
+      !subcommand ||
+      subcommand === 'help'
+    ) {
+      return sendEmbed(
+        message,
+        'Booster Role Commands',
+        buildHelpDescription(prefix)
+      );
+    }
+
+    // ========================================================
+    // FROM HERE DOWN, USER MUST BE A BOOSTER
+    // ========================================================
+
     let member;
 
     try {
-      member = await fetchRequesterMember(message);
+      member =
+        await fetchRequesterMember(
+          message
+        );
     } catch (error) {
       console.error(
         '[Booster Roles] Could not fetch member:',
@@ -306,33 +898,24 @@ module.exports = {
       );
     }
 
-    const subcommand = (
-      args[0] || ''
-    ).toLowerCase();
-
-    // ==========================================
-    // HELP
-    // ==========================================
-
-    if (!subcommand || subcommand === 'help') {
-      return sendEmbed(
-        message,
-        'Booster Role Commands',
-        buildHelpDescription(prefix)
-      );
-    }
-
-    // ==========================================
+    // ========================================================
     // CREATE
-    // ==========================================
+    // ========================================================
 
     if (subcommand === 'create') {
       try {
-        const existingRole = await getOwnedBoosterRole(
-          message.guild,
-          database,
-          message.author.id
-        );
+        const settings =
+          getBoosterSettings(
+            database,
+            message.guild.id
+          );
+
+        const existingRole =
+          await getOwnedBoosterRole(
+            message.guild,
+            database,
+            message.author.id
+          );
 
         if (existingRole) {
           if (!existingRole.editable) {
@@ -344,7 +927,11 @@ module.exports = {
             );
           }
 
-          if (!member.roles.cache.has(existingRole.id)) {
+          if (
+            !member.roles.cache.has(
+              existingRole.id
+            )
+          ) {
             await member.roles.add(
               existingRole,
               'Restoring the member’s personal booster role'
@@ -365,23 +952,112 @@ module.exports = {
           );
         }
 
-        const initialName = message.author.username.slice(
-          0,
-          100
-        );
+        // ====================================================
+        // DETERMINE CATEGORY
+        // ====================================================
+
+        let categoryRole = null;
+        let categoryType = 'member';
+
+        // Staff takes priority.
+        if (
+          settings?.staff_gate_role_id &&
+          settings?.staff_category_role_id &&
+          member.roles.cache.has(
+            settings.staff_gate_role_id
+          )
+        ) {
+          categoryRole =
+            message.guild.roles.cache.get(
+              settings.staff_category_role_id
+            );
+
+          categoryType = 'staff';
+        }
+
+        // Normal member category.
+        if (!categoryRole) {
+          if (
+            settings?.member_category_role_id
+          ) {
+            categoryRole =
+              message.guild.roles.cache.get(
+                settings.member_category_role_id
+              );
+          }
+        }
+
+        if (!categoryRole) {
+          return sendEmbed(
+            message,
+            'Booster Role System Not Configured',
+            [
+              'This server has not configured a booster-role category yet.',
+              '',
+              `A server owner or Vanessa's bot owner must run:`,
+              `\`${prefix}br setup @CategoryRole\``,
+            ].join('\n'),
+            'error'
+          );
+        }
+
+        if (
+          categoryRole.managed
+        ) {
+          return sendEmbed(
+            message,
+            'Invalid Booster Category',
+            'The configured booster category role is managed by Discord and cannot be used.',
+            'error'
+          );
+        }
+
+        if (
+          !canBotCreateUnderCategory(
+            message.guild,
+            categoryRole
+          )
+        ) {
+          return sendEmbed(
+            message,
+            'Role Hierarchy Error',
+            [
+              `Vanessa's highest role must be above ${categoryRole}.`,
+              '',
+              'The bot cannot create and position a role underneath a role that is above the bot.',
+            ].join('\n'),
+            'error'
+          );
+        }
+
+        const initialName =
+          message.author.username.slice(
+            0,
+            100
+          );
 
         let createdRole;
 
         try {
-          createdRole = await message.guild.roles.create({
-            name: initialName,
-            permissions: [],
-            mentionable: false,
-            hoist: false,
+          createdRole =
+            await message.guild.roles.create({
+              name: initialName,
+              permissions: [],
+              mentionable: false,
+              hoist: false,
 
-            reason:
-              `Personal booster role for ${message.author.tag} (${message.author.id})`,
-          });
+              reason:
+                `Personal ${categoryType} booster role for ${message.author.tag} (${message.author.id})`,
+            });
+
+          // IMPORTANT:
+          // Immediately move the newly-created role directly
+          // below the selected category.
+          await positionBoosterRole(
+            createdRole,
+            categoryRole,
+            `Positioning ${categoryType} booster role under its configured category`
+          );
 
           await member.roles.add(
             createdRole,
@@ -419,7 +1095,13 @@ module.exports = {
         return sendEmbed(
           message,
           'Booster Role Created',
-          `Your personal booster role has been created successfully.\n\n**Role:** ${createdRole.name}`,
+          [
+            'Your personal booster role has been created successfully.',
+            '',
+            `**Role:** ${createdRole.name}`,
+            `**Category:** ${categoryRole.name}`,
+            `**Type:** ${categoryType === 'staff' ? 'Staff Booster' : 'Member Booster'}`,
+          ].join('\n'),
           'success'
         );
 
@@ -438,18 +1120,19 @@ module.exports = {
       }
     }
 
-    // ==========================================
-    // FIND THE USER'S OWN ROLE
-    // ==========================================
+    // ========================================================
+    // FIND USER'S OWN ROLE
+    // ========================================================
 
     let role;
 
     try {
-      role = await getOwnedBoosterRole(
-        message.guild,
-        database,
-        message.author.id
-      );
+      role =
+        await getOwnedBoosterRole(
+          message.guild,
+          database,
+          message.author.id
+        );
     } catch (error) {
       console.error(
         '[Booster Roles] Role lookup failed:',
@@ -468,18 +1151,27 @@ module.exports = {
       return sendEmbed(
         message,
         'Booster Role Not Found',
-        `You do not have a personal booster role yet.\n\nUse \`${prefix}br create\` to create one.`,
+        [
+          'You do not have a personal booster role yet.',
+          '',
+          `Use \`${prefix}br create\` to create one.`,
+        ].join('\n'),
         'error'
       );
     }
 
-    if (!(await requireEditableRole(message, role))) {
+    if (
+      !(await requireEditableRole(
+        message,
+        role
+      ))
+    ) {
       return;
     }
 
-    // ==========================================
+    // ========================================================
     // RENAME
-    // ==========================================
+    // ========================================================
 
     if (subcommand === 'rename') {
       const newName = args
@@ -532,12 +1224,13 @@ module.exports = {
       }
     }
 
-    // ==========================================
-    // HEX COLOR / GRADIENT
-    // ==========================================
+    // ========================================================
+    // HEX / GRADIENT
+    // ========================================================
 
     if (subcommand === 'hex') {
-      const suppliedColors = args.slice(1);
+      const suppliedColors =
+        args.slice(1);
 
       if (
         suppliedColors.length < 1 ||
@@ -556,9 +1249,14 @@ module.exports = {
         );
       }
 
-      const colors = suppliedColors.map(validateHex);
+      const colors =
+        suppliedColors.map(validateHex);
 
-      if (colors.some(color => !color)) {
+      if (
+        colors.some(
+          color => !color
+        )
+      ) {
         return sendEmbed(
           message,
           'Invalid Color',
@@ -567,7 +1265,8 @@ module.exports = {
         );
       }
 
-      const isGradient = colors.length === 2;
+      const isGradient =
+        colors.length === 2;
 
       if (
         isGradient &&
@@ -630,23 +1329,27 @@ module.exports = {
       }
     }
 
-    // ==========================================
-    // ROLE ICON
-    // ==========================================
+    // ========================================================
+    // ICON
+    // ========================================================
 
     if (subcommand === 'icon') {
-      const attachment = message.attachments.first();
+      const attachment =
+        message.attachments.first();
 
-      const iconInput = args
-        .slice(1)
-        .join(' ')
-        .trim();
+      const iconInput =
+        args
+          .slice(1)
+          .join(' ')
+          .trim();
 
-      // REMOVE ICON
+      // REMOVE
 
       if (
-        iconInput.toLowerCase() === 'remove' ||
-        iconInput.toLowerCase() === 'off'
+        iconInput.toLowerCase() ===
+          'remove' ||
+        iconInput.toLowerCase() ===
+          'off'
       ) {
         try {
           await role.setIcon(
@@ -681,10 +1384,13 @@ module.exports = {
         }
       }
 
-      // IMAGE ATTACHMENT
+      // IMAGE
 
       if (attachment) {
-        const mimeType = attachmentMimeType(attachment);
+        const mimeType =
+          attachmentMimeType(
+            attachment
+          );
 
         if (
           ![
@@ -734,7 +1440,7 @@ module.exports = {
         }
       }
 
-      // EMOJI INPUT
+      // NO INPUT
 
       if (!iconInput) {
         return sendEmbed(
@@ -751,21 +1457,29 @@ module.exports = {
             'Attach an image to the command.',
             '',
             `**Remove icon:** \`${prefix}br icon remove\``,
-          ].join('\n'),
-          'info'
+          ].join('\n')
         );
       }
 
       try {
-        const customEmoji = parseCustomEmoji(iconInput);
+        const customEmoji =
+          parseCustomEmoji(
+            iconInput
+          );
 
         // CUSTOM EMOJI
 
         if (customEmoji) {
-          const animated = customEmoji[1] === 'a';
-          const emojiId = customEmoji[3];
+          const animated =
+            customEmoji[1] === 'a';
 
-          const extension = animated ? 'gif' : 'png';
+          const emojiId =
+            customEmoji[3];
+
+          const extension =
+            animated
+              ? 'gif'
+              : 'png';
 
           const emojiUrl =
             `https://cdn.discordapp.com/emojis/${emojiId}.${extension}?size=128&quality=lossless`;
@@ -788,7 +1502,7 @@ module.exports = {
           );
         }
 
-        // DEFAULT UNICODE EMOJI
+        // UNICODE
 
         await role.setIcon(
           null,
@@ -822,9 +1536,9 @@ module.exports = {
       }
     }
 
-    // ==========================================
+    // ========================================================
     // DELETE
-    // ==========================================
+    // ========================================================
 
     if (subcommand === 'delete') {
       try {
@@ -860,12 +1574,18 @@ module.exports = {
       }
     }
 
-    // UNKNOWN SUBCOMMAND
+    // ========================================================
+    // UNKNOWN
+    // ========================================================
 
     return sendEmbed(
       message,
       'Unknown Booster Role Command',
-      `That subcommand does not exist.\n\n${buildHelpDescription(prefix)}`,
+      [
+        'That subcommand does not exist.',
+        '',
+        buildHelpDescription(prefix),
+      ].join('\n'),
       'error'
     );
   },
