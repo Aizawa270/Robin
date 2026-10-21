@@ -407,9 +407,36 @@ boosterRolesDB.prepare(`
   )
 `).run();
 
+// ============================================================
+// BOOSTER ROLE SETTINGS
+//
+// member_category_role_id
+//   -> Normal/member booster roles go immediately below this.
+//
+// staff_gate_role_id
+//   -> Having this role identifies someone as staff.
+//
+// staff_category_role_id
+//   -> Staff booster roles go immediately below this.
+//
+// Each guild has its own configuration, making the system
+// completely universal across different servers.
+// ============================================================
+
+boosterRolesDB.prepare(`
+  CREATE TABLE IF NOT EXISTS booster_role_settings (
+    guild_id TEXT PRIMARY KEY,
+    member_category_role_id TEXT,
+    staff_gate_role_id TEXT,
+    staff_category_role_id TEXT
+  )
+`).run();
+
 client.boosterRolesDB = boosterRolesDB;
 
-console.log('[Booster Roles] Database initialized');
+console.log(
+  '[Booster Roles] Database initialized'
+);
 
 // ===== MEMORY MAPS =====
 client.afk = new Map();
@@ -713,25 +740,35 @@ async function deleteBoosterRoleForUser(
   userId,
   reason
 ) {
-  const database = client.boosterRolesDB;
+  const database =
+    client.boosterRolesDB;
 
-  const record = database.prepare(`
-    SELECT role_id
-    FROM booster_roles
-    WHERE guild_id = ? AND user_id = ?
-  `).get(guild.id, userId);
+  const record =
+    database.prepare(`
+      SELECT role_id
+      FROM booster_roles
+      WHERE guild_id = ? AND user_id = ?
+    `).get(
+      guild.id,
+      userId
+    );
 
   if (!record) {
     return false;
   }
 
-  let role = guild.roles.cache.get(record.role_id);
+  let role =
+    guild.roles.cache.get(
+      record.role_id
+    );
 
   if (!role) {
     try {
-      role = await guild.roles.fetch(record.role_id);
+      role =
+        await guild.roles.fetch(
+          record.role_id
+        );
     } catch (error) {
-      // The role was deleted manually while the bot was offline.
       if (
         Number(error.code) === 10011 ||
         Number(error.status) === 404
@@ -739,7 +776,10 @@ async function deleteBoosterRoleForUser(
         database.prepare(`
           DELETE FROM booster_roles
           WHERE guild_id = ? AND user_id = ?
-        `).run(guild.id, userId);
+        `).run(
+          guild.id,
+          userId
+        );
 
         return true;
       }
@@ -749,7 +789,6 @@ async function deleteBoosterRoleForUser(
         error
       );
 
-      // Keep the record so a later startup can retry.
       return false;
     }
   }
@@ -758,7 +797,10 @@ async function deleteBoosterRoleForUser(
     database.prepare(`
       DELETE FROM booster_roles
       WHERE guild_id = ? AND user_id = ?
-    `).run(guild.id, userId);
+    `).run(
+      guild.id,
+      userId
+    );
 
     return true;
   }
@@ -773,13 +815,17 @@ async function deleteBoosterRoleForUser(
 
   try {
     await role.delete(
-      reason || 'User is no longer boosting this server'
+      reason ||
+        'User is no longer boosting this server'
     );
 
     database.prepare(`
       DELETE FROM booster_roles
       WHERE guild_id = ? AND user_id = ?
-    `).run(guild.id, userId);
+    `).run(
+      guild.id,
+      userId
+    );
 
     console.log(
       `[Booster Roles] Deleted role for user ${userId} in ${guild.name}`
@@ -793,7 +839,6 @@ async function deleteBoosterRoleForUser(
       error
     );
 
-    // Keep ownership data if the deletion failed.
     return false;
   }
 }
