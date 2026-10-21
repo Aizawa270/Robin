@@ -180,6 +180,7 @@ prefixDB.prepare(`
 client.prefixDB = prefixDB;
 
 // ===== FAME DATABASE =====
+// Guild-based fame system: separate stats per server
 const fameDB = new Database(
   path.join(DATA_DIR, 'fame.sqlite')
 );
@@ -406,13 +407,90 @@ client.getPrefix = (guildId) => {
 };
 
 // ============================================================
-// TIKTOK PREVIEW HANDLER
-// Automatically converts TikTok links into TikTokFix links.
-// No npm package or additional handler file is needed.
+// TIKTOK VIDEO DOWNLOADER
+// Automatically detects TikTok links and uploads the video.
+//
+// Successful messages contain only the video attachment.
+// Uses Node.js built-in fetch; no additional npm package.
 // ============================================================
 
+const tiktokDownloadsInProgress = new Set();
+
+function getTikTokUploadLimit(message) {
+  const MiB = 1024 * 1024;
+  const tier = Number(message.guild?.premiumTier || 0);
+
+  // Conservative limits to reduce Discord upload failures.
+  // Videos above the selected limit receive an error.
+  return tier >= 2 ? 24 * MiB : 9 * MiB;
+}
+
+async function readTikTokResponse(response, maxBytes) {
+  const contentLength = Number(
+    response.headers.get('content-length')
+  );
+
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > 0 &&
+    contentLength > maxBytes
+  ) {
+    if (response.body) {
+      await response.body.cancel().catch(() => {});
+    }
+
+    const error = new Error(
+      'TikTok video exceeds the upload limit.'
+    );
+
+    error.code = 'TIKTOK_TOO_LARGE';
+
+    throw error;
+  }
+
+  if (!response.body) {
+    throw new Error('The video response contained no data.');
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) break;
+
+      totalBytes += value.byteLength;
+
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => {});
+
+        const error = new Error(
+          'TikTok video exceeds the upload limit.'
+        );
+
+        error.code = 'TIKTOK_TOO_LARGE';
+
+        throw error;
+      }
+
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  }
+
+  if (totalBytes === 0) {
+    throw new Error('The downloaded video was empty.');
+  }
+
+  return Buffer.concat(chunks, totalBytes);
+}
+
 async function handleTikTokPreview(message) {
-  // Only process messages in servers.
   if (!message.guild || !message.content) return;
 
   // Find URLs in the message.
@@ -422,55 +500,210 @@ async function handleTikTokPreview(message) {
 
   if (!urls) return;
 
+  let originalUrl = null;
+
   for (const rawUrl of urls) {
-    // Remove punctuation that may have been added after the URL.
+    // Remove punctuation accidentally included after the URL.
     const cleanedUrl = rawUrl.replace(/[.,!?;:)\]]+$/, '');
 
-    let url;
-
     try {
-      url = new URL(cleanedUrl);
+      const parsed = new URL(cleanedUrl);
+      const hostname = parsed.hostname.toLowerCase();
+
+      // Accept TikTok and its subdomains only.
+      if (
+        hostname !== 'tiktok.com' &&
+        !hostname.endsWith('.tiktok.com')
+      ) {
+        continue;
+      }
+
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        continue;
+      }
+
+      originalUrl = parsed;
+      break;
     } catch {
       continue;
     }
+  }
 
-    // Only allow TikTok domains and their subdomains.
-    if (!/(^|\.)tiktok\.com$/i.test(url.hostname)) {
-      continue;
-    }
+  if (!originalUrl) return;
 
-    // Keep the subdomain and path.
-    // Examples:
-    // www.tiktok.com -> www.tiktokfix.com
-    // vm.tiktok.com  -> vm.tiktokfix.com
-    // tiktok.com     -> tiktokfix.com
+  // Identify duplicate downloads of the same video.
+  const lockKey = `${message.guild.id}:${originalUrl.pathname}`;
 
-    url.hostname = url.hostname.replace(
+  if (tiktokDownloadsInProgress.has(lockKey)) {
+    return;
+  }
+
+  // Avoid downloading too many videos simultaneously.
+  if (tiktokDownloadsInProgress.size >= 3) {
+    return;
+  }
+
+  tiktokDownloadsInProgress.add(lockKey);
+
+  const maxBytes = getTikTokUploadLimit(message);
+  const controller = new AbortController();
+
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, 30000);
+
+  // Avoid keeping the process alive just because of this timeout.
+  timeout.unref?.();
+
+  try {
+    // Convert the TikTok URL into TikTokFix direct-media mode.
+    //
+    // Example:
+    // www.tiktok.com/@user/video/123
+    // becomes:
+    // www.tiktokfix.com/@user/video/123?isDirect=true
+    //
+    // TikTokFix documents ?isDirect=true for raw media access.
+
+    const directUrl = new URL(originalUrl.toString());
+
+    directUrl.protocol = 'https:';
+
+    directUrl.hostname = directUrl.hostname.replace(
       /tiktok\.com$/i,
       'tiktokfix.com'
     );
 
-    try {
-      await message.reply({
-        content: url.toString(),
+    directUrl.port = '';
+    directUrl.username = '';
+    directUrl.password = '';
+    directUrl.hash = '';
 
-        allowedMentions: {
-          repliedUser: false,
-        },
-      });
+    // Remove TikTok tracking parameters.
+    directUrl.search = '';
+    directUrl.searchParams.set('isDirect', 'true');
 
-      console.log(
-        `[TikTok Preview] Converted link from ${message.author.tag}`
-      );
-    } catch (error) {
-      console.error(
-        '[TikTok Preview] Failed to send converted link:',
-        error
+    console.log(
+      `[TikTok] Downloading video from ${message.author.tag}`
+    );
+
+    const response = await fetch(directUrl.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (compatible; VanessaDiscordBot/1.0)',
+
+        Accept:
+          'video/mp4, video/*, application/octet-stream, */*',
+      },
+    });
+
+    if (!response.ok) {
+      if (response.body) {
+        await response.body.cancel().catch(() => {});
+      }
+
+      throw new Error(
+        `TikTokFix returned HTTP ${response.status}.`
       );
     }
 
-    // Process only one TikTok URL per message.
-    return;
+    const contentType = (
+      response.headers.get('content-type') || ''
+    )
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+
+    // Only accept MP4 or generic binary responses.
+    // Never upload an HTML preview page as a video.
+    if (
+      contentType !== 'video/mp4' &&
+      contentType !== 'application/octet-stream'
+    ) {
+      if (response.body) {
+        await response.body.cancel().catch(() => {});
+      }
+
+      throw new Error(
+        `Unsupported media type: ${contentType || 'unknown'}.`
+      );
+    }
+
+    // Download the video while enforcing the size limit.
+    const videoBuffer = await readTikTokResponse(
+      response,
+      maxBytes
+    );
+
+    // Validate the MP4 signature.
+    if (
+      videoBuffer.length < 12 ||
+      videoBuffer.toString('ascii', 4, 8) !== 'ftyp'
+    ) {
+      throw new Error(
+        'The response is not a valid MP4 file.'
+      );
+    }
+
+    console.log(
+      `[TikTok] Downloaded ${(videoBuffer.length / 1048576).toFixed(2)} MiB`
+    );
+
+    // Send ONLY the video file.
+    // No reply text, URL, or embed description is included.
+    await message.channel.send({
+      files: [
+        {
+          attachment: videoBuffer,
+          name: 'tiktok.mp4',
+        },
+      ],
+      allowedMentions: {
+        parse: [],
+      },
+    });
+
+    console.log('[TikTok] Video uploaded successfully.');
+
+  } catch (error) {
+    console.error('[TikTok] Conversion failed:', error);
+
+    let errorMessage;
+
+    if (
+      error.name === 'AbortError' ||
+      error.name === 'TimeoutError'
+    ) {
+      errorMessage =
+        '❌ TikTok download timed out. Please try again later.';
+    } else if (error.code === 'TIKTOK_TOO_LARGE') {
+      errorMessage =
+        '❌ This TikTok is too large for Vanessa to upload directly.';
+    } else {
+      errorMessage =
+        '❌ Vanessa could not retrieve this TikTok video. It may be private, unavailable, or unsupported.';
+    }
+
+    // Only send text when conversion fails.
+    await message.channel.send({
+      content: errorMessage,
+      allowedMentions: {
+        parse: [],
+      },
+    }).catch(sendError => {
+      console.error(
+        '[TikTok] Failed to send error message:',
+        sendError
+      );
+    });
+
+  } finally {
+    clearTimeout(timeout);
+    tiktokDownloadsInProgress.delete(lockKey);
   }
 }
 
@@ -590,17 +823,15 @@ client.once('ready', async () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  // TIKTOK PREVIEW:
-  // Run separately so it doesn't delay your existing message handlers.
+  // TikTok conversion runs independently so downloads do not
+  // block the existing command, AFK, and tracking systems.
   handleTikTokPreview(message).catch(error => {
-    console.error('[TikTok Preview] Error:', error);
+    console.error('[TikTok] Unexpected error:', error);
   });
 
-  // Existing systems remain unchanged.
+  // Existing handlers remain unchanged.
   await afkModule.handleMessage(client, message);
-
   await handleMessage(client, message);
-
   await messageTracker.handleMessage(client, message);
 
   try {
@@ -617,9 +848,7 @@ client.on('messageCreate', async (message) => {
     if (watchwordCommand?.checkWatchwords) {
       await watchwordCommand.checkWatchwords(client, message);
     }
-  } catch (error) {
-    // Preserve existing behavior for watchword module failures.
-  }
+  } catch (error) {}
 });
 
 // ===== BUTTON INTERACTIONS =====
@@ -664,9 +893,7 @@ client.on('messageDelete', async (message) => {
   if (message.partial) {
     const fetched = await message.fetch().catch(() => null);
 
-    if (fetched) {
-      source = fetched;
-    }
+    if (fetched) source = fetched;
   }
 
   const media = [];
@@ -745,9 +972,7 @@ client.on('messageDelete', async (message) => {
       new Date(),
   });
 
-  if (arr.length > 15) {
-    arr.pop();
-  }
+  if (arr.length > 15) arr.pop();
 });
 
 // ===== MESSAGE UPDATE / EDIT SNIPE =====
@@ -775,9 +1000,7 @@ client.on('messageUpdate', (oldMsg, newMsg) => {
     createdAt: newMsg.editedAt || new Date(),
   });
 
-  if (arr.length > 15) {
-    arr.pop();
-  }
+  if (arr.length > 15) arr.pop();
 });
 
 // ===== REACTION SNIPE =====
@@ -798,9 +1021,7 @@ client.on('messageReactionAdd', (reaction, user) => {
     createdAt: new Date(),
   });
 
-  if (arr.length > 15) {
-    arr.pop();
-  }
+  if (arr.length > 15) arr.pop();
 });
 
 // ===== LOAD COMMANDS =====
