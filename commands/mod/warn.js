@@ -1,11 +1,25 @@
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { logModAction } = require('../../handlers/modstatsHelper');
-const { resolveUser, resolveMember } = require('../../handlers/universalHelper');
+const {
+  EmbedBuilder,
+  PermissionFlagsBits,
+} = require('discord.js');
+
+const {
+  logModAction,
+} = require('../../handlers/modstatsHelper');
+
+const {
+  resolveUser,
+  resolveMember,
+} = require('../../handlers/universalHelper');
 
 function makeEmbed(color, title, description) {
-  const embed = new EmbedBuilder().setColor(color).setTimestamp();
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTimestamp();
+
   if (title) embed.setTitle(title);
   if (description) embed.setDescription(description);
+
   return embed;
 }
 
@@ -20,11 +34,16 @@ function isOwner(guild, member) {
 function getWarnCount(client, guildId, userId) {
   try {
     if (!client.automodDB) return 0;
+
     const row = client.automodDB.prepare(`
       SELECT COUNT(*) AS count
       FROM automod_warns
       WHERE guild_id = ? AND user_id = ?
-    `).get(guildId, userId);
+    `).get(
+      String(guildId),
+      String(userId)
+    );
+
     return row?.count || 0;
   } catch (err) {
     console.error('[Warn Count] error:', err);
@@ -32,30 +51,91 @@ function getWarnCount(client, guildId, userId) {
   }
 }
 
+// ============================================================
+// EXACT COMMAND CHECK
+// ============================================================
+
+function isExactWarnCommand(client, message) {
+  const prefix = String(
+    message.prefix ||
+    client.getPrefix?.(message.guild?.id) ||
+    '$'
+  );
+
+  const firstToken = String(
+    message.content || ''
+  )
+    .trim()
+    .split(/\s+/)[0] || '';
+
+  if (!prefix || !firstToken.startsWith(prefix)) {
+    return false;
+  }
+
+  const invokedName = firstToken
+    .slice(prefix.length)
+    .toLowerCase();
+
+  // No aliases. Only the exact command "warn" is accepted.
+  return invokedName === 'warn';
+}
+
+// ============================================================
+// COMMAND
+// ============================================================
+
 module.exports = {
   name: 'warn',
-  aliases: ['w'],
+
+  // Intentionally no aliases property.
   description: 'Warn a user.',
+
   category: 'mod',
+
   usage: '$warn <@user|ID|username> <reason>',
 
   async execute(client, message, args) {
-    if (!message.guild) {
-      return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'This command can only be used in servers.')]
-      });
+    // Stop accidental invocations from fuzzy command matching.
+    if (!message.guild || !isExactWarnCommand(client, message)) {
+      return;
     }
+
+    if (!message.member) {
+      return;
+    }
+
+    const prefix = String(
+      message.prefix ||
+      client.getPrefix?.(message.guild.id) ||
+      '$'
+    );
+
+    // --------------------------------------------------------
+    // PERMISSION CHECK
+    // --------------------------------------------------------
 
     if (
-      !message.member.permissions.has(PermissionFlagsBits.ModerateMembers) &&
-      !message.member.permissions.has(PermissionFlagsBits.Administrator)
+      !message.member.permissions.has(
+        PermissionFlagsBits.ModerateMembers
+      ) &&
+      !message.member.permissions.has(
+        PermissionFlagsBits.Administrator
+      )
     ) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'You need **Moderate Members** permission.')]
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'You need **Moderate Members** permission.'
+          ),
+        ],
       });
     }
 
-    const prefix = message.prefix || client.getPrefix?.(message.guild.id) || '$';
+    // --------------------------------------------------------
+    // USAGE
+    // --------------------------------------------------------
 
     if (!args.length) {
       return message.reply({
@@ -63,80 +143,192 @@ module.exports = {
           makeEmbed(
             '#facc15',
             'Warn Usage',
-            `**Usage:**\n\`${prefix}warn <@user|ID|username> <reason>\`\n\nExample:\n\`${prefix}warn @User spam\``
-          )
-        ]
+            `**Usage:**\n` +
+            `\`${prefix}warn <@user|ID|username> <reason>\`\n\n` +
+            `**Examples:**\n` +
+            `\`${prefix}warn @User spam\`\n` +
+            `\`${prefix}warn 123456789012345678 spam\`\n` +
+            `\`${prefix}warn username spam\``
+          ),
+        ],
       });
     }
 
-    const targetInput = args.shift();
-    const reason = args.join(' ').trim() || 'No reason provided';
+    // --------------------------------------------------------
+    // RESOLVE TARGET
+    // --------------------------------------------------------
 
-    const targetUser = await resolveUser(client, message, targetInput);
+    const targetInput = args[0];
+
+    const reason = args
+      .slice(1)
+      .join(' ')
+      .trim() || 'No reason provided';
+
+    const targetUser = await resolveUser(
+      client,
+      message,
+      targetInput
+    );
+
     if (!targetUser) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Warn Failed', 'User not found. Use a mention, ID, or exact username.')]
+        embeds: [
+          makeEmbed(
+            '#f59e0b',
+            'Warn Failed',
+            'User not found. Use a mention, ID, or username.'
+          ),
+        ],
       });
     }
 
     if (targetUser.id === message.author.id) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'You cannot warn yourself.')]
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'You cannot warn yourself.'
+          ),
+        ],
       });
     }
 
     if (targetUser.id === client.user.id) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'You cannot warn the bot.')]
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'You cannot warn the bot.'
+          ),
+        ],
       });
     }
 
-    const member = await resolveMember(client, message, targetInput);
+    const member = await resolveMember(
+      client,
+      message,
+      targetInput
+    );
+
     if (!member) {
       return message.reply({
-        embeds: [makeEmbed('#f59e0b', 'Warn Failed', 'User is not in this server.')]
+        embeds: [
+          makeEmbed(
+            '#f59e0b',
+            'Warn Failed',
+            'User is not in this server.'
+          ),
+        ],
       });
     }
 
-    const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+    // --------------------------------------------------------
+    // ROLE AND PERMISSION CHECKS
+    // --------------------------------------------------------
 
-    if (isOwner(message.guild, member) && !isOwner(message.guild, message.member)) {
+    const botMember =
+      message.guild.members.me ||
+      await message.guild.members
+        .fetchMe()
+        .catch(() => null);
+
+    if (
+      isOwner(message.guild, member) &&
+      !isOwner(message.guild, message.member)
+    ) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'You cannot warn the server owner.')]
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'You cannot warn the server owner.'
+          ),
+        ],
       });
     }
 
     if (!isOwner(message.guild, message.member)) {
-      if (getRolePos(member) >= getRolePos(message.member)) {
+      if (
+        getRolePos(member) >=
+        getRolePos(message.member)
+      ) {
         return message.reply({
-          embeds: [makeEmbed('#ef4444', 'Warn Failed', 'You cannot warn someone with equal or higher role.')]
+          embeds: [
+            makeEmbed(
+              '#ef4444',
+              'Warn Failed',
+              'You cannot warn someone with an equal or higher role.'
+            ),
+          ],
         });
       }
     }
 
-    if (botMember && getRolePos(member) >= getRolePos(botMember)) {
+    if (
+      botMember &&
+      getRolePos(member) >= getRolePos(botMember)
+    ) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'I cannot warn this user because my role is too low.')]
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'I cannot warn this user because my role is too low.'
+          ),
+        ],
       });
     }
 
-    if (member.permissions.has(PermissionFlagsBits.Administrator)) {
+    if (
+      member.permissions.has(
+        PermissionFlagsBits.Administrator
+      )
+    ) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'Cannot warn an administrator.')]
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'Cannot warn an administrator.'
+          ),
+        ],
       });
     }
+
+    // --------------------------------------------------------
+    // DATABASE CHECK
+    // --------------------------------------------------------
 
     if (!client.automodDB) {
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'Warning database unavailable.')]
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'Warning database unavailable.'
+          ),
+        ],
       });
     }
+
+    // --------------------------------------------------------
+    // SAVE WARNING
+    // --------------------------------------------------------
 
     try {
       client.automodDB.prepare(`
         INSERT INTO automod_warns
-        (guild_id,user_id,moderator_id,reason,timestamp)
-        VALUES (?,?,?,?,?)
+        (
+          guild_id,
+          user_id,
+          moderator_id,
+          reason,
+          timestamp
+        )
+        VALUES (?, ?, ?, ?, ?)
       `).run(
         message.guild.id,
         targetUser.id,
@@ -145,54 +337,129 @@ module.exports = {
         Date.now()
       );
 
-      const warnCount = getWarnCount(client, message.guild.id, targetUser.id);
+      const warnCount = getWarnCount(
+        client,
+        message.guild.id,
+        targetUser.id
+      );
 
       client.automodDB.prepare(`
         INSERT OR REPLACE INTO automod_warn_counts
-        (guild_id,user_id,count)
-        VALUES (?,?,?)
+        (
+          guild_id,
+          user_id,
+          count
+        )
+        VALUES (?, ?, ?)
       `).run(
         message.guild.id,
         targetUser.id,
         warnCount
       );
 
-      logModAction(client, message.guild.id, message.author.id, targetUser.id, 'warn', reason);
+      logModAction(
+        client,
+        message.guild.id,
+        message.author.id,
+        targetUser.id,
+        'warn',
+        reason
+      );
+
+      // ------------------------------------------------------
+      // AUTOMATIC BAN AT FIVE WARNINGS
+      // ------------------------------------------------------
 
       if (warnCount >= 5) {
-        await member.ban({
-          reason: `Auto-ban: reached 5 warnings`
-        }).catch(() => null);
+        let banned = false;
+
+        try {
+          await member.ban({
+            reason: 'Auto-ban: reached 5 warnings',
+          });
+
+          banned = true;
+        } catch (error) {
+          console.error(
+            '[Warn Auto-Ban Error]',
+            error
+          );
+        }
+
+        if (banned) {
+          return message.reply({
+            embeds: [
+              makeEmbed(
+                '#ef4444',
+                'User Auto-Banned',
+                `<@${targetUser.id}> reached **5/5 warnings** and was automatically banned.`
+              ),
+            ],
+          });
+        }
 
         return message.reply({
           embeds: [
             makeEmbed(
               '#ef4444',
-              'User Auto-Banned',
-              `<@${targetUser.id}> reached **5/5 warnings** and was automatically banned.`
-            )
-          ]
+              'Warning Added',
+              `<@${targetUser.id}> received warning **${warnCount}/5**, but the automatic ban failed. Check the bot's Ban Members permission and role hierarchy.`
+            ),
+          ],
         });
       }
+
+      // ------------------------------------------------------
+      // SUCCESS EMBED
+      // ------------------------------------------------------
 
       const embed = new EmbedBuilder()
         .setColor('#facc15')
         .setTitle('User Warned')
-        .setThumbnail(targetUser.displayAvatarURL({ size: 1024 }))
+        .setThumbnail(
+          targetUser.displayAvatarURL({
+            size: 1024,
+          })
+        )
         .addFields(
-          { name: 'User', value: `<@${targetUser.id}>`, inline: false },
-          { name: 'Moderator', value: `<@${message.author.id}>`, inline: false },
-          { name: 'Reason', value: reason, inline: false },
-          { name: 'Warnings', value: `${warnCount}/5`, inline: true }
+          {
+            name: 'User',
+            value: `<@${targetUser.id}>`,
+            inline: false,
+          },
+          {
+            name: 'Moderator',
+            value: `<@${message.author.id}>`,
+            inline: false,
+          },
+          {
+            name: 'Reason',
+            value: reason.slice(0, 1024),
+            inline: false,
+          },
+          {
+            name: 'Warnings',
+            value: `${warnCount}/5`,
+            inline: true,
+          }
         )
         .setTimestamp();
 
-      return message.reply({ embeds: [embed] });
+      return message.reply({
+        embeds: [embed],
+      });
     } catch (err) {
       console.error('[Warn Error]', err);
+
       return message.reply({
-        embeds: [makeEmbed('#ef4444', 'Warn Failed', 'Failed to add warning.')]
+        embeds: [
+          makeEmbed(
+            '#ef4444',
+            'Warn Failed',
+            'Failed to add warning.'
+          ),
+        ],
       });
     }
-  }
+  },
 };
