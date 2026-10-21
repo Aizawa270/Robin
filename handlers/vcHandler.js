@@ -3,7 +3,7 @@ const {
   PermissionsBitField,
 } = require('discord.js');
 
-const VC_COMMAND = require('./commands/utility/vc');
+const VC_COMMAND = require('../commands/utility/vc');
 
 const AFK_TIME = 30 * 60 * 1000;
 const RETRY_TIME = 60 * 1000;
