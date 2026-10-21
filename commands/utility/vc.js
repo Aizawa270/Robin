@@ -8,6 +8,11 @@ const {
   PermissionsBitField,
 } = require('discord.js');
 
+const {
+  resolveUser,
+  resolveMember: resolveUniversalMember,
+} = require('../../handlers/universalHelper');
+
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'vc.sqlite');
 
@@ -66,6 +71,49 @@ function ensureDB(client) {
   }
 
   return db;
+}
+
+// ============================================================
+// EXACT COMMAND CHECK
+//
+// Prevents this command from responding to ordinary messages
+// such as "bc", "vc hi", or messages containing "vc".
+//
+// Only an exact prefixed command token is accepted.
+// ============================================================
+
+function isExactVCCommand(client, message) {
+  const prefix = String(
+    message.prefix ||
+    client.getPrefix?.(message.guild?.id) ||
+    '$'
+  );
+
+  if (!prefix) {
+    return false;
+  }
+
+  const firstToken = String(
+    message.content || ''
+  )
+    .trim()
+    .split(/\s+/)[0] || '';
+
+  if (!firstToken.startsWith(prefix)) {
+    return false;
+  }
+
+  const invokedName = firstToken
+    .slice(prefix.length)
+    .toLowerCase();
+
+  // These are the explicitly supported command names.
+  // Matching is exact, not a substring match.
+  return [
+    'vc',
+    'voicechannel',
+    'vchelp',
+  ].includes(invokedName);
 }
 
 // ============================================================
@@ -347,6 +395,10 @@ function cancelAFKTimer(client, channelId) {
   client.vcAFKTimers.delete(key);
 }
 
+// ============================================================
+// OWNER CHECK
+// ============================================================
+
 async function ownerOnly(
   client,
   message,
@@ -391,6 +443,10 @@ async function ownerOnly(
   return true;
 }
 
+// ============================================================
+// CHANNEL ID PARSER
+// ============================================================
+
 function parseChannelId(raw) {
   if (!raw) {
     return null;
@@ -413,43 +469,82 @@ function parseChannelId(raw) {
   return null;
 }
 
-async function resolveMember(
+// ============================================================
+// UNIVERSAL VC MEMBER RESOLVER
+//
+// Supports user mentions, user IDs, and names supported by
+// handlers/universalHelper.js.
+//
+// Used by both "permit" and "kick".
+// ============================================================
+
+async function resolveVCMember(
+  client,
   message,
   args,
   argumentIndex = 1
 ) {
+  // Prefer an explicit member mention.
   const mentioned = message.mentions.members.first();
 
   if (mentioned) {
     return mentioned;
   }
 
-  const raw = args[argumentIndex];
+  const targetInput = args
+    .slice(argumentIndex)
+    .join(' ')
+    .trim();
 
-  if (!raw) {
+  if (!targetInput) {
     return null;
   }
 
-  const mention = String(raw).match(
-    /^<@!?([0-9]{15,22})>$/
-  );
+  // First try the universal user resolver.
+  try {
+    const user = await resolveUser(
+      client,
+      message,
+      targetInput
+    );
 
-  const id = mention
-    ? mention[1]
-    : (
-        /^[0-9]{15,22}$/.test(raw)
-          ? raw
-          : null
-      );
+    if (user) {
+      const member =
+        message.guild.members.cache.get(user.id) ||
+        await message.guild.members
+          .fetch(user.id)
+          .catch(() => null);
 
-  if (!id) {
-    return null;
+      if (member) {
+        return member;
+      }
+    }
+  } catch (error) {
+    console.error(
+      '[VC] Universal user resolution failed:',
+      error
+    );
   }
 
-  return (
-    message.guild.members.cache.get(id) ||
-    await message.guild.members.fetch(id).catch(() => null)
-  );
+  // Fallback to the universal guild-member resolver.
+  try {
+    const member = await resolveUniversalMember(
+      client,
+      message,
+      targetInput
+    );
+
+    if (member) {
+      return member;
+    }
+  } catch (error) {
+    console.error(
+      '[VC] Universal member resolution failed:',
+      error
+    );
+  }
+
+  return null;
 }
 
 // ============================================================
@@ -461,7 +556,7 @@ async function resolveMember(
 // $vc setup
 // $vc setup off
 //
-// Each guild gets its own configuration.
+// Each guild has its own configuration.
 // ============================================================
 
 async function handleSetup(
@@ -479,7 +574,10 @@ async function handleSetup(
     rawTarget || ''
   ).toLowerCase();
 
-  // Disable Join-to-Create.
+  // ----------------------------------------------------------
+  // DISABLE JOIN-TO-CREATE
+  // ----------------------------------------------------------
+
   if (
     lowered === 'off' ||
     lowered === 'disable' ||
@@ -501,7 +599,10 @@ async function handleSetup(
       });
     }
 
-    clearGuildSettings(client, guild.id);
+    clearGuildSettings(
+      client,
+      guild.id
+    );
 
     return message.reply({
       embeds: [
@@ -518,7 +619,10 @@ async function handleSetup(
     guild.id
   );
 
-  // View the current configuration.
+  // ----------------------------------------------------------
+  // VIEW CURRENT CONFIGURATION
+  // ----------------------------------------------------------
+
   if (!rawTarget) {
     if (!existing) {
       return message.reply({
@@ -547,7 +651,10 @@ async function handleSetup(
     });
   }
 
-  // Permission check for configuration changes.
+  // ----------------------------------------------------------
+  // PERMISSION CHECK
+  // ----------------------------------------------------------
+
   if (
     !message.member.permissions.has(
       PermissionsBitField.Flags.ManageChannels
@@ -563,6 +670,10 @@ async function handleSetup(
       ],
     });
   }
+
+  // ----------------------------------------------------------
+  // RESOLVE VOICE CHANNEL
+  // ----------------------------------------------------------
 
   const channelMention =
     message.mentions.channels.first();
@@ -585,7 +696,9 @@ async function handleSetup(
 
   const channel =
     guild.channels.cache.get(channelId) ||
-    await guild.channels.fetch(channelId).catch(() => null);
+    await guild.channels
+      .fetch(channelId)
+      .catch(() => null);
 
   if (
     !channel ||
@@ -603,8 +716,7 @@ async function handleSetup(
     });
   }
 
-  // Store this server's trigger channel.
-  // The channel's current category is used for new personal VCs.
+  // Save the trigger channel and its current category.
   setGuildSettings(
     client,
     guild.id,
@@ -649,25 +761,40 @@ module.exports = {
   ],
 
   async execute(client, message, args) {
-    if (!message.guild || !message.member) {
+    // --------------------------------------------------------
+    // STRICT COMMAND GUARD
+    //
+    // Prevents this command from producing embeds when the
+    // dispatcher accidentally matches ordinary message text.
+    // --------------------------------------------------------
+
+    if (
+      !message.guild ||
+      !message.member ||
+      !isExactVCCommand(client, message)
+    ) {
       return;
     }
 
     ensureDB(client);
 
-    const prefix = client.getPrefix(
-      message.guild.id
+    const prefix = String(
+      message.prefix ||
+      client.getPrefix?.(message.guild.id) ||
+      '$'
     );
 
     const subcommand = String(
       args[0] || ''
     ).toLowerCase();
 
-    const invokedName = String(
+    const firstToken = String(
       message.content || ''
     )
       .trim()
-      .split(/\s+/)[0]
+      .split(/\s+/)[0] || '';
+
+    const invokedName = firstToken
       .slice(prefix.length)
       .toLowerCase();
 
@@ -678,8 +805,7 @@ module.exports = {
     if (
       subcommand === 'help' ||
       subcommand === 'vchelp' ||
-      invokedName === 'vchelp' ||
-      invokedName === 'voicechannelhelp'
+      invokedName === 'vchelp'
     ) {
       const embed = new EmbedBuilder()
         .setColor(DEFAULT_COLOR)
@@ -759,7 +885,7 @@ module.exports = {
     }
 
     // --------------------------------------------------------
-    // FIND PERSONAL VC
+    // FIND THE PERSONAL VC
     // --------------------------------------------------------
 
     const channel = getCurrentVC(message);
@@ -796,7 +922,10 @@ module.exports = {
     // --------------------------------------------------------
 
     if (subcommand === 'name') {
-      const newName = args.slice(1).join(' ').trim();
+      const newName = args
+        .slice(1)
+        .join(' ')
+        .trim();
 
       if (!newName) {
         return message.reply({
@@ -910,7 +1039,8 @@ module.exports = {
     // --------------------------------------------------------
 
     if (subcommand === 'permit') {
-      const target = await resolveMember(
+      const target = await resolveVCMember(
+        client,
         message,
         args,
         1
@@ -921,7 +1051,7 @@ module.exports = {
           embeds: [
             createReplyEmbed(
               'User Not Found',
-              'Mention a server member or provide their user ID.',
+              'Mention a server member, provide their ID, or enter a username supported by the universal user resolver.',
               '#f59e0b'
             ),
           ],
@@ -983,7 +1113,8 @@ module.exports = {
     // --------------------------------------------------------
 
     if (subcommand === 'kick') {
-      const target = await resolveMember(
+      const target = await resolveVCMember(
+        client,
         message,
         args,
         1
@@ -994,7 +1125,7 @@ module.exports = {
           embeds: [
             createReplyEmbed(
               'User Not Found',
-              'Mention a server member or provide their user ID.',
+              'Mention a server member, provide their ID, or enter a username supported by the universal user resolver.',
               '#f59e0b'
             ),
           ],
@@ -1236,7 +1367,9 @@ module.exports = {
       for (const row of tracked) {
         const member =
           message.guild.members.cache.get(row.user_id) ||
-          await message.guild.members.fetch(row.user_id).catch(() => null);
+          await message.guild.members
+            .fetch(row.user_id)
+            .catch(() => null);
 
         if (!member) {
           removeTrackedMute(
@@ -1451,7 +1584,9 @@ module.exports = {
         ) {
           const member =
             message.guild.members.cache.get(row.user_id) ||
-            await message.guild.members.fetch(row.user_id).catch(() => null);
+            await message.guild.members
+              .fetch(row.user_id)
+              .catch(() => null);
 
           if (member?.voice?.serverMute) {
             await member.voice.setMute(
@@ -1576,7 +1711,7 @@ module.exports = {
     });
   },
 
-  // Export helpers for vcHandler.js.
+  // Export helpers for vchandler.js.
   initDB: ensureDB,
   getGuildSettings,
   getJoinToCreateId,
