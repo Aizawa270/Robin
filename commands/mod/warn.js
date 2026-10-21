@@ -12,7 +12,94 @@ const {
   resolveMember,
 } = require('../../handlers/universalHelper');
 
-function makeEmbed(color, title, description) {
+// ============================================================
+// PREFIX HELPERS
+// ============================================================
+
+function getPrefixCandidates(client, message) {
+  const prefixes = [];
+
+  function addPrefix(value) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        addPrefix(item);
+      }
+
+      return;
+    }
+
+    if (typeof value === 'string' && value.length > 0) {
+      prefixes.push(value);
+    }
+  }
+
+  addPrefix(message.prefix);
+
+  try {
+    if (typeof client.getPrefix === 'function') {
+      addPrefix(client.getPrefix(message.guild?.id));
+    }
+  } catch (error) {
+    console.error('[Warn] Could not retrieve server prefix:', error);
+  }
+
+  addPrefix(client.prefix);
+  addPrefix(client.config?.prefix);
+
+  const uniquePrefixes = [...new Set(prefixes)];
+
+  if (uniquePrefixes.length === 0) {
+    uniquePrefixes.push('$');
+  }
+
+  return uniquePrefixes;
+}
+
+// ============================================================
+// EXACT COMMAND CHECK
+// ============================================================
+
+function isExactWarnCommand(client, message) {
+  const content = String(message.content || '').trim();
+
+  if (!content) {
+    return false;
+  }
+
+  const tokens = content.split(/\s+/);
+  const firstToken = tokens[0].toLowerCase();
+
+  // Support direct bot-mention invocation, if the dispatcher
+  // accepts it.
+  if (
+    /^<@!?\d+>$/.test(firstToken) &&
+    String(tokens[1] || '').toLowerCase() === 'warn'
+  ) {
+    return true;
+  }
+
+  const prefixes = getPrefixCandidates(client, message);
+
+  return prefixes.some(prefix => {
+    const invokedName = firstToken
+      .startsWith(prefix.toLowerCase())
+      ? firstToken.slice(prefix.length).toLowerCase()
+      : '';
+
+    // Exact name only. No "w" alias and no substring matching.
+    return invokedName === 'warn';
+  });
+}
+
+// ============================================================
+// EMBEDS
+// ============================================================
+
+function makeEmbed(
+  color,
+  title,
+  description
+) {
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTimestamp();
@@ -23,6 +110,10 @@ function makeEmbed(color, title, description) {
   return embed;
 }
 
+// ============================================================
+// ROLE HELPERS
+// ============================================================
+
 function getRolePos(member) {
   return member?.roles?.highest?.position ?? 0;
 }
@@ -31,53 +122,35 @@ function isOwner(guild, member) {
   return guild?.ownerId === member?.id;
 }
 
-function getWarnCount(client, guildId, userId) {
+// ============================================================
+// WARNING COUNT
+// ============================================================
+
+function getWarnCount(
+  client,
+  guildId,
+  userId
+) {
   try {
-    if (!client.automodDB) return 0;
+    if (!client.automodDB) {
+      return 0;
+    }
 
     const row = client.automodDB.prepare(`
       SELECT COUNT(*) AS count
       FROM automod_warns
-      WHERE guild_id = ? AND user_id = ?
+      WHERE guild_id = ?
+        AND user_id = ?
     `).get(
       String(guildId),
       String(userId)
     );
 
     return row?.count || 0;
-  } catch (err) {
-    console.error('[Warn Count] error:', err);
+  } catch (error) {
+    console.error('[Warn Count] error:', error);
     return 0;
   }
-}
-
-// ============================================================
-// EXACT COMMAND CHECK
-// ============================================================
-
-function isExactWarnCommand(client, message) {
-  const prefix = String(
-    message.prefix ||
-    client.getPrefix?.(message.guild?.id) ||
-    '$'
-  );
-
-  const firstToken = String(
-    message.content || ''
-  )
-    .trim()
-    .split(/\s+/)[0] || '';
-
-  if (!prefix || !firstToken.startsWith(prefix)) {
-    return false;
-  }
-
-  const invokedName = firstToken
-    .slice(prefix.length)
-    .toLowerCase();
-
-  // No aliases. Only the exact command "warn" is accepted.
-  return invokedName === 'warn';
 }
 
 // ============================================================
@@ -87,7 +160,7 @@ function isExactWarnCommand(client, message) {
 module.exports = {
   name: 'warn',
 
-  // Intentionally no aliases property.
+  // No aliases property. "w" is deliberately not supported.
   description: 'Warn a user.',
 
   category: 'mod',
@@ -95,7 +168,8 @@ module.exports = {
   usage: '$warn <@user|ID|username> <reason>',
 
   async execute(client, message, args) {
-    // Stop accidental invocations from fuzzy command matching.
+    // Do not silently reject a valid command just because one
+    // prefix source disagrees with another.
     if (!message.guild || !isExactWarnCommand(client, message)) {
       return;
     }
@@ -104,14 +178,10 @@ module.exports = {
       return;
     }
 
-    const prefix = String(
-      message.prefix ||
-      client.getPrefix?.(message.guild.id) ||
-      '$'
-    );
+    const prefix = getPrefixCandidates(client, message)[0];
 
     // --------------------------------------------------------
-    // PERMISSION CHECK
+    // PERMISSIONS
     // --------------------------------------------------------
 
     if (
@@ -371,22 +441,11 @@ module.exports = {
       // ------------------------------------------------------
 
       if (warnCount >= 5) {
-        let banned = false;
-
         try {
           await member.ban({
             reason: 'Auto-ban: reached 5 warnings',
           });
 
-          banned = true;
-        } catch (error) {
-          console.error(
-            '[Warn Auto-Ban Error]',
-            error
-          );
-        }
-
-        if (banned) {
           return message.reply({
             embeds: [
               makeEmbed(
@@ -396,17 +455,19 @@ module.exports = {
               ),
             ],
           });
-        }
+        } catch (error) {
+          console.error('[Warn Auto-Ban Error]', error);
 
-        return message.reply({
-          embeds: [
-            makeEmbed(
-              '#ef4444',
-              'Warning Added',
-              `<@${targetUser.id}> received warning **${warnCount}/5**, but the automatic ban failed. Check the bot's Ban Members permission and role hierarchy.`
-            ),
-          ],
-        });
+          return message.reply({
+            embeds: [
+              makeEmbed(
+                '#ef4444',
+                'Warning Added',
+                `<@${targetUser.id}> received warning **${warnCount}/5**, but the automatic ban failed. Check the bot's Ban Members permission and role hierarchy.`
+              ),
+            ],
+          });
+        }
       }
 
       // ------------------------------------------------------
@@ -448,8 +509,8 @@ module.exports = {
       return message.reply({
         embeds: [embed],
       });
-    } catch (err) {
-      console.error('[Warn Error]', err);
+    } catch (error) {
+      console.error('[Warn Error]', error);
 
       return message.reply({
         embeds: [
