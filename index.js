@@ -1,6 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+
 const {
   Client,
   GatewayIntentBits,
@@ -25,6 +26,9 @@ const welcomeHandler = require('./handlers/welcomeHandler');
 // ===== AFK MODULE =====
 const afkModule = require('./commands/utility/afk');
 
+// ===== VC MODULE =====
+const { setupVCHandler } = require('./handlers/vcHandler');
+
 // ===== CLIENT =====
 const client = new Client({
   intents: [
@@ -33,7 +37,11 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessageReactions,
+
+    // Required for Join-to-Create voice channels.
+    GatewayIntentBits.GuildVoiceStates,
   ],
+
   partials: [
     Partials.Message,
     Partials.Channel,
@@ -45,8 +53,15 @@ const client = new Client({
 const DATA_DIR = path.join(__dirname, 'data');
 
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(DATA_DIR, {
+    recursive: true,
+  });
 }
+
+// ===== VC HANDLER INITIALIZATION =====
+// Initializes the VC database and voiceStateUpdate listener.
+// Each Discord server stores its own VC configuration.
+setupVCHandler(client);
 
 // ===== DATABASES =====
 
@@ -69,10 +84,11 @@ prefixlessDB.prepare(`
 client.prefixlessDB = prefixlessDB;
 client.prefixlessByGuild = new Map();
 
-for (const row of prefixlessDB
-  .prepare('SELECT guild_id, user_id FROM prefixless_guild')
-  .all()) {
-
+for (
+  const row of prefixlessDB
+    .prepare('SELECT guild_id, user_id FROM prefixless_guild')
+    .all()
+) {
   const guildId = String(row.guild_id);
   const userId = String(row.user_id);
 
@@ -84,7 +100,9 @@ for (const row of prefixlessDB
 }
 
 client.isPrefixless = (guildId, userId) => {
-  if (!guildId || !userId) return false;
+  if (!guildId || !userId) {
+    return false;
+  }
 
   return (
     client.prefixlessByGuild
@@ -449,7 +467,9 @@ client.blacklistCache = new Map();
 
 // ===== PREFIX FUNCTION =====
 client.getPrefix = (guildId) => {
-  if (!guildId) return '$';
+  if (!guildId) {
+    return '$';
+  }
 
   const row = client.prefixDB
     .prepare('SELECT prefix FROM prefixes WHERE guild_id = ?')
@@ -505,7 +525,9 @@ async function readTikTokResponse(response, maxBytes) {
     while (true) {
       const { done, value } = await reader.read();
 
-      if (done) break;
+      if (done) {
+        break;
+      }
 
       totalBytes += value.byteLength;
 
@@ -536,13 +558,17 @@ async function readTikTokResponse(response, maxBytes) {
 }
 
 async function handleTikTokPreview(message) {
-  if (!message.guild || !message.content) return;
+  if (!message.guild || !message.content) {
+    return;
+  }
 
   const urls = message.content.match(
     /https?:\/\/[^\s<>]+/gi
   );
 
-  if (!urls) return;
+  if (!urls) {
+    return;
+  }
 
   let originalUrl = null;
 
@@ -574,14 +600,20 @@ async function handleTikTokPreview(message) {
     }
   }
 
-  if (!originalUrl) return;
+  if (!originalUrl) {
+    return;
+  }
 
   const lockKey =
     `${message.guild.id}:${originalUrl.pathname}`;
 
-  if (tiktokDownloadsInProgress.has(lockKey)) return;
+  if (tiktokDownloadsInProgress.has(lockKey)) {
+    return;
+  }
 
-  if (tiktokDownloadsInProgress.size >= 3) return;
+  if (tiktokDownloadsInProgress.size >= 3) {
+    return;
+  }
 
   tiktokDownloadsInProgress.add(lockKey);
 
@@ -740,34 +772,26 @@ async function deleteBoosterRoleForUser(
   userId,
   reason
 ) {
-  const database =
-    client.boosterRolesDB;
+  const database = client.boosterRolesDB;
 
-  const record =
-    database.prepare(`
-      SELECT role_id
-      FROM booster_roles
-      WHERE guild_id = ? AND user_id = ?
-    `).get(
-      guild.id,
-      userId
-    );
+  const record = database.prepare(`
+    SELECT role_id
+    FROM booster_roles
+    WHERE guild_id = ? AND user_id = ?
+  `).get(
+    guild.id,
+    userId
+  );
 
   if (!record) {
     return false;
   }
 
-  let role =
-    guild.roles.cache.get(
-      record.role_id
-    );
+  let role = guild.roles.cache.get(record.role_id);
 
   if (!role) {
     try {
-      role =
-        await guild.roles.fetch(
-          record.role_id
-        );
+      role = await guild.roles.fetch(record.role_id);
     } catch (error) {
       if (
         Number(error.code) === 10011 ||
@@ -910,7 +934,10 @@ async function initializeBoosterRoleTracking() {
         database.prepare(`
           DELETE FROM booster_roles
           WHERE guild_id = ? AND user_id = ?
-        `).run(guild.id, record.user_id);
+        `).run(
+          guild.id,
+          record.user_id
+        );
 
         console.log(
           `[Booster Roles] Removed stale role record for ${record.user_id}`
@@ -931,6 +958,7 @@ client.once('ready', async () => {
         type: ActivityType.Playing,
       },
     ],
+
     status: 'dnd',
   });
 
@@ -987,6 +1015,7 @@ client.once('ready', async () => {
     console.log(
       `[Blacklist] Loaded for ${client.blacklistCache.size} guilds`
     );
+
   } catch (error) {
     console.error('[Blacklist] Cache failed:', error);
   }
@@ -997,6 +1026,7 @@ client.once('ready', async () => {
     if (automod?.initAutomod) {
       automod.initAutomod(client);
     }
+
   } catch (error) {
     console.error('Automod init failed:', error);
   }
@@ -1029,6 +1059,7 @@ client.once('ready', async () => {
         }, delay);
       }
     }
+
   } catch (error) {
     if (error.code === 'MODULE_NOT_FOUND') {
       console.log(
@@ -1044,7 +1075,9 @@ client.once('ready', async () => {
 
 // ===== MESSAGE CREATE =====
 client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
+  if (message.author.bot) {
+    return;
+  }
 
   // Run TikTok conversion independently.
   handleTikTokPreview(message).catch(error => {
@@ -1108,6 +1141,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         'Deleting the member’s personal booster role after their boost ended'
       );
     }
+
   } catch (error) {
     console.error(
       '[Booster Roles] Member update tracking failed:',
@@ -1127,7 +1161,11 @@ client.on('roleDelete', (role) => {
     client.boosterRolesDB.prepare(`
       DELETE FROM booster_roles
       WHERE guild_id = ? AND role_id = ?
-    `).run(role.guild.id, role.id);
+    `).run(
+      role.guild.id,
+      role.id
+    );
+
   } catch (error) {
     console.error(
       '[Booster Roles] Failed to clean deleted role record:',
@@ -1138,7 +1176,9 @@ client.on('roleDelete', (role) => {
 
 // ===== BUTTON INTERACTIONS =====
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton()) return;
+  if (!interaction.isButton()) {
+    return;
+  }
 
   if (
     interaction.customId.startsWith('1v1_accept_') ||
@@ -1150,6 +1190,7 @@ client.on('interactionCreate', async (interaction) => {
       } = require('./commands/misc/1v1');
 
       await handleButtonInteraction(interaction);
+
     } catch (error) {
       console.error('[1v1 Button]', error);
 
@@ -1165,7 +1206,9 @@ client.on('interactionCreate', async (interaction) => {
 
 // ===== MESSAGE DELETE / SNIPE =====
 client.on('messageDelete', async (message) => {
-  if (!message.guild || message.author?.bot) return;
+  if (!message.guild || message.author?.bot) {
+    return;
+  }
 
   const channelId = message.channel.id;
 
@@ -1178,12 +1221,16 @@ client.on('messageDelete', async (message) => {
   if (message.partial) {
     const fetched = await message.fetch().catch(() => null);
 
-    if (fetched) source = fetched;
+    if (fetched) {
+      source = fetched;
+    }
   }
 
   const media = [];
 
-  for (const attachment of source.attachments?.values?.() || []) {
+  for (
+    const attachment of source.attachments?.values?.() || []
+  ) {
     media.push({
       type: 'attachment',
       url: attachment.url,
@@ -1204,9 +1251,11 @@ client.on('messageDelete', async (message) => {
         type: 'embed',
         url: imageUrl,
         proxyURL: imageUrl,
+
         contentType: embed.type === 'gifv'
           ? 'image/gif'
           : null,
+
         name: embed.title ||
           embed.provider?.name ||
           'embedded media',
@@ -1257,7 +1306,9 @@ client.on('messageDelete', async (message) => {
       new Date(),
   });
 
-  if (arr.length > 15) arr.pop();
+  if (arr.length > 15) {
+    arr.pop();
+  }
 });
 
 // ===== MESSAGE UPDATE / EDIT SNIPE =====
@@ -1285,12 +1336,16 @@ client.on('messageUpdate', (oldMsg, newMsg) => {
     createdAt: newMsg.editedAt || new Date(),
   });
 
-  if (arr.length > 15) arr.pop();
+  if (arr.length > 15) {
+    arr.pop();
+  }
 });
 
 // ===== REACTION SNIPE =====
 client.on('messageReactionAdd', (reaction, user) => {
-  if (user.bot) return;
+  if (user.bot) {
+    return;
+  }
 
   const channelId = reaction.message.channel.id;
 
@@ -1306,7 +1361,9 @@ client.on('messageReactionAdd', (reaction, user) => {
     createdAt: new Date(),
   });
 
-  if (arr.length > 15) arr.pop();
+  if (arr.length > 15) {
+    arr.pop();
+  }
 });
 
 // ===== LOAD COMMANDS =====
@@ -1317,35 +1374,71 @@ function closeDatabases() {
   console.log('[Shutdown] Closing databases...');
 
   try {
-    if (prefixlessDB) prefixlessDB.close();
-    if (quarantineDB) quarantineDB.close();
-    if (giveawayDB) giveawayDB.close();
-    if (prefixDB) prefixDB.close();
-    if (fameDB) fameDB.close();
-    if (watchwordDB) watchwordDB.close();
-    if (automodDB) automodDB.close();
-    if (battleDB) battleDB.close();
-    if (spyDB) spyDB.close();
+    if (prefixlessDB?.open) {
+      prefixlessDB.close();
+    }
 
-    if (boosterRolesDB) {
+    if (quarantineDB?.open) {
+      quarantineDB.close();
+    }
+
+    if (giveawayDB?.open) {
+      giveawayDB.close();
+    }
+
+    if (prefixDB?.open) {
+      prefixDB.close();
+    }
+
+    if (fameDB?.open) {
+      fameDB.close();
+    }
+
+    if (watchwordDB?.open) {
+      watchwordDB.close();
+    }
+
+    if (automodDB?.open) {
+      automodDB.close();
+    }
+
+    if (battleDB?.open) {
+      battleDB.close();
+    }
+
+    if (spyDB?.open) {
+      spyDB.close();
+    }
+
+    if (boosterRolesDB?.open) {
       boosterRolesDB.close();
     }
 
-    if (client.msgTrackerDB) {
+    if (client.vcDB?.open) {
+      client.vcDB.close();
+    }
+
+    if (client.msgTrackerDB?.open) {
       client.msgTrackerDB.close();
     }
 
-    if (client.economyDB) {
+    if (client.economyDB?.open) {
       client.economyDB.close();
     }
 
-    if (client.shopDB) {
+    if (client.shopDB?.open) {
       client.shopDB.close();
     }
 
-    console.log('[Shutdown] Databases closed successfully');
+    console.log(
+      '[Shutdown] Databases closed successfully'
+    );
+
   } catch (error) {
-    console.error('[Shutdown] Error closing databases:', error);
+    console.error(
+      '[Shutdown] Error closing databases:',
+      error
+    );
   }
 
   process.exit(0);
