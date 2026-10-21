@@ -655,17 +655,19 @@ async function handleTikTokPreview(message) {
 
     // Send ONLY the video file.
     // No reply text, URL, or embed description is included.
-    await message.channel.send({
-      files: [
-        {
-          attachment: videoBuffer,
-          name: 'tiktok.mp4',
-        },
-      ],
-      allowedMentions: {
-        parse: [],
-      },
-    });
+    await message.reply({
+  files: [
+    {
+      attachment: videoBuffer,
+      name: 'tiktok.mp4',
+    },
+  ],
+  allowedMentions: {
+    repliedUser: false,
+    parse: [],
+  },
+});
+    
 
     console.log('[TikTok] Video uploaded successfully.');
 
