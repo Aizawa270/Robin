@@ -19,11 +19,8 @@ const DB_PATH = path.join(DATA_DIR, 'vc.sqlite');
 const DEFAULT_COLOR = '#5b0000';
 
 // ============================================================
-// PREFIX HELPERS
+// PREFIX AND COMMAND HELPERS
 // ============================================================
-
-// Collect every available prefix instead of trusting only
-// message.prefix or only client.getPrefix().
 
 function getPrefixCandidates(client, message) {
   const prefixes = [];
@@ -49,61 +46,102 @@ function getPrefixCandidates(client, message) {
       addPrefix(client.getPrefix(message.guild?.id));
     }
   } catch (error) {
-    console.error('[VC] Could not retrieve server prefix:', error);
+    console.error('[VC] Could not retrieve prefix:', error);
   }
 
   addPrefix(client.prefix);
   addPrefix(client.config?.prefix);
 
-  const uniquePrefixes = [...new Set(prefixes)];
+  const unique = [...new Set(prefixes)];
 
-  // Use the original default only if no prefix is available.
-  if (uniquePrefixes.length === 0) {
-    uniquePrefixes.push('$');
-  }
-
-  return uniquePrefixes;
+  return unique.length ? unique : ['$'];
 }
 
-// ============================================================
-// STRICT COMMAND CHECK
-// ============================================================
+/**
+ * Returns the exact VC command name when the message is a
+ * legitimate VC invocation, otherwise returns null.
+ *
+ * Supports:
+ *   $vc help
+ *   $voicechannel help
+ *   $vchelp
+ *
+ * Prefixless invocation is permitted only for users allowed
+ * by client.isPrefixless().
+ */
+function getVCInvocation(client, message) {
+  if (!message.guild || !message.author) {
+    return null;
+  }
 
-function isExactVCCommand(client, message) {
   const content = String(message.content || '').trim();
 
   if (!content) {
-    return false;
+    return null;
   }
 
-  const tokens = content.split(/\s+/);
-  const firstToken = tokens[0].toLowerCase();
+  const firstToken = content
+    .split(/\s+/)[0]
+    .toLowerCase();
 
-  const validNames = new Set([
+  const allowedNames = new Set([
     'vc',
     'voicechannel',
     'vchelp',
   ]);
 
-  // Support bots configured to accept a direct bot mention
-  // followed by a command name.
-  if (
-    /^<@!?\d+>$/.test(firstToken) &&
-    validNames.has(String(tokens[1] || '').toLowerCase())
-  ) {
-    return true;
-  }
-
   const prefixes = getPrefixCandidates(client, message);
 
-  return prefixes.some(prefix => {
-    const invokedName = firstToken
-      .startsWith(prefix.toLowerCase())
-      ? firstToken.slice(prefix.length).toLowerCase()
-      : '';
+  // Normal prefixed commands must match the complete token.
+  for (const prefix of prefixes) {
+    const normalizedPrefix = prefix.toLowerCase();
 
-    return validNames.has(invokedName);
-  });
+    if (!firstToken.startsWith(normalizedPrefix)) {
+      continue;
+    }
+
+    const commandName = firstToken.slice(
+      normalizedPrefix.length
+    );
+
+    if (allowedNames.has(commandName)) {
+      return {
+        name: commandName,
+        prefix,
+        prefixless: false,
+      };
+    }
+  }
+
+  // Preserve the existing per-user prefixless feature.
+  let prefixlessAllowed = false;
+
+  try {
+    prefixlessAllowed = Boolean(
+      client.isPrefixless?.(
+        message.guild.id,
+        message.author.id
+      )
+    );
+  } catch (error) {
+    console.error(
+      '[VC] Could not check prefixless access:',
+      error
+    );
+  }
+
+  if (
+    prefixlessAllowed &&
+    allowedNames.has(firstToken)
+  ) {
+    return {
+      name: firstToken,
+      prefix: prefixes[0] || '$',
+      prefixless: true,
+    };
+  }
+
+  return null;
 }
 
 // ============================================================
@@ -112,6 +150,10 @@ function isExactVCCommand(client, message) {
 
 function ensureDB(client) {
   if (client.vcDB && client.vcDB.open) {
+    if (!client.vcAFKTimers) {
+      client.vcAFKTimers = new Map();
+    }
+
     return client.vcDB;
   }
 
@@ -440,7 +482,7 @@ function cancelAFKTimer(client, channelId) {
 }
 
 // ============================================================
-// OWNER CHECK
+// VC OWNER CHECK
 // ============================================================
 
 async function ownerOnly(
@@ -469,7 +511,7 @@ async function ownerOnly(
 
   if (
     !state ||
-    state.owner_id !== message.author.id
+    String(state.owner_id) !== String(message.author.id)
   ) {
     await message.reply({
       embeds: [
@@ -498,7 +540,9 @@ function parseChannelId(raw) {
 
   const text = String(raw).trim();
 
-  const mention = text.match(/^<#(\d{15,22})>$/);
+  const mention = text.match(
+    /^<#(\d{15,22})>$/
+  );
 
   if (mention) {
     return mention[1];
@@ -512,18 +556,24 @@ function parseChannelId(raw) {
 }
 
 // ============================================================
-// UNIVERSAL MEMBER RESOLVER
+// UNIVERSAL VC MEMBER RESOLVER
 //
-// Supports mentions, IDs, and names supported by
-// handlers/universalHelper.js.
+// Supports:
+//   $vc permit @user
+//   $vc permit 123456789012345678
+//   $vc permit username
+//   $vc permit Display Name
+//
+// Uses the same universal user/member helpers as warn.js.
 // ============================================================
 
-async function resolveVCMember(
+async function resolveMember(
   client,
   message,
   args,
   argumentIndex = 1
 ) {
+  // Explicit member mention is the most reliable match.
   const mentioned = message.mentions.members.first();
 
   if (mentioned) {
@@ -539,6 +589,29 @@ async function resolveVCMember(
     return null;
   }
 
+  // Handle a raw ID or pasted user mention.
+  const idMention = targetInput.match(
+    /^<@!?(\d{15,22})>$/
+  );
+
+  const rawId = idMention
+    ? idMention[1]
+    : (
+        /^\d{15,22}$/.test(targetInput)
+          ? targetInput
+          : null
+      );
+
+  if (rawId) {
+    return (
+      message.guild.members.cache.get(rawId) ||
+      await message.guild.members
+        .fetch(rawId)
+        .catch(() => null)
+    );
+  }
+
+  // Use the same user resolver as warn.js.
   try {
     const user = await resolveUser(
       client,
@@ -559,34 +632,57 @@ async function resolveVCMember(
     }
   } catch (error) {
     console.error(
-      '[VC] User resolution failed:',
+      '[VC] Universal user resolution failed:',
       error
     );
   }
 
+  // Try the universal member resolver too.
   try {
-    return await resolveUniversalMember(
+    const member = await resolveUniversalMember(
       client,
       message,
       targetInput
     );
+
+    if (member) {
+      return member;
+    }
   } catch (error) {
     console.error(
-      '[VC] Member resolution failed:',
+      '[VC] Universal member resolution failed:',
       error
     );
-
-    return null;
   }
+
+  // Last fallback: exact matches in the current member cache.
+  const wanted = targetInput.toLowerCase();
+
+  const cachedMember = message.guild.members.cache.find(
+    member =>
+      member.user.username.toLowerCase() === wanted ||
+      member.displayName.toLowerCase() === wanted ||
+      member.user.globalName?.toLowerCase() === wanted ||
+      member.user.tag?.toLowerCase() === wanted
+  );
+
+  if (cachedMember) {
+    return cachedMember;
+  }
+
+  return null;
 }
 
 // ============================================================
-// VC SETUP
+// VC SETUP COMMAND
 //
 // Examples:
+//
 // $vc setup #create-vc
 // $vc setup
 // $vc setup off
+//
+// Each guild gets its own configuration.
 // ============================================================
 
 async function handleSetup(
@@ -596,6 +692,10 @@ async function handleSetup(
 ) {
   const guild = message.guild;
 
+  const prefix = String(
+    client.getPrefix?.(guild.id) || '$'
+  );
+
   const rawTarget =
     args[1] ||
     message.mentions.channels.first()?.id;
@@ -604,7 +704,10 @@ async function handleSetup(
     rawTarget || ''
   ).toLowerCase();
 
-  // Disable Join-to-Create.
+  // ----------------------------------------------------------
+  // DISABLE JOIN-TO-CREATE
+  // ----------------------------------------------------------
+
   if (
     lowered === 'off' ||
     lowered === 'disable' ||
@@ -626,7 +729,10 @@ async function handleSetup(
       });
     }
 
-    clearGuildSettings(client, guild.id);
+    clearGuildSettings(
+      client,
+      guild.id
+    );
 
     return message.reply({
       embeds: [
@@ -643,14 +749,17 @@ async function handleSetup(
     guild.id
   );
 
-  // View configuration.
+  // ----------------------------------------------------------
+  // VIEW CURRENT CONFIGURATION
+  // ----------------------------------------------------------
+
   if (!rawTarget) {
     if (!existing) {
       return message.reply({
         embeds: [
           createReplyEmbed(
             'VC Setup',
-            `Use \`${client.getPrefix(guild.id)}vc setup #voice-channel\` to choose this server's Join-to-Create voice channel.`
+            `Use \`${prefix}vc setup #voice-channel\` to choose this server's Join-to-Create voice channel.`
           ),
         ],
       });
@@ -666,11 +775,15 @@ async function handleSetup(
               ? `inside <#${existing.category_id}>`
               : 'without a category'
           }.\n\n` +
-          `Use \`${client.getPrefix(guild.id)}vc setup #voice-channel\` to change it, or \`${client.getPrefix(guild.id)}vc setup off\` to disable it.`
+          `Use \`${prefix}vc setup #voice-channel\` to change it, or \`${prefix}vc setup off\` to disable it.`
         ),
       ],
     });
   }
+
+  // ----------------------------------------------------------
+  // PERMISSION CHECK
+  // ----------------------------------------------------------
 
   if (
     !message.member.permissions.has(
@@ -688,6 +801,10 @@ async function handleSetup(
     });
   }
 
+  // ----------------------------------------------------------
+  // RESOLVE VOICE CHANNEL
+  // ----------------------------------------------------------
+
   const channelMention =
     message.mentions.channels.first();
 
@@ -700,7 +817,7 @@ async function handleSetup(
       embeds: [
         createReplyEmbed(
           'Invalid Channel',
-          `Mention a voice channel or provide its ID.\nExample: \`${client.getPrefix(guild.id)}vc setup #join-to-create\``,
+          `Mention a voice channel or provide its ID.\nExample: \`${prefix}vc setup #join-to-create\``,
           '#f59e0b'
         ),
       ],
@@ -708,8 +825,8 @@ async function handleSetup(
   }
 
   const channel =
-    guild.channels.cache.get(channelId) ||
-    await guild.channels
+    message.guild.channels.cache.get(channelId) ||
+    await message.guild.channels
       .fetch(channelId)
       .catch(() => null);
 
@@ -729,6 +846,7 @@ async function handleSetup(
     });
   }
 
+  // Save this server's trigger channel and category.
   setGuildSettings(
     client,
     guild.id,
@@ -773,48 +891,30 @@ module.exports = {
   ],
 
   async execute(client, message, args) {
-    // Exact command guard, using every available prefix source.
-    // Normal messages must not trigger the VC command.
-    if (
-      !message.guild ||
-      !message.member ||
-      !isExactVCCommand(client, message)
-    ) {
+    // --------------------------------------------------------
+    // COMMAND GUARD
+    //
+    // Supports normal prefixes and authorized prefixless users.
+    // Requires an exact command token rather than a substring.
+    // --------------------------------------------------------
+
+    const invocation = getVCInvocation(
+      client,
+      message
+    );
+
+    if (!invocation) {
+      return;
+    }
+
+    if (!message.guild || !message.member) {
       return;
     }
 
     ensureDB(client);
 
-    const prefixes = getPrefixCandidates(client, message);
-    const prefix = prefixes[0];
-
-    const tokens = String(message.content || '')
-      .trim()
-      .split(/\s+/);
-
-    const firstToken = String(tokens[0] || '').toLowerCase();
-
-    let invokedName = '';
-
-    for (const candidate of prefixes) {
-      if (firstToken.startsWith(candidate.toLowerCase())) {
-        invokedName = firstToken
-          .slice(candidate.length)
-          .toLowerCase();
-
-        if (invokedName) {
-          break;
-        }
-      }
-    }
-
-    // Support direct bot mention invocation.
-    if (
-      !invokedName &&
-      /^<@!?\d+>$/.test(firstToken)
-    ) {
-      invokedName = String(tokens[1] || '').toLowerCase();
-    }
+    const prefix = invocation.prefix;
+    const invokedName = invocation.name;
 
     const subcommand = String(
       args[0] || ''
@@ -838,6 +938,7 @@ module.exports = {
         .addFields(
           {
             name: 'Server Setup (Manage Channels)',
+
             value:
               `\`${prefix}vc setup #channel\` — Set the Join-to-Create voice channel.\n` +
               `\`${prefix}vc setup\` — View the current setup.\n` +
@@ -845,6 +946,7 @@ module.exports = {
           },
           {
             name: 'Channel',
+
             value:
               `\`${prefix}vc name <name>\` — Rename your VC.\n` +
               `\`${prefix}vc limit <0-99>\` — Set the user limit.\n` +
@@ -852,6 +954,7 @@ module.exports = {
           },
           {
             name: 'Access',
+
             value:
               `\`${prefix}vc lock\` / \`${prefix}vc unlock\` — Close or reopen your VC.\n` +
               `\`${prefix}vc permit @user\` — Allow a member into your VC.\n` +
@@ -859,6 +962,7 @@ module.exports = {
           },
           {
             name: 'Controls',
+
             value:
               `\`${prefix}vc silence\` / \`${prefix}vc unsilence\` — Manage Vanessa-applied server mutes.\n` +
               `\`${prefix}vc ghost\` — Toggle VC visibility.\n` +
@@ -940,7 +1044,10 @@ module.exports = {
     // --------------------------------------------------------
 
     if (subcommand === 'name') {
-      const newName = args.slice(1).join(' ').trim();
+      const newName = args
+        .slice(1)
+        .join(' ')
+        .trim();
 
       if (!newName) {
         return message.reply({
@@ -967,7 +1074,10 @@ module.exports = {
       }
 
       try {
-        await channel.setName(newName, reason);
+        await channel.setName(
+          newName,
+          reason
+        );
 
         return message.reply({
           embeds: [
@@ -978,7 +1088,10 @@ module.exports = {
           ],
         });
       } catch (error) {
-        console.error('[VC] Rename failed:', error);
+        console.error(
+          '[VC] Rename failed:',
+          error
+        );
 
         return message.reply({
           embeds: [
@@ -1018,6 +1131,7 @@ module.exports = {
           embeds: [
             createReplyEmbed(
               locking ? 'VC Locked' : 'VC Unlocked',
+
               locking
                 ? 'Your voice channel is locked. Members who already have access may remain inside.'
                 : 'Your voice channel is open again.'
@@ -1025,7 +1139,10 @@ module.exports = {
           ],
         });
       } catch (error) {
-        console.error(`[VC] ${subcommand} failed:`, error);
+        console.error(
+          `[VC] ${subcommand} failed:`,
+          error
+        );
 
         return message.reply({
           embeds: [
@@ -1044,7 +1161,7 @@ module.exports = {
     // --------------------------------------------------------
 
     if (subcommand === 'permit') {
-      const target = await resolveVCMember(
+      const target = await resolveMember(
         client,
         message,
         args,
@@ -1056,7 +1173,7 @@ module.exports = {
           embeds: [
             createReplyEmbed(
               'User Not Found',
-              'Mention a server member, provide their ID, or enter a username supported by the universal user resolver.',
+              'Mention a server member, provide their ID, or enter their username.',
               '#f59e0b'
             ),
           ],
@@ -1096,7 +1213,10 @@ module.exports = {
           ],
         });
       } catch (error) {
-        console.error('[VC] Permit failed:', error);
+        console.error(
+          '[VC] Permit failed:',
+          error
+        );
 
         return message.reply({
           embeds: [
@@ -1115,7 +1235,7 @@ module.exports = {
     // --------------------------------------------------------
 
     if (subcommand === 'kick') {
-      const target = await resolveVCMember(
+      const target = await resolveMember(
         client,
         message,
         args,
@@ -1127,7 +1247,7 @@ module.exports = {
           embeds: [
             createReplyEmbed(
               'User Not Found',
-              'Mention a server member, provide their ID, or enter a username supported by the universal user resolver.',
+              'Mention a server member, provide their ID, or enter their username.',
               '#f59e0b'
             ),
           ],
@@ -1195,7 +1315,10 @@ module.exports = {
           ],
         });
       } catch (error) {
-        console.error('[VC] Kick failed:', error);
+        console.error(
+          '[VC] Kick failed:',
+          error
+        );
 
         return message.reply({
           embeds: [
@@ -1233,12 +1356,16 @@ module.exports = {
       }
 
       try {
-        await channel.setUserLimit(amount, reason);
+        await channel.setUserLimit(
+          amount,
+          reason
+        );
 
         return message.reply({
           embeds: [
             createReplyEmbed(
               'VC Limit Updated',
+
               amount === 0
                 ? 'The user limit has been removed.'
                 : `Your voice channel can now hold **${amount}** members.`
@@ -1246,7 +1373,10 @@ module.exports = {
           ],
         });
       } catch (error) {
-        console.error('[VC] Limit update failed:', error);
+        console.error(
+          '[VC] Limit update failed:',
+          error
+        );
 
         return message.reply({
           embeds: [
@@ -1286,6 +1416,7 @@ module.exports = {
       let failed = 0;
 
       for (const member of members) {
+        // Do not claim mutes Vanessa did not apply.
         if (member.voice.serverMute) {
           continue;
         }
@@ -1318,6 +1449,7 @@ module.exports = {
         embeds: [
           createReplyEmbed(
             'VC Silenced',
+
             `Vanessa server-muted **${muted}** member${muted === 1 ? '' : 's'}.` +
             (
               failed
@@ -1402,6 +1534,7 @@ module.exports = {
         embeds: [
           createReplyEmbed(
             'VC Unsilenced',
+
             `Removed Vanessa’s tracked server mute from **${unmuted}** member${unmuted === 1 ? '' : 's'}.` +
             (
               failed
@@ -1456,6 +1589,7 @@ module.exports = {
               currentlyGhosted
                 ? 'Ghost Disabled'
                 : 'Ghost Enabled',
+
               currentlyGhosted
                 ? 'Your voice channel is visible to everyone again.'
                 : 'Your voice channel is hidden from members who do not have explicit access.'
@@ -1463,7 +1597,10 @@ module.exports = {
           ],
         });
       } catch (error) {
-        console.error('[VC] Ghost toggle failed:', error);
+        console.error(
+          '[VC] Ghost toggle failed:',
+          error
+        );
 
         return message.reply({
           embeds: [
@@ -1512,7 +1649,10 @@ module.exports = {
           channelId
         );
 
-        cancelAFKTimer(client, channelId);
+        cancelAFKTimer(
+          client,
+          channelId
+        );
 
         return message.reply({
           embeds: [
@@ -1535,7 +1675,10 @@ module.exports = {
         channelId
       );
 
-      cancelAFKTimer(client, channelId);
+      cancelAFKTimer(
+        client,
+        channelId
+      );
 
       return message.reply({
         embeds: [
@@ -1553,6 +1696,7 @@ module.exports = {
 
     if (subcommand === 'reset') {
       try {
+        // Only remove tracked mutes applied by this system.
         for (
           const row of getTrackedMuted(
             client,
@@ -1580,7 +1724,10 @@ module.exports = {
           channelId
         );
 
-        cancelAFKTimer(client, channelId);
+        cancelAFKTimer(
+          client,
+          channelId
+        );
 
         ensureDB(client).prepare(`
           UPDATE vc_channels
@@ -1593,6 +1740,8 @@ module.exports = {
           channelId
         );
 
+        // Remove member-specific overwrites.
+        // Preserve @everyone and the owner.
         for (
           const overwrite of [
             ...channel.permissionOverwrites.cache.values()
@@ -1652,7 +1801,10 @@ module.exports = {
           ],
         });
       } catch (error) {
-        console.error('[VC] Reset failed:', error);
+        console.error(
+          '[VC] Reset failed:',
+          error
+        );
 
         return message.reply({
           embeds: [
@@ -1681,7 +1833,7 @@ module.exports = {
     });
   },
 
-  // Exports used by handlers/vchandler.js.
+  // Exports required by handlers/vcHandler.js.
   initDB: ensureDB,
   getGuildSettings,
   getJoinToCreateId,
