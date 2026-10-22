@@ -101,7 +101,7 @@ function getMonthKey(ts = Date.now()) {
   return `${p.year}-${pad(p.month)}`;
 }
 
-// Monday-based week key in the fixed timezone
+// Monday-based week key in the fixed timezone.
 function getWeekKey(ts = Date.now()) {
   const p = getTzParts(ts);
   const mondayOffset = (p.weekday + 6) % 7;
@@ -122,7 +122,7 @@ function isTrackableMessage(client, message) {
   if (!message || !message.guild) return false;
   if (!message.author || message.author.bot) return false;
   if (message.webhookId) return false;
-  if (message.commandName) return false; // ignore live commands
+  if (message.commandName) return false; // Ignore live commands.
   if (client?.botBlacklist?.has?.(message.author.id)) return false;
 
   const prefix = client?.getPrefix?.(message.guild.id);
@@ -146,7 +146,11 @@ function ensureMetaRow(guildId, keys) {
       VALUES (?, ?, ?, ?)
     `).run(guildId, keys.daily, keys.weekly, keys.monthly);
 
-    return { daily_key: keys.daily, weekly_key: keys.weekly, monthly_key: keys.monthly };
+    return {
+      daily_key: keys.daily,
+      weekly_key: keys.weekly,
+      monthly_key: keys.monthly,
+    };
   }
 
   return row;
@@ -323,14 +327,7 @@ function trackMessage(client, message, opts = {}) {
     upsertCursor.run(message.channel.id, guildId, message.id, ts);
   }
 
-  if (client?.economy?.rewardPassiveMessage) {
-    try {
-      client.economy.rewardPassiveMessage(client, message, ts);
-    } catch (err) {
-      console.error('[MessageTracker] Passive reward failed:', err);
-    }
-  }
-
+  // Message tracking only: no economy reward is issued for activity.
   return true;
 }
 
