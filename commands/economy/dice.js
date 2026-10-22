@@ -5,7 +5,7 @@ const {
   formatDuration,
   useCooldown,
   boostProfit,
-} = require('../../handlers/gamblinghelpers');
+} = require('../../handlers/gamblingHelpers');
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
