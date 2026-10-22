@@ -1,9 +1,11 @@
 const { EmbedBuilder } = require('discord.js');
+const { randomInt } = require('crypto');
+
 const {
   formatDuration,
   useCooldown,
   boostProfit,
-} = require('../../handlers/gamblingHelpers');
+} = require('../../handlers/gamblinghelpers');
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
@@ -18,22 +20,34 @@ function buildEmbed(message, data = {}) {
     });
 
     if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+
     if (data.footer) {
-      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-      else embed.setFooter(data.footer);
+      if (typeof data.footer === 'string') {
+        embed.setFooter({ text: data.footer });
+      } else {
+        embed.setFooter(data.footer);
+      }
     }
 
     return embed;
   }
 
-  const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
+  const embed = new EmbedBuilder()
+    .setColor('#5b0000')
+    .setTimestamp();
+
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
   if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+
   if (data.footer) {
-    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-    else embed.setFooter(data.footer);
+    if (typeof data.footer === 'string') {
+      embed.setFooter({ text: data.footer });
+    } else {
+      embed.setFooter(data.footer);
+    }
   }
+
   return embed;
 }
 
@@ -43,13 +57,79 @@ function money(client, amount) {
     : `${Number(amount || 0).toLocaleString('en-US')} Crowns`;
 }
 
-function rollDie() {
-  return Math.floor(Math.random() * 6) + 1;
+/**
+ * Rolls two different dice.
+ *
+ * First die: uniformly selected from 1 through 6.
+ * Second die: uniformly selected from the five remaining numbers.
+ *
+ * Every ordered pair of distinct results has the same probability.
+ */
+function rollDistinctDice() {
+  const rollA = randomInt(1, 7);
+
+  // randomInt(1, 6) returns 1 through 5.
+  // Shift values at or above rollA up by one to skip rollA.
+  let rollB = randomInt(1, 6);
+
+  if (rollB >= rollA) {
+    rollB += 1;
+  }
+
+  return [rollA, rollB];
 }
 
 function parsePick(raw) {
-  const n = parseInt(raw, 10);
-  return Number.isInteger(n) && n >= 1 && n <= 6 ? n : null;
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return null;
+  }
+
+  const text = String(raw).trim();
+
+  // Only accept a whole-number input.
+  if (!/^[1-6]$/.test(text)) {
+    return null;
+  }
+
+  const number = Number(text);
+
+  return Number.isInteger(number) && number >= 1 && number <= 6
+    ? number
+    : null;
+}
+
+/**
+ * Calculates a fair base profit for the selected bet.
+ *
+ * Among the 15 possible unordered pairs of different dice results:
+ * - 6 pairs match neither pick.
+ * - 8 pairs match exactly one pick.
+ * - 1 pair matches both picks.
+ *
+ * Therefore:
+ *   6 * (-bet) + 8 * oneMatchProfit + twoMatchProfit = 0
+ *
+ * Integer adjustments ensure this remains true for odd-numbered bets.
+ */
+function calculateBaseProfit(amount, matchCount) {
+  if (matchCount === 0) {
+    return 0;
+  }
+
+  const oneMatchProfit = Math.floor(amount / 2);
+
+  const twoMatchProfit =
+    (6 * amount) - (8 * oneMatchProfit);
+
+  if (matchCount === 1) {
+    return oneMatchProfit;
+  }
+
+  if (matchCount === 2) {
+    return twoMatchProfit;
+  }
+
+  return 0;
 }
 
 module.exports = {
@@ -64,20 +144,48 @@ module.exports = {
 
     if (!client.economy) {
       return message.reply({
-        embeds: [buildEmbed(message, { title: 'Economy Unavailable', description: 'The economy system is not ready.' })],
+        embeds: [
+          buildEmbed(message, {
+            title: 'Economy Unavailable',
+            description: 'The economy system is not ready.',
+          }),
+        ],
       });
     }
 
-    const amount = parseInt(args[0], 10);
-    const pick1 = parsePick(args[1]);
-    const pick2 = parsePick(args[2]);
+    // Validate the bet.
+    const amountText = String(args[0] ?? '').trim();
 
-    if (!Number.isInteger(amount) || amount <= 0 || !pick1 || !pick2 || pick1 === pick2) {
+    if (!/^\d+$/.test(amountText)) {
       return message.reply({
         embeds: [
           buildEmbed(message, {
             title: 'Dice',
-            description: 'Use: `$dice <amount> <number1> <number2>`\nThe two numbers must be different and between 1 and 6.',
+            description: 'Enter a valid whole-number bet.',
+          }),
+        ],
+      });
+    }
+
+    const amount = Number(amountText);
+
+    const pick1 = parsePick(args[1]);
+    const pick2 = parsePick(args[2]);
+
+    if (
+      !Number.isSafeInteger(amount) ||
+      amount <= 0 ||
+      !pick1 ||
+      !pick2 ||
+      pick1 === pick2
+    ) {
+      return message.reply({
+        embeds: [
+          buildEmbed(message, {
+            title: '🎲 Dice',
+            description:
+              'Use: `$dice <amount> <number1> <number2>`\n' +
+              'Your two picks must be different numbers between **1 and 6**.',
           }),
         ],
       });
@@ -87,79 +195,130 @@ module.exports = {
       return message.reply({
         embeds: [
           buildEmbed(message, {
-            title: 'Dice',
-            description: `Maximum bet is **${money(client, MAX_BET)}**.`,
+            title: '🎲 Dice',
+            description: `The maximum bet is **${money(client, MAX_BET)}**.`,
           }),
         ],
       });
     }
 
-    const balance = client.economy.getBalance(message.guild.id, message.author.id);
+    const guildId = message.guild.id;
+    const userId = message.author.id;
+
+    const balance = client.economy.getBalance(guildId, userId);
+
     if (balance < amount) {
       return message.reply({
         embeds: [
           buildEmbed(message, {
-            title: 'Dice',
+            title: '🎲 Dice',
             description: `You only have **${money(client, balance)}**.`,
           }),
         ],
       });
     }
 
-    const remaining = useCooldown(message.guild.id, message.author.id, 'dice', COOLDOWN_MS);
+    // Check cooldown before taking currency.
+    const remaining = useCooldown(
+      guildId,
+      userId,
+      'dice',
+      COOLDOWN_MS
+    );
+
     if (remaining > 0) {
       return message.reply({
         embeds: [
           buildEmbed(message, {
-            title: 'Dice',
-            description: `You are on cooldown for **${formatDuration(remaining)}**.`,
+            title: '🎲 Dice',
+            description:
+              `You are on cooldown for **${formatDuration(remaining)}**.`,
           }),
         ],
       });
     }
 
-    const removed = client.economy.removeCrowns(message.guild.id, message.author.id, amount, {
-      type: 'dice_bet',
-      reason: 'Dice bet',
-      actorId: message.author.id,
-    });
+    // Collect the bet.
+    const removed = client.economy.removeCrowns(
+      guildId,
+      userId,
+      amount,
+      {
+        type: 'dice_bet',
+        reason: 'Dice bet',
+        actorId: userId,
+      }
+    );
 
     if (!removed) {
       return message.reply({
         embeds: [
           buildEmbed(message, {
-            title: 'Dice',
+            title: '🎲 Dice',
             description: 'You do not have enough Crowns.',
           }),
         ],
       });
     }
 
-    const rollA = rollDie();
-    const rollB = rollDie();
+    // Roll two distinct dice.
+    const [rollA, rollB] = rollDistinctDice();
 
+    // Count how many dice match either of the user's two distinct picks.
     const matchCount =
       (rollA === pick1 || rollA === pick2 ? 1 : 0) +
       (rollB === pick1 || rollB === pick2 ? 1 : 0);
 
-    const baseProfit =
-      matchCount === 1 ? amount :
-      matchCount === 2 ? amount * 2 :
-      0;
+    // Calculate the mathematically fair base profit.
+    const baseProfit = calculateBaseProfit(amount, matchCount);
 
-    let winnings = 0;
-    if (baseProfit > 0) {
-      const boostedProfit = boostProfit(client, message.guild.id, message.author.id, baseProfit);
-      winnings = amount + boostedProfit;
+    // Preserve the existing economy boost mechanic.
+    // Note that an active boost increases expected returns.
+    const boostedProfit =
+      baseProfit > 0
+        ? boostProfit(client, guildId, userId, baseProfit)
+        : 0;
 
-      client.economy.addCrowns(message.guild.id, message.author.id, winnings, {
-        type: 'dice_win',
-        reason: 'Dice winnings',
-        actorId: message.author.id,
-      });
+    // The bet has already been deducted.
+    // On any match, return the stake and add the profit.
+    // This also correctly returns the stake if the profit is zero.
+    if (matchCount > 0) {
+      const payout = amount + boostedProfit;
+
+      client.economy.addCrowns(
+        guildId,
+        userId,
+        payout,
+        {
+          type: 'dice_win',
+          reason: 'Dice winnings',
+          actorId: userId,
+        }
+      );
     }
 
-    const newBalance = client.economy.getBalance(message.guild.id, message.author.id);
+    const newBalance = client.economy.getBalance(guildId, userId);
+
+    let resultText;
+
+    if (matchCount === 0) {
+      resultText =
+        '### ❌ No Match!\n' +
+        'You matched **0** numbers and lost **' +
+        `${money(client, amount)}**.`;
+    } else if (boostedProfit === 0) {
+      resultText =
+        '### ✅ Matched!\n' +
+        `You matched **${matchCount}** number` +
+        `${matchCount === 1 ? '' : 's'}. ` +
+        'Your bet was returned, so you broke even.';
+    } else {
+      resultText =
+        '### ✅ Good Guess!\n' +
+        `You matched **${matchCount}** number` +
+        `${matchCount === 1 ? '' : 's'} and earned a profit of ` +
+        `**${money(client, boostedProfit)}**.`;
+    }
 
     const embed = buildEmbed(message, {
       title: '🎲 Dice Rolled',
@@ -167,9 +326,7 @@ module.exports = {
         `**Bet:** ${money(client, amount)}\n` +
         `**Your Picks:** ${pick1}, ${pick2}\n` +
         `**Rolled:** ${rollA}, ${rollB}\n\n` +
-        `${matchCount > 0
-          ? `### ✅ Good Guess!\nYou matched **${matchCount}** number${matchCount === 1 ? '' : 's'} and won **${money(client, winnings - amount)}**.`
-          : `### ❌ Bad Guess!\nYou matched **0** numbers and lost **${money(client, amount)}**.`}\n\n` +
+        `${resultText}\n\n` +
         `**Balance:** ${money(client, newBalance)}`,
       thumbnail: message.author.displayAvatarURL({ size: 256 }),
       footer: `Requested by ${message.author.username}`,
