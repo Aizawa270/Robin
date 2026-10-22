@@ -1,5 +1,6 @@
 const {
-  claimCooldown,
+  checkCooldown,
+  startCooldown,
   formatDuration,
   formatCurrency,
   buildEmbed,
@@ -24,7 +25,7 @@ const PICK_LINES = {
     'You searched between the couch cushions and found the national debt of a very small country.',
     'You found a wallet belonging to someone whose financial decisions are somehow worse than yours.',
     'You found a suspicious bag of Crowns behind a vending machine. The vending machine looked nervous.',
-    'You dug through a junkyard and discovered someone's emergency snack fund.',
+    'You dug through a junkyard and discovered someone’s emergency snack fund.',
     'You found some Crowns under a mattress. The mattress wants them back.',
     'You found a tiny treasure chest guarded by one extremely disappointed crab.',
   ],
@@ -56,27 +57,43 @@ const PICK_LINES = {
 function getPickReward() {
   const roll = randomIntBetween(0, 9999);
 
-  if (roll < 1500) return 0;                          // 15%
-  if (roll < 4500) return randomIntBetween(1, 100);  // 30%
-  if (roll < 7000) return randomIntBetween(101, 350);// 25%
-  if (roll < 8500) return randomIntBetween(351, 750);// 15%
-  if (roll < 9300) return randomIntBetween(751, 1500);// 8%
-  if (roll < 9750) return randomIntBetween(1501, 3000);// 4.5%
-  if (roll < 9950) return randomIntBetween(3001, 6000);// 2%
-  if (roll < 9990) return randomIntBetween(6001, 9999);// 0.4%
+  if (roll < 1500) return 0;                             // 15%
+  if (roll < 4500) return randomIntBetween(1, 100);     // 30%
+  if (roll < 7000) return randomIntBetween(101, 350);   // 25%
+  if (roll < 8500) return randomIntBetween(351, 750);   // 15%
+  if (roll < 9300) return randomIntBetween(751, 1500);  // 8%
+  if (roll < 9750) return randomIntBetween(1501, 3000); // 4.5%
+  if (roll < 9950) return randomIntBetween(3001, 6000); // 2%
+
+  if (roll < 9990) {
+    return randomIntBetween(6001, 9999);                // 0.4%
+  }
 
   return 10000; // 0.1% jackpot
 }
 
 function getPickLine(reward) {
-  if (reward === 10000) return randomLine(PICK_LINES.jackpot);
-  if (reward === 0) return randomLine(PICK_LINES.broke);
-  if (reward <= 350) return randomLine(PICK_LINES.small);
-  if (reward <= 1500) return randomLine(PICK_LINES.decent);
+  if (reward === 10000) {
+    return randomLine(PICK_LINES.jackpot);
+  }
 
-  return reward >= 6000
-    ? randomLine(PICK_LINES.rich)
-    : randomLine(PICK_LINES.decent);
+  if (reward === 0) {
+    return randomLine(PICK_LINES.broke);
+  }
+
+  if (reward <= 350) {
+    return randomLine(PICK_LINES.small);
+  }
+
+  if (reward <= 1500) {
+    return randomLine(PICK_LINES.decent);
+  }
+
+  if (reward >= 3001) {
+    return randomLine(PICK_LINES.rich);
+  }
+
+  return randomLine(PICK_LINES.decent);
 }
 
 module.exports = {
@@ -90,13 +107,19 @@ module.exports = {
     if (!message.guild) return;
 
     if (typeof client?.economy?.addCrowns !== 'function') {
-      return message.reply('The economy system is currently unavailable.');
+      return message.reply(
+        'The economy system is currently unavailable.'
+      );
     }
 
-    const cooldown = claimCooldown(
-      message.guild.id,
-      message.author.id,
-      'pick'
+    const guildId = message.guild.id;
+    const userId = message.author.id;
+    const commandName = 'pick';
+
+    const cooldown = checkCooldown(
+      guildId,
+      userId,
+      commandName
     );
 
     if (!cooldown.allowed) {
@@ -118,10 +141,13 @@ module.exports = {
     try {
       awardCrowns(
         client,
-        message.guild.id,
-        message.author.id,
+        guildId,
+        userId,
         reward,
-        'pick'
+        {
+          type: 'pick',
+          reason: 'Pick command reward',
+        }
       );
     } catch (error) {
       console.error('[Pick] Reward failed:', error);
@@ -130,11 +156,19 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: 'Search Failed',
-            description: 'Something went wrong while processing your reward.',
+            description:
+              'Something went wrong while processing your reward. You have not been given a cooldown.',
             thumbnail: message.guild.iconURL({ size: 256 }),
           }),
         ],
       });
+    }
+
+    // Apply the cooldown only after the reward has been processed.
+    try {
+      startCooldown(guildId, userId, commandName);
+    } catch (error) {
+      console.error('[Pick] Could not save cooldown:', error);
     }
 
     const line = getPickLine(reward);
@@ -147,7 +181,9 @@ module.exports = {
     return message.reply({
       embeds: [
         buildEmbed(message, {
-          title: reward === 0 ? 'Nothing But Dust' : 'Search Results',
+          title: reward === 0
+            ? 'Nothing But Dust'
+            : 'Search Results',
           description,
           thumbnail: message.guild.iconURL({ size: 256 }),
           footer: 'Ravine Economy',
