@@ -1,5 +1,11 @@
 const { EmbedBuilder } = require('discord.js');
-const { resolveTargetUser } = require('../../handlers/economyHelpers');
+const {
+  resolveTargetUser,
+} = require('../../handlers/economyHelpers');
+
+const {
+  getBankBalance,
+} = require('../../handlers/economyExtras');
 
 function formatNumber(n) {
   return Number(n || 0).toLocaleString('en-US');
@@ -20,23 +26,49 @@ function buildEmbed(message, data = {}) {
       footer: data.footer,
     });
 
-    if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+    if (data.thumbnail) {
+      embed.setThumbnail(data.thumbnail);
+    }
+
     if (data.footer) {
-      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-      else embed.setFooter(data.footer);
+      if (typeof data.footer === 'string') {
+        embed.setFooter({
+          text: data.footer,
+        });
+      } else {
+        embed.setFooter(data.footer);
+      }
     }
 
     return embed;
   }
 
-  const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
-  if (data.title) embed.setTitle(data.title);
-  if (data.description) embed.setDescription(data.description);
-  if (data.thumbnail) embed.setThumbnail(data.thumbnail);
-  if (data.footer) {
-    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-    else embed.setFooter(data.footer);
+  const embed = new EmbedBuilder()
+    .setColor('#5b0000')
+    .setTimestamp();
+
+  if (data.title) {
+    embed.setTitle(data.title);
   }
+
+  if (data.description) {
+    embed.setDescription(data.description);
+  }
+
+  if (data.thumbnail) {
+    embed.setThumbnail(data.thumbnail);
+  }
+
+  if (data.footer) {
+    if (typeof data.footer === 'string') {
+      embed.setFooter({
+        text: data.footer,
+      });
+    } else {
+      embed.setFooter(data.footer);
+    }
+  }
+
   return embed;
 }
 
@@ -64,7 +96,8 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: 'Economy Unavailable',
-            description: 'The economy system is not initialized.',
+            description:
+              'The economy system is not initialized.',
             footer: footerText(client),
           }),
         ],
@@ -73,32 +106,51 @@ module.exports = {
 
     const target =
       message.mentions.users.first() ||
-      (args[0] ? await resolveTargetUser(client, message, args[0]) : null) ||
+      (args[0]
+        ? await resolveTargetUser(client, message, args[0])
+            .catch(() => null)
+        : null) ||
       message.author;
 
-    const stats = client.economy.getUserStats(message.guild.id, target.id);
-    const bank = client.economy.getServerBank(message.guild.id);
-    const netWorth = Number(stats.balance || 0) + Number(bank.balance || 0);
+    const stats = client.economy.getUserStats(
+      message.guild.id,
+      target.id
+    );
+
+    // Read THIS user's personal bank, not the shared server bank.
+    const bank = getBankBalance(
+      message.guild.id,
+      target.id
+    );
+
+    const walletBalance = Number(stats.balance || 0);
+    const bankBalance = Number(bank || 0);
+    const netWorth = walletBalance + bankBalance;
 
     const member =
       message.guild.members.cache.get(target.id) ||
       await message.guild.members.fetch(target.id).catch(() => null);
 
-    const displayName = member?.displayName || target.username;
+    const displayName =
+      member?.displayName || target.username;
 
     const embed = buildEmbed(message, {
       title: `${displayName}'s Balance`,
       description:
         `Balance\n` +
-        `↳ ${money(client, stats.balance || 0)}\n\n` +
+        `↳ ${money(client, walletBalance)}\n\n` +
         `Bank\n` +
-        `↳ ${money(client, bank.balance || 0)}\n\n` +
+        `↳ ${money(client, bankBalance)}\n\n` +
         `Networth\n` +
         `↳ ${money(client, netWorth)}`,
-      thumbnail: target.displayAvatarURL({ size: 256 }),
+      thumbnail: target.displayAvatarURL({
+        size: 256,
+      }),
       footer: footerText(client),
     });
 
-    return message.reply({ embeds: [embed] });
+    return message.reply({
+      embeds: [embed],
+    });
   },
 };
