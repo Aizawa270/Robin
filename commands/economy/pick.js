@@ -66,7 +66,7 @@ function getPickReward() {
   if (roll < 9950) return randomIntBetween(3001, 6000); // 2%
 
   if (roll < 9990) {
-    return randomIntBetween(6001, 9999);                // 0.4%
+    return randomIntBetween(6001, 9999);                 // 0.4%
   }
 
   return 10000; // 0.1% jackpot
@@ -164,7 +164,7 @@ module.exports = {
       });
     }
 
-    // Apply the cooldown only after the reward has been processed.
+    // Start the cooldown after the reward has been processed.
     try {
       startCooldown(guildId, userId, commandName);
     } catch (error) {
@@ -175,8 +175,7 @@ module.exports = {
 
     const description =
       `> ${line}\n\n` +
-      `**You found:** ${formatCurrency(client, reward)}\n` +
-      `**Cooldown:** 30 minutes`;
+      `**You found:** ${formatCurrency(client, reward)}`;
 
     return message.reply({
       embeds: [
@@ -186,7 +185,6 @@ module.exports = {
             : 'Search Results',
           description,
           thumbnail: message.guild.iconURL({ size: 256 }),
-          footer: 'Ravine Economy',
         }),
       ],
     });
