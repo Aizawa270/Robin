@@ -1,6 +1,7 @@
 const {
-  COOLDOWN_MS,
-  claimCooldown,
+  checkCooldown,
+  startCooldown,
+  clearCooldown,
   formatDuration,
   formatCurrency,
   buildEmbed,
@@ -54,9 +55,9 @@ const BEG_LINES = {
 function getBegReward() {
   const roll = randomIntBetween(0, 9999);
 
-  if (roll < 2000) return 0;                         // 20%
-  if (roll < 5000) return randomIntBetween(1, 25);  // 30%
-  if (roll < 7500) return randomIntBetween(26, 100);// 25%
+  if (roll < 2000) return 0;                           // 20%
+  if (roll < 5000) return randomIntBetween(1, 25);    // 30%
+  if (roll < 7500) return randomIntBetween(26, 100);  // 25%
   if (roll < 9000) return randomIntBetween(101, 300);// 15%
   if (roll < 9700) return randomIntBetween(301, 700);// 7%
   if (roll < 9900) return randomIntBetween(701, 1200);// 2%
@@ -66,9 +67,17 @@ function getBegReward() {
 }
 
 function getBegLine(reward) {
-  if (reward === 2000) return randomLine(BEG_LINES.jackpot);
-  if (reward === 0) return randomLine(BEG_LINES.broke);
-  if (reward <= 300) return randomLine(BEG_LINES.small);
+  if (reward === 2000) {
+    return randomLine(BEG_LINES.jackpot);
+  }
+
+  if (reward === 0) {
+    return randomLine(BEG_LINES.broke);
+  }
+
+  if (reward <= 300) {
+    return randomLine(BEG_LINES.small);
+  }
 
   return randomLine(BEG_LINES.decent);
 }
@@ -84,13 +93,19 @@ module.exports = {
     if (!message.guild) return;
 
     if (typeof client?.economy?.addCrowns !== 'function') {
-      return message.reply('The economy system is currently unavailable.');
+      return message.reply(
+        'The economy system is currently unavailable.'
+      );
     }
 
-    const cooldown = claimCooldown(
-      message.guild.id,
-      message.author.id,
-      'beg'
+    const guildId = message.guild.id;
+    const userId = message.author.id;
+    const commandName = 'beg';
+
+    const cooldown = checkCooldown(
+      guildId,
+      userId,
+      commandName
     );
 
     if (!cooldown.allowed) {
@@ -112,10 +127,13 @@ module.exports = {
     try {
       awardCrowns(
         client,
-        message.guild.id,
-        message.author.id,
+        guildId,
+        userId,
         reward,
-        'beg'
+        {
+          type: 'beg',
+          reason: 'Beg command reward',
+        }
       );
     } catch (error) {
       console.error('[Beg] Reward failed:', error);
@@ -124,11 +142,19 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: 'Begging Failed',
-            description: 'Something went wrong while processing your reward.',
+            description:
+              'Something went wrong while processing your reward. You have not been given a cooldown.',
             thumbnail: message.guild.iconURL({ size: 256 }),
           }),
         ],
       });
+    }
+
+    // Apply the cooldown only after the reward has been processed.
+    try {
+      startCooldown(guildId, userId, commandName);
+    } catch (error) {
+      console.error('[Beg] Could not save cooldown:', error);
     }
 
     const line = getBegLine(reward);
@@ -141,7 +167,9 @@ module.exports = {
     return message.reply({
       embeds: [
         buildEmbed(message, {
-          title: reward === 0 ? 'Professional Failure' : 'Begging Results',
+          title: reward === 0
+            ? 'Professional Failure'
+            : 'Begging Results',
           description,
           thumbnail: message.guild.iconURL({ size: 256 }),
           footer: 'Ravine Economy',
