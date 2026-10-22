@@ -1,7 +1,6 @@
 const {
   checkCooldown,
   startCooldown,
-  clearCooldown,
   formatDuration,
   formatCurrency,
   buildEmbed,
@@ -55,12 +54,12 @@ const BEG_LINES = {
 function getBegReward() {
   const roll = randomIntBetween(0, 9999);
 
-  if (roll < 2000) return 0;                           // 20%
-  if (roll < 5000) return randomIntBetween(1, 25);    // 30%
-  if (roll < 7500) return randomIntBetween(26, 100);  // 25%
-  if (roll < 9000) return randomIntBetween(101, 300);// 15%
-  if (roll < 9700) return randomIntBetween(301, 700);// 7%
-  if (roll < 9900) return randomIntBetween(701, 1200);// 2%
+  if (roll < 2000) return 0;                            // 20%
+  if (roll < 5000) return randomIntBetween(1, 25);     // 30%
+  if (roll < 7500) return randomIntBetween(26, 100);   // 25%
+  if (roll < 9000) return randomIntBetween(101, 300);  // 15%
+  if (roll < 9700) return randomIntBetween(301, 700);  // 7%
+  if (roll < 9900) return randomIntBetween(701, 1200); // 2%
   if (roll < 9990) return randomIntBetween(1201, 1999);// 0.9%
 
   return 2000; // 0.1% jackpot
@@ -150,7 +149,7 @@ module.exports = {
       });
     }
 
-    // Apply the cooldown only after the reward has been processed.
+    // Start the cooldown after the reward has been processed.
     try {
       startCooldown(guildId, userId, commandName);
     } catch (error) {
@@ -161,8 +160,7 @@ module.exports = {
 
     const description =
       `> ${line}\n\n` +
-      `**You received:** ${formatCurrency(client, reward)}\n` +
-      `**Cooldown:** 30 minutes`;
+      `**You received:** ${formatCurrency(client, reward)}`;
 
     return message.reply({
       embeds: [
@@ -172,7 +170,6 @@ module.exports = {
             : 'Begging Results',
           description,
           thumbnail: message.guild.iconURL({ size: 256 }),
-          footer: 'Ravine Economy',
         }),
       ],
     });
