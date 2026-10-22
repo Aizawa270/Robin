@@ -7,7 +7,7 @@ try {
   config = require('../config');
 } catch {}
 
-const BASE_PASSIVE_REWARD = 30;
+const BASE_PASSIVE_REWARD = 0; // Disabled: messages no longer award coins.
 const PASSIVE_COOLDOWN_MS = 60_000;
 const BOOST_MULTIPLIER = 2;
 
@@ -496,40 +496,11 @@ function getPassiveMultiplier(guildId, userId, now = Date.now()) {
   return Math.max(1, Number(boost.multiplier) || 1);
 }
 
+// Intentionally disabled.
+// Keep this function for compatibility with existing handlers, but never
+// award currency for messages or other passive activity.
 function rewardPassiveMessage(client, message, timestamp = Date.now()) {
-  if (!message?.guild || !message?.author) return 0;
-  if (message.author.bot || message.webhookId) return 0;
-  if (message.commandName) return 0;
-
-  const guildId = String(message.guild.id);
-  const userId = String(message.author.id);
-  const now = Number(timestamp);
-
-  ensureUser(guildId, userId, now);
-  const row = getUserStats(guildId, userId);
-
-  if (row.last_reward_at && now - row.last_reward_at < PASSIVE_COOLDOWN_MS) {
-    return 0;
-  }
-
-  const multiplier = getPassiveMultiplier(guildId, userId, now);
-  const reward = BASE_PASSIVE_REWARD * multiplier;
-
-  db.transaction(() => {
-    updateAdd.run(reward, reward, guildId, userId);
-    updateRewardAt.run(now, guildId, userId);
-    insertTx.run(
-      guildId,
-      userId,
-      null,
-      'message_reward',
-      reward,
-      `Passive message reward${multiplier > 1 ? ` x${multiplier}` : ''}`,
-      now
-    );
-  })();
-
-  return reward;
+  return 0;
 }
 
 function getLeaderboard(guildId, limit = 10, offset = 0) {
@@ -898,7 +869,7 @@ function workShift(client, guildId, userId, member, now = Date.now()) {
       timestamp: now,
     });
 
-    updateAddTaxAndState(gid, uid, shiftTax, shiftNet, shiftBonus = false);
+    updateAddTaxAndState(gid, uid, shiftTax, shiftNet, false);
   })();
 
   return performWorkUpdate({
@@ -939,7 +910,7 @@ function performWorkUpdate({
   newTodayCount,
   nextStreak,
 }) {
-  // keep the transaction small and explicit
+  // Keep the transaction small and explicit.
   updateWorkState.run(
     user.current_job_id,
     nextStreak,
