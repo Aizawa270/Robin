@@ -2,99 +2,74 @@ const { PermissionsBitField } = require('discord.js');
 
 module.exports = {
 name: 'vsay',
-description: 'Makes Vanessa repeat a message or execute a command. Admins only.',
+description: 'Makes Vanessa say text or execute a command. Admins only.',
 category: 'utility',
 usage: '$vsay <message>',
 
 async execute(client, message, args) {
-// Only administrators can use vsay.
-if (
-!message.member?.permissions.has(
-PermissionsBitField.Flags.Administrator
-)
-) {
-return message.reply(
-'Only administrators can use this command.'
-);
+if (!message.member?.permissions.has(PermissionsBitField.Flags.Administrator)) {
+return message.reply('Only administrators can use this command.');
 }
 
 const text = args.join(' ').trim();
 
 if (!text) {
   return message.reply(
-    'Please provide a message. Example: `$vsay hello world`'
+    'Please provide something to say or a command to execute.'
   );
 }
 
-const prefix = client.getPrefix(message.guild?.id) || '$';
+const prefix =
+  typeof client.getPrefix === 'function'
+    ? client.getPrefix(message.guild?.id)
+    : '!';
 
-// Check whether the supplied text starts with the server prefix.
+// Check whether the supplied text is a command.
 if (text.startsWith(prefix)) {
-  const commandText = text.slice(prefix.length).trim();
+  const parts = text.slice(prefix.length).trim().split(/\s+/);
+  const commandName = parts.shift()?.toLowerCase();
 
-  if (!commandText) {
-    return message.reply('Please provide a command to execute.');
-  }
-
-  const commandArgs = commandText.split(/\s+/);
-  const commandName = commandArgs.shift()?.toLowerCase();
+  if (!commandName) return;
 
   const command =
     client.commands.get(commandName) ||
     client.aliases.get(commandName);
 
   if (!command) {
-    return message.reply(
-      `I couldn't find a command named \`${commandName}\`.`
-    );
+    return message.reply(`I couldn't find the command \`${commandName}\`.`);
   }
 
-  // Prevent recursive execution of vsay through itself or an alias.
-  if (command.name.toLowerCase() === 'vsay') {
-    return message.reply(
-      'You cannot execute vsay through itself.'
-    );
+  if (command.name === 'vsay') {
+    return message.reply('Nice try 💀 I cannot execute vsay inside itself.');
   }
 
-  // Keep the original invoking message as the command context.
-  // Existing command handlers can still inspect its author,
-  // member, channel, guild, and permissions.
+  // Don't delete the original message until we've found the command.
   if (message.deletable) {
     await message.delete().catch(() => {});
   }
 
-  // Reuse the existing command preparation and execution system.
-  const { prepareMessage } = require('../../handlers/commandHandler');
-
-  prepareMessage(client, message, command);
-
   try {
-    await command.execute(client, message, commandArgs);
+    await command.execute(client, message, parts);
   } catch (error) {
-    console.error(
-      `[VSay Command Error] ${command.name}`,
-      error
-    );
+    console.error(`[vsay command error: ${commandName}]`, error);
 
     await message.channel.send(
-      'Something went wrong while executing that command.'
+      `The command \`${commandName}\` failed to execute.`
     ).catch(() => {});
   }
 
   return;
 }
 
-// Normal vsay behavior: repeat the supplied text.
+// Ordinary text: make Vanessa say it.
 if (message.deletable) {
   await message.delete().catch(() => {});
 }
 
 await message.channel.send({
   content: text,
-  allowedMentions: {
-    parse: [],
-  },
+  allowedMentions: { parse: [] }
 });
 
-},
+}
 };
