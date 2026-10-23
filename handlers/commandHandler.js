@@ -282,4 +282,6 @@ async function handleMessage(client, message) {
 module.exports = {
   loadCommands,
   handleMessage,
+  prepareMessage,
+  executeCommand
 };
