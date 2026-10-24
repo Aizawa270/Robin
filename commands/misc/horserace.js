@@ -1,17 +1,19 @@
-const { EmbedBuilder } = require('discord.js');
 const economy = require('../../handlers/economy');
+const universalHelper = require('../../handlers/universalHelper');
 
+// ============================================================
+// VANESSA HORSE RACING — PERSISTENT POINTS-ONLY VERSION
+// Compatible with handlers/commandHandler.js.
+// Competition points and unfinished races are persisted between restarts.
+// Race results update the competition leaderboard.
+// ============================================================
+
+const RACE_TIMER_MS = 30_000;
+const MAX_PLAYERS = 10;
+const MIN_PLAYERS = 2;
 const db = economy.db;
 
-const COLOR = 0x2b2d31;
-const RACE_TIMER_MS = 30_000;
-const MIN_PLAYERS = 2;
-const MAX_PLAYERS = 10;
-
-const races = new Map();
-const timers = new Map();
-const resolving = new Set();
-
+// Share the persistent score table with bettingpool.js, using a separate game key.
 db.prepare(`
   CREATE TABLE IF NOT EXISTS game_competition_points (
     game TEXT NOT NULL,
@@ -33,9 +35,29 @@ db.prepare(`
   )
 `).run();
 
-const saveSession = db.prepare(`
-  INSERT INTO horserace_sessions
-    (guild_id, channel_id, host_id, payload, updated_at)
+const getPointsStmt = db.prepare(`
+  SELECT points FROM game_competition_points
+  WHERE game = 'horserace' AND guild_id = ? AND user_id = ?
+`);
+
+const addPointStmt = db.prepare(`
+  INSERT INTO game_competition_points (game, guild_id, user_id, points, updated_at)
+  VALUES ('horserace', ?, ?, ?, ?)
+  ON CONFLICT(game, guild_id, user_id) DO UPDATE SET
+    points = game_competition_points.points + excluded.points,
+    updated_at = excluded.updated_at
+`);
+
+const getLeaderboardStmt = db.prepare(`
+  SELECT user_id, points
+  FROM game_competition_points
+  WHERE game = 'horserace' AND guild_id = ? AND points > 0
+  ORDER BY points DESC, updated_at ASC, user_id ASC
+  LIMIT 10
+`);
+
+const saveSessionStmt = db.prepare(`
+  INSERT INTO horserace_sessions (guild_id, channel_id, host_id, payload, updated_at)
   VALUES (?, ?, ?, ?, ?)
   ON CONFLICT(guild_id) DO UPDATE SET
     channel_id = excluded.channel_id,
@@ -44,557 +66,607 @@ const saveSession = db.prepare(`
     updated_at = excluded.updated_at
 `);
 
-const deleteSession = db.prepare(`
-  DELETE FROM horserace_sessions WHERE guild_id = ?
-`);
+const deleteSessionStmt = db.prepare(
+  'DELETE FROM horserace_sessions WHERE guild_id = ?'
+);
 
-const addPoint = db.prepare(`
-  INSERT INTO game_competition_points
-    (game, guild_id, user_id, points, updated_at)
-  VALUES ('horserace', ?, ?, 1, ?)
-  ON CONFLICT(game, guild_id, user_id) DO UPDATE SET
-    points = game_competition_points.points + 1,
-    updated_at = excluded.updated_at
-`);
+function createEmbed(title, description, context) {
+  const guild = context?.guild || null;
+  const client = context?.client || guild?.client;
 
-const getLeaderboard = db.prepare(`
-  SELECT user_id, points
-  FROM game_competition_points
-  WHERE game = 'horserace' AND guild_id = ? AND points > 0
-  ORDER BY points DESC, updated_at ASC
-  LIMIT 10
-`);
+  if (!client || !guild) {
+    throw new Error('HorseRace embed requires a Discord client and guild context.');
+  }
+
+  // Use Vanessa's shared embed helper for the configured theme colour and
+  // the current server prefix.
+  return universalHelper.createEmbed(client, { guild }, {
+    title: `✦ ${title} ✦`,
+    description,
+  }).setTimestamp();
+}
 
 function getPrefix(message, client) {
-  return message.prefix ||
-    (message.guild && client.getPrefix?.(message.guild.id)) ||
-    '$';
+  if (message.prefix) return message.prefix;
+
+  if (typeof client.getPrefix === 'function' && message.guild) {
+    return client.getPrefix(message.guild.id) || '$';
+  }
+
+  return '$';
 }
 
-function makeEmbed(title, description) {
-  return new EmbedBuilder()
-    .setColor(COLOR)
-    .setTitle(`✦ ${title} ✦`)
-    .setDescription(description)
-    .setTimestamp();
-}
-
-async function send(message, title, description) {
+function send(message, title, description) {
   return message.channel.send({
-    embeds: [makeEmbed(title, description)],
+    embeds: [createEmbed(title, description, message)],
   });
 }
 
-function getPlayerName(guild, userId) {
-  return guild.members.cache.get(userId)?.displayName ||
-    `<@${userId}>`;
-}
-
-function getHorses() {
-  return [
-    {
-      id: 1,
-      name: 'Thunderbolt',
-      emoji: '🐎',
-      speed: 85,
-      stamina: 80,
-      luck: 75,
-    },
-    {
-      id: 2,
-      name: 'Shadowfax',
-      emoji: '🐎',
-      speed: 90,
-      stamina: 70,
-      luck: 80,
-    },
-    {
-      id: 3,
-      name: 'Midnight Star',
-      emoji: '🐎',
-      speed: 75,
-      stamina: 95,
-      luck: 70,
-    },
-    {
-      id: 4,
-      name: 'Golden Arrow',
-      emoji: '🐎',
-      speed: 88,
-      stamina: 75,
-      luck: 77,
-    },
-    {
-      id: 5,
-      name: 'Stormbringer',
-      emoji: '🐎',
-      speed: 92,
-      stamina: 68,
-      luck: 80,
-    },
-    {
-      id: 6,
-      name: 'Silver Flash',
-      emoji: '🐎',
-      speed: 78,
-      stamina: 85,
-      luck: 82,
-    },
-  ];
-}
-
-function serializeRace(race) {
-  return {
-    prefix: race.prefix,
-    status: race.status,
-    startedAt: race.startedAt,
-    messageId: race.messageId || null,
-    players: [...race.players.entries()].map(([userId, player]) => ({
-      userId,
-      horseId: player.horseId,
-      joinedAt: player.joinedAt,
-    })),
-  };
-}
-
-function saveRace(race) {
-  saveSession.run(
-    String(race.guildId),
-    String(race.channelId),
-    String(race.hostId),
-    JSON.stringify(serializeRace(race)),
-    Date.now()
-  );
-}
-
-function clearTimer(guildId) {
-  guildId = String(guildId);
-
-  const timer = timers.get(guildId);
-
-  if (timer) {
-    clearTimeout(timer);
-    timers.delete(guildId);
+class HorseRaceManager {
+  constructor() {
+    this.activeRaces = new Map();
+    this.autoStartTasks = new Map();
+    this.resolvingRaces = new Set();
+    this.client = null;
   }
-}
 
-function deleteRace(guildId) {
-  guildId = String(guildId);
+  getHorses() {
+    return [
+      {
+        id: 1,
+        name: 'Thunderbolt',
+        emoji: '🐎',
+        speed: 85,
+        stamina: 80,
+        luck: 75,
+      },
+      {
+        id: 2,
+        name: 'Shadowfax',
+        emoji: '🐎',
+        speed: 90,
+        stamina: 70,
+        luck: 80,
+      },
+      {
+        id: 3,
+        name: 'Midnight Star',
+        emoji: '🐎',
+        speed: 75,
+        stamina: 95,
+        luck: 70,
+      },
+      {
+        id: 4,
+        name: 'Golden Arrow',
+        emoji: '🐎',
+        speed: 88,
+        stamina: 75,
+        luck: 77,
+      },
+      {
+        id: 5,
+        name: 'Stormbringer',
+        emoji: '🐎',
+        speed: 92,
+        stamina: 68,
+        luck: 80,
+      },
+      {
+        id: 6,
+        name: 'Silver Flash',
+        emoji: '🐎',
+        speed: 78,
+        stamina: 85,
+        luck: 82,
+      },
+    ];
+  }
 
-  clearTimer(guildId);
-  deleteSession.run(guildId);
-  races.delete(guildId);
-}
+  getPoints(guildId, userId) {
+    return Number(
+      getPointsStmt.get(
+        String(guildId),
+        String(userId)
+      )?.points || 0
+    );
+  }
 
-function scheduleRace(guildId, race, delay) {
-  guildId = String(guildId);
+  addPoint(guildId, userId, amount = 1) {
+    const value = Math.floor(Number(amount));
 
-  clearTimer(guildId);
-
-  const timer = setTimeout(() => {
-    timers.delete(guildId);
-
-    const currentRace = races.get(guildId);
-
-    if (currentRace !== race) {
-      return;
+    if (!Number.isFinite(value) || value <= 0) {
+      return this.getPoints(guildId, userId);
     }
 
-    runRace(guildId).catch(error => {
-      console.error('[HorseRace] Scheduled race failed:', error);
-    });
-  }, Math.max(0, delay));
-
-  timer.unref?.();
-  timers.set(guildId, timer);
-}
-
-function createRaceEmbed(race) {
-  const remaining = Math.max(
-    0,
-    Math.ceil(
-      (race.startedAt + RACE_TIMER_MS - Date.now()) / 1000
-    )
-  );
-
-  const horses = race.horses.map(horse => {
-    const count = [...race.players.values()].filter(
-      player => player.horseId === horse.id
-    ).length;
-
-    return (
-      `**${horse.id}.** ${horse.emoji} ${horse.name}` +
-      ` — ${count} player(s)`
+    addPointStmt.run(
+      String(guildId),
+      String(userId),
+      value,
+      Date.now()
     );
-  });
 
-  const playerLines = [...race.players.entries()].map(
-    ([userId, player]) => {
-      const horse = race.horses.find(
-        item => item.id === player.horseId
+    return this.getPoints(guildId, userId);
+  }
+
+  serializeRace(race) {
+    return {
+      prefix: race.prefix || '$',
+      status: race.status,
+      startedAt: Number(race.startedAt) || Date.now(),
+      messageId: race.message?.id || race.messageId || null,
+
+      players: [...race.players.entries()].map(([userId, selection]) => ({
+        userId: String(userId),
+        horseId: Number(selection.horseId),
+        joinedAt: Number(selection.joinedAt) || Date.now(),
+      })),
+    };
+  }
+
+  saveRace(race) {
+    saveSessionStmt.run(
+      String(race.guild.id),
+      String(race.channel.id),
+      String(race.hostId),
+      JSON.stringify(this.serializeRace(race)),
+      Date.now()
+    );
+  }
+
+  deleteRace(guildId) {
+    deleteSessionStmt.run(String(guildId));
+    this.activeRaces.delete(String(guildId));
+  }
+
+  calculatePerformance(horse) {
+    const base =
+      horse.speed * 0.4 +
+      horse.stamina * 0.3 +
+      horse.luck * 0.3;
+
+    const randomFactor = 0.85 + Math.random() * 0.30;
+
+    return Math.min(100, base * randomFactor);
+  }
+
+  simulateRace(horses) {
+    const results = horses.map(horse => ({
+      horse,
+      performance: this.calculatePerformance(horse),
+      position: 0,
+    }));
+
+    results.sort((a, b) => b.performance - a.performance);
+
+    results.forEach((result, index) => {
+      if (
+        index > 0 &&
+        Math.abs(
+          result.performance - results[index - 1].performance
+        ) < 0.5
+      ) {
+        result.position = results[index - 1].position;
+      } else {
+        result.position = index + 1;
+      }
+    });
+
+    return results;
+  }
+
+  createRaceEmbed(race) {
+    const prefix = getPrefix(
+      { guild: race.guild },
+      this.client
+    );
+
+    const chosenPlayers = [...race.players.values()];
+    const playerCount = chosenPlayers.length;
+
+    let statusText;
+
+    if (race.status === 'open') {
+      const remaining = Math.max(
+        0,
+        Math.ceil(
+          (race.startedAt + RACE_TIMER_MS - Date.now()) / 1000
+        )
       );
 
-      return `${getPlayerName(race.guild, userId)} → ${
-        horse ? horse.name : 'Unknown horse'
-      }`;
-    }
-  );
-
-  let statusText;
-
-  if (race.status === 'open') {
-    statusText = `Accepting entries • ${remaining}s remaining`;
-  } else if (race.status === 'running') {
-    statusText = 'The race is underway!';
-  } else {
-    statusText = race.status;
-  }
-
-  return makeEmbed(
-    'HORSE RACING | THUNDERDOME DERBY',
-    `**Status:** ${statusText}\n` +
-    `**Players:** ${race.players.size}/${MAX_PLAYERS}\n` +
-    `**Minimum:** ${MIN_PLAYERS} players\n\n` +
-    `**Horses**\n${horses.join('\n')}\n\n` +
-    `**Player choices**\n${playerLines.join('\n') || 'Nobody has chosen a horse yet.'}\n\n` +
-    `Choose with \`${race.prefix}horserace choose <1-6>\`.\n` +
-    'Winners earn competition points. Crowns are not used.'
-  ).setFooter({
-    text: `${race.guild.name} • Persistent competition points`,
-  });
-}
-
-function simulateRace() {
-  const results = getHorses()
-    .map(horse => {
-      const base =
-        horse.speed * 0.4 +
-        horse.stamina * 0.3 +
-        horse.luck * 0.3;
-
-      const randomFactor = 0.85 + Math.random() * 0.30;
-
-      return {
-        horse,
-        performance: Math.min(100, base * randomFactor),
-        position: 0,
-      };
-    })
-    .sort((a, b) => b.performance - a.performance);
-
-  results.forEach((result, index) => {
-    if (
-      index > 0 &&
-      Math.abs(
-        result.performance - results[index - 1].performance
-      ) < 0.5
-    ) {
-      result.position = results[index - 1].position;
+      statusText = `Accepting players • ${remaining}s remaining`;
+    } else if (race.status === 'running') {
+      statusText = 'The race is underway!';
+    } else if (race.status === 'finished') {
+      statusText = 'Race finished';
     } else {
-      result.position = index + 1;
-    }
-  });
-
-  return results;
-}
-
-async function refreshRaceMessage(race) {
-  if (!race.messageId) {
-    return;
-  }
-
-  const message = await race.channel.messages
-    .fetch(race.messageId)
-    .catch(() => null);
-
-  if (!message) {
-    return;
-  }
-
-  await message.edit({
-    embeds: [createRaceEmbed(race)],
-  }).catch(error => {
-    console.error('[HorseRace] Could not refresh race message:', error);
-  });
-}
-
-async function runRace(guildId) {
-  guildId = String(guildId);
-
-  const race = races.get(guildId);
-
-  if (
-    !race ||
-    resolving.has(guildId) ||
-    !['open', 'running'].includes(race.status)
-  ) {
-    return;
-  }
-
-  clearTimer(guildId);
-  resolving.add(guildId);
-
-  try {
-    if (race.players.size < MIN_PLAYERS) {
-      deleteRace(guildId);
-
-      await race.channel.send({
-        embeds: [
-          makeEmbed(
-            'Race Cancelled',
-            `Only **${race.players.size}** player(s) entered.\n` +
-            `At least **${MIN_PLAYERS}** are needed. No points awarded.`
-          ),
-        ],
-      }).catch(() => {});
-
-      return;
+      statusText = 'Race cancelled';
     }
 
-    race.status = 'running';
-    saveRace(race);
+    const embed = createEmbed(
+      'HORSE RACING | THUNDERDOME DERBY',
+      'Choose your horse before the timer runs out!',
+      {
+        client: this.client,
+        guild: race.guild,
+      }
+    ).addFields({
+      name: 'RACE STATUS',
+      value:
+        `Players: **${playerCount}/${MAX_PLAYERS}**\n` +
+        `Minimum: **${MIN_PLAYERS} players**\n` +
+        `Status: **${statusText}**`,
+      inline: false,
+    }).setTimestamp();
 
-    await refreshRaceMessage(race);
+    const horsesText = race.horses.map(horse => {
+      const count = chosenPlayers.filter(
+        player => player.horseId === horse.id
+      ).length;
 
-    await race.channel.send({
-      embeds: [
-        makeEmbed(
-          '🏁 And They’re Off!',
-          `The race is underway with **${race.players.size}** players!`
-        ),
-      ],
-    }).catch(() => {});
+      return (
+        `**${horse.id}.** ${horse.emoji} ${horse.name} — ` +
+        `${count} player${count === 1 ? '' : 's'}`
+      );
+    });
 
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    embed.addFields({
+      name: '🏇 CONTESTANTS',
+      value: horsesText.join('\n'),
+      inline: false,
+    });
 
-    const results = simulateRace();
-    const winningPosition = results[0].position;
+    if (race.players.size > 0) {
+      const playerLines = [];
 
-    const winningHorseIds = new Set(
-      results
-        .filter(result => result.position === winningPosition)
-        .map(result => result.horse.id)
-    );
+      for (const [userId, selection] of race.players) {
+        const member = race.guild.members.cache.get(userId);
 
-    const winners = [...race.players.entries()]
-      .filter(([, player]) => winningHorseIds.has(player.horseId))
-      .map(([userId]) => userId);
+        const horse = race.horses.find(
+          item => item.id === selection.horseId
+        );
 
-    // Award points and delete the active session in one transaction.
-    db.transaction(() => {
-      for (const userId of winners) {
-        addPoint.run(
-          String(guildId),
-          String(userId),
-          Date.now()
+        playerLines.push(
+          `${member?.displayName || `<@${userId}>`} → ` +
+          `${horse ? `${horse.emoji} ${horse.name}` : 'Unknown horse'}`
         );
       }
 
-      deleteSession.run(String(guildId));
-    })();
+      embed.addFields({
+        name: '👥 PLAYER CHOICES',
+        value: playerLines.join('\n').slice(0, 1024),
+        inline: false,
+      });
+    } else {
+      embed.addFields({
+        name: '👥 PLAYER CHOICES',
+        value: 'Nobody has chosen a horse yet.',
+        inline: false,
+      });
+    }
 
-    races.delete(guildId);
+    embed.addFields({
+      name: 'HOW TO ENTER',
+      value:
+        `Use \`${prefix}horserace choose <1-6>\` to choose your horse.\n` +
+        `The race starts after 30 seconds or when ${MAX_PLAYERS} players have chosen.\n` +
+        `At least ${MIN_PLAYERS} players are needed.`,
+      inline: false,
+    });
 
-    const resultLines = results.map(result => {
-      const place =
-        result.position === 1 ? '1st'
-          : result.position === 2 ? '2nd'
-            : result.position === 3 ? '3rd'
-              : `${result.position}th`;
+    embed.setFooter({
+      text: `${race.guild.name} • Horse Racing`,
+    });
 
-      const barLength = Math.max(
+    return embed;
+  }
+
+  createResultEmbed(race, results, winners) {
+    const winningPosition = results[0]?.position ?? 1;
+
+    const winningHorses = results.filter(
+      result => result.position === winningPosition
+    );
+
+    const winnerHorseNames = winningHorses
+      .map(result => `${result.horse.emoji} **${result.horse.name}**`)
+      .join('\n');
+
+    const embed = createEmbed(
+      'HORSE RACING | RESULTS',
+      winners.length > 0
+        ? '🏆 The race is over! Congratulations to the winning players.'
+        : '🏁 The race is over, but nobody picked a winning horse.',
+      {
+        client: this.client,
+        guild: race.guild,
+      }
+    ).addFields({
+      name: winningHorses.length > 1
+        ? '🏆 TIED WINNING HORSES'
+        : '🏆 WINNING HORSE',
+      value: winnerHorseNames || 'No result available.',
+      inline: false,
+    }).setTimestamp();
+
+    const resultsText = results.map(result => {
+      const { horse, performance, position } = result;
+
+      const barLength = 10;
+
+      const filled = Math.max(
         0,
-        Math.min(10, Math.round(result.performance / 10))
+        Math.min(
+          barLength,
+          Math.round((performance / 100) * barLength)
+        )
       );
 
       const bar =
-        '█'.repeat(barLength) +
-        '░'.repeat(10 - barLength);
+        '█'.repeat(filled) +
+        '░'.repeat(barLength - filled);
 
-      return (
-        `**${place}** ${result.horse.emoji} **${result.horse.name}**\n` +
-        `\`[${bar}]\` ${result.performance.toFixed(1)}%`
-      );
-    });
+      let place;
 
-    const winnerLines = winners.map(userId => {
-      const row = db.prepare(`
-        SELECT points
-        FROM game_competition_points
-        WHERE game = 'horserace'
-          AND guild_id = ?
-          AND user_id = ?
-      `).get(String(guildId), String(userId));
-
-      return (
-        `${getPlayerName(race.guild, userId)} — ` +
-        `+1 point (total ${Number(row?.points || 0)})`
-      );
-    });
-
-    const tiedHorses = results
-      .filter(result => result.position === winningPosition)
-      .map(result => result.horse.name)
-      .join(', ');
-
-    await race.channel.send({
-      embeds: [
-        makeEmbed(
-          'HORSE RACING | RESULTS',
-          `**Winning horse(s):** ${tiedHorses}\n\n` +
-          `**Race results**\n${resultLines.join('\n\n').slice(0, 3000)}\n\n` +
-          `**Winning players**\n${winnerLines.join('\n') || 'Nobody selected a winning horse.'}`
-        ).setFooter({
-          text: `${race.guild.name} • Crowns are untouched`,
-        }),
-      ],
-    }).catch(error => {
-      console.error('[HorseRace] Could not send results:', error);
-    });
-
-  } catch (error) {
-    console.error('[HorseRace] Race resolution failed:', error);
-
-  } finally {
-    resolving.delete(guildId);
-  }
-}
-
-async function init(client) {
-  const rows = db.prepare(`
-    SELECT * FROM horserace_sessions
-  `).all();
-
-  for (const row of rows) {
-    try {
-      const payload = JSON.parse(row.payload);
-
-      const guild =
-        client.guilds.cache.get(row.guild_id) ||
-        await client.guilds.fetch(row.guild_id).catch(() => null);
-
-      const channel = guild && (
-        guild.channels.cache.get(row.channel_id) ||
-        await guild.channels.fetch(row.channel_id).catch(() => null)
-      );
-
-      if (!guild || !channel?.isTextBased?.()) {
-        console.warn(`[HorseRace] Could not restore race in guild ${row.guild_id}.`);
-        continue;
+      if (position === 1) {
+        place = '1st';
+      } else if (position === 2) {
+        place = '2nd';
+      } else if (position === 3) {
+        place = '3rd';
+      } else {
+        place = `${position}th`;
       }
 
-      const race = {
-        guildId: String(row.guild_id),
-        channelId: String(row.channel_id),
-        hostId: String(row.host_id),
-        guild,
-        channel,
-        prefix: payload.prefix || client.getPrefix?.(row.guild_id) || '$',
-        status: payload.status || 'open',
-        startedAt: Number(payload.startedAt) || Date.now(),
-        messageId: payload.messageId || null,
-        players: new Map(
-          (payload.players || []).map(player => [
-            String(player.userId),
-            {
-              horseId: Number(player.horseId),
-              joinedAt: Number(player.joinedAt) || Date.now(),
-            },
-          ])
-        ),
-        horses: getHorses(),
-      };
+      return (
+        `**${place}** ${horse.emoji} ${horse.name}\n` +
+        `\`[${bar}]\` ${performance.toFixed(1)}%`
+      );
+    });
 
-      races.set(race.guildId, race);
+    embed.addFields({
+      name: '📊 RACE RESULTS',
+      value: resultsText.join('\n\n').slice(0, 1024),
+      inline: false,
+    });
 
-    } catch (error) {
-      console.error('[HorseRace] Restore error:', error);
+    if (winners.length > 0) {
+      const winnersText = winners.map(userId => {
+        const member = race.guild.members.cache.get(userId);
+
+        return (
+          `🏅 **${member?.displayName || `<@${userId}>`}** — ` +
+          `+1 point (Total: ${this.getPoints(race.guild.id, userId)})`
+        );
+      });
+
+      embed.addFields({
+        name: '🎉 WINNING PLAYERS',
+        value: winnersText.join('\n').slice(0, 1024),
+        inline: false,
+      });
     }
+
+    embed.setFooter({
+      text: `${race.guild.name} • Race Finished`,
+    });
+
+    return embed;
   }
 
-  console.log(`[HorseRace] Restored ${races.size} race(s).`);
+  async init(client) {
+    this.client = client;
 
-  for (const [guildId, race] of [...races]) {
-    const remaining =
-      race.startedAt + RACE_TIMER_MS - Date.now();
+    const rows = db.prepare(
+      'SELECT * FROM horserace_sessions'
+    ).all();
 
-    if (
-      race.status === 'running' ||
-      remaining <= 0 ||
-      race.players.size >= MAX_PLAYERS
-    ) {
-      runRace(guildId).catch(error => {
-        console.error('[HorseRace] Resume error:', error);
-      });
-    } else {
-      scheduleRace(guildId, race, remaining);
+    for (const row of rows) {
+      try {
+        const payload = JSON.parse(row.payload);
+
+        const guild =
+          client.guilds.cache.get(row.guild_id) ||
+          await client.guilds.fetch(row.guild_id).catch(() => null);
+
+        if (!guild) {
+          console.warn(
+            `[HorseRace] Could not restore race for guild ${row.guild_id}: guild unavailable.`
+          );
+          continue;
+        }
+
+        const channel =
+          guild.channels.cache.get(row.channel_id) ||
+          await guild.channels.fetch(row.channel_id).catch(() => null);
+
+        if (!channel || !channel.isTextBased()) {
+          console.warn(
+            `[HorseRace] Could not restore race for guild ${row.guild_id}: channel unavailable.`
+          );
+          continue;
+        }
+
+        let raceMessage = null;
+
+        if (payload.messageId) {
+          raceMessage = await channel.messages
+            .fetch(payload.messageId)
+            .catch(() => null);
+        }
+
+        const race = {
+          guild,
+          channel,
+          hostId: String(row.host_id),
+          prefix: payload.prefix || '$',
+          horses: this.getHorses(),
+
+          players: new Map(
+            (payload.players || []).map(player => [
+              String(player.userId),
+              {
+                horseId: Number(player.horseId),
+                joinedAt: Number(player.joinedAt) || Date.now(),
+              },
+            ])
+          ),
+
+          status: String(payload.status || 'open'),
+          startedAt: Number(payload.startedAt) || Date.now(),
+          message: raceMessage,
+          messageId: payload.messageId || null,
+        };
+
+        this.activeRaces.set(String(guild.id), race);
+      } catch (error) {
+        console.error(
+          `[HorseRace] Could not restore race for guild ${row.guild_id}:`,
+          error
+        );
+      }
+    }
+
+    console.log(
+      `[HorseRace] Restored ${this.activeRaces.size} active race(s).`
+    );
+
+    for (const [guildId, race] of [...this.activeRaces.entries()]) {
+      if (race.status === 'running') {
+        // Resume a stored race that was interrupted during its animation.
+        runRace(guildId).catch(error =>
+          console.error('[HorseRace] Resume failed:', error)
+        );
+      } else if (race.status === 'open') {
+        const remaining =
+          race.startedAt + RACE_TIMER_MS - Date.now();
+
+        if (remaining <= 0 || race.players.size >= MAX_PLAYERS) {
+          runRace(guildId).catch(error =>
+            console.error('[HorseRace] Resume failed:', error)
+          );
+        } else {
+          scheduleRace(guildId, race, remaining);
+        }
+      } else {
+        this.deleteRace(guildId);
+      }
     }
   }
 }
 
-async function startRace(message, client) {
+const raceManager = new HorseRaceManager();
+
+function clearAutoStart(guildId) {
+  const key = String(guildId);
+
+  const timer = raceManager.autoStartTasks.get(key);
+
+  if (timer) clearTimeout(timer);
+
+  raceManager.autoStartTasks.delete(key);
+}
+
+function scheduleRace(guildId, race, delay) {
+  clearAutoStart(guildId);
+
+  const key = String(guildId);
+
+  const timer = setTimeout(async () => {
+    raceManager.autoStartTasks.delete(key);
+
+    const currentRace = raceManager.activeRaces.get(key);
+
+    if (
+      !currentRace ||
+      currentRace !== race ||
+      currentRace.status !== 'open'
+    ) {
+      return;
+    }
+
+    try {
+      await runRace(key);
+    } catch (error) {
+      console.error('[HorseRace] Timer failed:', error);
+    }
+  }, Math.max(0, delay));
+
+  timer.unref?.();
+
+  raceManager.autoStartTasks.set(key, timer);
+}
+
+async function refreshRaceMessage(race) {
+  if (!race.message) return;
+
+  await race.message.edit({
+    embeds: [raceManager.createRaceEmbed(race)],
+  }).catch(() => {});
+}
+
+async function startRace(message) {
   const guildId = String(message.guild.id);
 
-  if (races.has(guildId)) {
+  if (raceManager.activeRaces.has(guildId)) {
     return send(
       message,
       'Race Already Active',
-      'Wait for the current race to finish.'
+      'A race is already open or running in this server. Wait for it to finish.'
     );
   }
 
   const race = {
-    guildId,
-    channelId: String(message.channel.id),
-    hostId: String(message.author.id),
     guild: message.guild,
     channel: message.channel,
-    prefix: getPrefix(message, client),
+    hostId: message.author.id,
+    prefix: getPrefix(message, message.client),
+    horses: raceManager.getHorses(),
+    players: new Map(),
     status: 'open',
     startedAt: Date.now(),
+    message: null,
     messageId: null,
-    players: new Map(),
-    horses: getHorses(),
   };
 
-  races.set(guildId, race);
-  saveRace(race);
+  raceManager.activeRaces.set(guildId, race);
 
   try {
-    const raceMessage = await message.channel.send({
-      content: '🏁 **A new race is open! Choose your horse now.**',
-      embeds: [createRaceEmbed(race)],
+    race.message = await message.channel.send({
+      content: '🏁 **A new horse race is open!** Choose your horse now.',
+      embeds: [raceManager.createRaceEmbed(race)],
     });
 
-    race.messageId = raceMessage.id;
-    saveRace(race);
+    race.messageId = race.message.id;
 
-    scheduleRace(guildId, race, RACE_TIMER_MS);
-
+    raceManager.saveRace(race);
   } catch (error) {
-    deleteRace(guildId);
+    raceManager.deleteRace(guildId);
 
-    console.error('[HorseRace] Could not create race message:', error);
-
-    return send(
-      message,
-      'Error',
-      'I could not create the race message. Check Vanessa’s channel permissions.'
+    console.error(
+      '[HorseRace] Could not create race message:',
+      error
     );
+
+    return;
   }
+
+  scheduleRace(guildId, race, RACE_TIMER_MS);
 
   return send(
     message,
     'Race Started',
-    `You have 30 seconds to choose a horse with \`${race.prefix}horserace choose <1-6>\`.\n` +
-    `Minimum: ${MIN_PLAYERS} players. Maximum: ${MAX_PLAYERS} players.\n` +
-    'This game awards competition points only.'
+    `The 30-second entry window is open!\n` +
+    `Choose a horse with \`${race.prefix}horserace choose <1-6>\`.\n` +
+    'The host must also choose a horse to participate.\n' +
+    `Minimum players: ${MIN_PLAYERS}. Maximum players: ${MAX_PLAYERS}.`
   );
 }
 
 async function chooseHorse(message, args) {
   const guildId = String(message.guild.id);
-  const race = races.get(guildId);
+
+  const race = raceManager.activeRaces.get(guildId);
 
   if (!race) {
     return send(
@@ -605,30 +677,59 @@ async function chooseHorse(message, args) {
   }
 
   if (race.status !== 'open') {
-    return send(message, 'Race Closed', 'Entries have closed.');
-  }
-
-  if (args.length !== 1 || !/^[1-6]$/.test(args[0] || '')) {
     return send(
       message,
-      'Invalid Horse',
-      `Choose a horse numbered 1 to 6 with \`${race.prefix}horserace choose <1-6>\`.`
+      'Race Closed',
+      'You cannot choose a horse because the race has already started.'
+    );
+  }
+
+  const input = args[0];
+
+  if (args.length !== 1 || !/^[1-6]$/.test(input || '')) {
+    const horseList = race.horses
+      .map(horse => `**${horse.id}.** ${horse.emoji} ${horse.name}`)
+      .join('\n');
+
+    return send(
+      message,
+      'Choose a Horse',
+      `Use \`${race.prefix}horserace choose <number>\`.\n\n${horseList}`
     );
   }
 
   if (race.players.has(message.author.id)) {
-    return send(message, 'Already Entered', 'You already chose a horse for this race.');
+    const previousHorse = race.horses.find(
+      horse => horse.id === race.players.get(message.author.id).horseId
+    );
+
+    return send(
+      message,
+      'Already Entered',
+      `You have already chosen **${previousHorse?.name || 'a horse'}**. You cannot change your selection this race.`
+    );
   }
 
   if (race.players.size >= MAX_PLAYERS) {
-    return send(message, 'Race Full', 'This race has reached its player limit.');
+    return send(
+      message,
+      'Race Full',
+      `This race already has ${MAX_PLAYERS} players.`
+    );
   }
 
-  const horseId = Number(args[0]);
-  const horse = race.horses.find(item => item.id === horseId);
+  const horseId = Number(input);
+
+  const horse = race.horses.find(
+    item => item.id === horseId
+  );
 
   if (!horse) {
-    return send(message, 'Horse Not Found', 'Choose a horse numbered 1 to 6.');
+    return send(
+      message,
+      'Horse Not Found',
+      'Choose a horse numbered 1 to 6.'
+    );
   }
 
   race.players.set(message.author.id, {
@@ -636,125 +737,372 @@ async function chooseHorse(message, args) {
     joinedAt: Date.now(),
   });
 
-  saveRace(race);
+  raceManager.saveRace(race);
 
   await refreshRaceMessage(race);
 
   await send(
     message,
     'Horse Selected',
-    `You chose ${horse.emoji} **${horse.name}**. Your selection is locked.`
+    `${message.author} chose ${horse.emoji} **${horse.name}**!\n` +
+    `Players entered: **${race.players.size}/${MAX_PLAYERS}**.\n` +
+    'Your selection is locked for this race.'
   );
 
   if (race.players.size >= MAX_PLAYERS) {
-    clearTimer(guildId);
-    return runRace(guildId);
+    clearAutoStart(guildId);
+    await runRace(guildId);
   }
 }
 
-async function showRaceInfo(message) {
-  const race = races.get(String(message.guild.id));
+async function runRace(guildId) {
+  const key = String(guildId);
 
-  if (!race) {
-    return send(message, 'No Active Race', 'There is no active race.');
-  }
+  const race = raceManager.activeRaces.get(key);
 
-  return message.channel.send({
-    embeds: [createRaceEmbed(race)],
-  });
-}
-
-async function cancelRace(message) {
-  const guildId = String(message.guild.id);
-  const race = races.get(guildId);
-
-  if (!race) {
-    return send(message, 'No Active Race', 'There is no active race to cancel.');
-  }
-
-  if (race.hostId !== message.author.id) {
-    return send(message, 'Permission Denied', 'Only the race host can cancel it.');
-  }
-
-  if (race.status !== 'open') {
-    return send(message, 'Race Already Running', 'A running race cannot be cancelled.');
-  }
-
-  deleteRace(guildId);
-
-  return send(message, 'Race Cancelled', 'The race was cancelled. No points were awarded.');
-}
-
-async function showLeaderboard(message) {
-  const rows = getLeaderboard.all(String(message.guild.id));
-
-  if (!rows.length) {
-    return send(message, 'Horse Racing Leaderboard', 'No competition points earned yet.');
-  }
-
-  const lines = rows.map((row, index) =>
-    `**${index + 1}.** ${getPlayerName(message.guild, row.user_id)} — **${row.points} point(s)**`
-  );
-
-  return send(message, 'Horse Racing Leaderboard', lines.join('\n'));
-}
-
-async function showHelp(message, prefix) {
-  return send(
-    message,
-    'HORSE RACING GUIDE',
-    `\`${prefix}horserace start\` — start a race\n` +
-    `\`${prefix}horserace choose <1-6>\` — choose a horse\n` +
-    `\`${prefix}horserace info\` — view the active race\n` +
-    `\`${prefix}horserace cancel\` — host cancels an open race\n` +
-    `\`${prefix}horserace leaderboard\` — view competition points\n` +
-    `\`${prefix}horserace help\` — show this guide\n\n` +
-    `Players: ${MIN_PLAYERS}-${MAX_PLAYERS}. Entry window: 30 seconds.\n` +
-    'Competition points and active races are saved in economy.sqlite. Crowns are untouched.'
-  );
-}
-
-async function execute(client, message, args) {
-  if (!message.guild || !message.member) {
+  if (
+    !race ||
+    raceManager.resolvingRaces.has(key)
+  ) {
     return;
   }
 
-  const prefix = getPrefix(message, client);
-  const action = (args[0] || 'help').toLowerCase();
-  const subArgs = args.slice(1);
-
-  switch (action) {
-    case 'start':
-      return startRace(message, client);
-
-    case 'choose':
-    case 'bet':
-      return chooseHorse(message, subArgs);
-
-    case 'info':
-      return showRaceInfo(message);
-
-    case 'cancel':
-      return cancelRace(message);
-
-    case 'leaderboard':
-    case 'points':
-      return showLeaderboard(message);
-
-    case 'help':
-      return showHelp(message, prefix);
-
-    default:
-      return showHelp(message, prefix);
+  if (race.status !== 'open' && race.status !== 'running') {
+    return;
   }
+
+  raceManager.resolvingRaces.add(key);
+  clearAutoStart(key);
+
+  try {
+    if (race.players.size < MIN_PLAYERS) {
+      race.status = 'cancelled';
+
+      raceManager.saveRace(race);
+
+      await refreshRaceMessage(race);
+
+      await race.channel.send({
+        embeds: [
+          createEmbed(
+            'Race Cancelled',
+            `Only **${race.players.size}** player(s) chose a horse. ` +
+            `At least **${MIN_PLAYERS}** players are needed.`,
+            {
+              client: raceManager.client,
+              guild: race.guild,
+            }
+          ),
+        ],
+      }).catch(() => {});
+
+      raceManager.deleteRace(key);
+      return;
+    }
+
+    // Save the running state before asynchronous work, so startup can resume it.
+    race.status = 'running';
+
+    raceManager.saveRace(race);
+
+    await refreshRaceMessage(race);
+
+    await race.channel.send({
+      embeds: [
+        createEmbed(
+          '🏁 And They’re Off!',
+          `The Thunderdome Derby has started with **${race.players.size}** players!\n` +
+          'The horses are racing...',
+          {
+            client: raceManager.client,
+            guild: race.guild,
+          }
+        ),
+      ],
+    }).catch(() => {});
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    const results = raceManager.simulateRace(race.horses);
+
+    const topPosition = results[0]?.position ?? 1;
+
+    const winningHorseIds = new Set(
+      results
+        .filter(result => result.position === topPosition)
+        .map(result => result.horse.id)
+    );
+
+    const winners = [];
+
+    for (const [userId, selection] of race.players) {
+      if (winningHorseIds.has(selection.horseId)) {
+        winners.push(userId);
+      }
+    }
+
+    // Award points and delete the saved session in one transaction.
+    // This prevents the same saved race from awarding points twice.
+    db.transaction(() => {
+      for (const userId of winners) {
+        addPointStmt.run(
+          String(race.guild.id),
+          String(userId),
+          1,
+          Date.now()
+        );
+      }
+
+      deleteSessionStmt.run(key);
+    })();
+
+    race.status = 'finished';
+
+    await refreshRaceMessage(race);
+
+    try {
+      await race.channel.send({
+        embeds: [
+          raceManager.createResultEmbed(
+            race,
+            results,
+            winners
+          ),
+        ],
+      });
+    } catch (error) {
+      console.error(
+        '[HorseRace] Could not send results:',
+        error
+      );
+    }
+
+    raceManager.activeRaces.delete(key);
+  } catch (error) {
+    console.error(
+      '[HorseRace] Race resolution failed:',
+      error
+    );
+
+    // If an error happened before the score transaction, retain the session.
+    if (race.status === 'running') {
+      raceManager.saveRace(race);
+    }
+  } finally {
+    raceManager.resolvingRaces.delete(key);
+    clearAutoStart(key);
+  }
+}
+
+async function raceInfo(message) {
+  const race = raceManager.activeRaces.get(
+    String(message.guild.id)
+  );
+
+  if (!race) {
+    return send(
+      message,
+      'No Active Race',
+      `Start one with \`${getPrefix(message, message.client)}horserace start\`.`
+    );
+  }
+
+  return message.channel.send({
+    embeds: [raceManager.createRaceEmbed(race)],
+  });
+}
+
+async function raceCancel(message) {
+  const guildId = String(message.guild.id);
+
+  const race = raceManager.activeRaces.get(guildId);
+
+  if (!race) {
+    return send(
+      message,
+      'No Active Race',
+      'There is no active race to cancel.'
+    );
+  }
+
+  if (message.author.id !== race.hostId) {
+    return send(
+      message,
+      'Permission Denied',
+      'Only the race host can cancel the race.'
+    );
+  }
+
+  if (race.status !== 'open') {
+    return send(
+      message,
+      'Race Already Started',
+      'A race cannot be cancelled after it starts.'
+    );
+  }
+
+  clearAutoStart(guildId);
+
+  race.status = 'cancelled';
+
+  raceManager.saveRace(race);
+
+  await refreshRaceMessage(race);
+
+  raceManager.deleteRace(guildId);
+
+  return send(
+    message,
+    'Race Cancelled',
+    `The race started by ${message.author} has been cancelled. No competition points were awarded.`
+  );
+}
+
+async function showLeaderboard(message) {
+  const entries = getLeaderboardStmt.all(
+    String(message.guild.id)
+  );
+
+  if (!entries.length) {
+    return send(
+      message,
+      'Horse Racing Leaderboard',
+      'Nobody has earned any horse racing points yet. Start a race to compete!'
+    );
+  }
+
+  const lines = entries.map((entry, index) => {
+    const member = message.guild.members.cache.get(
+      entry.user_id
+    );
+
+    return (
+      `**${index + 1}.** ` +
+      `${member?.displayName || `<@${entry.user_id}>`} — ` +
+      `**${entry.points} point(s)**`
+    );
+  });
+
+  return message.channel.send({
+    embeds: [
+      createEmbed(
+        '🏆 HORSE RACING LEADERBOARD',
+        lines.join('\n'),
+        message
+      ).setFooter({
+        text: `${message.guild.name} • Horse Racing Leaderboard`,
+      }),
+    ],
+  });
+}
+
+async function raceHelp(message) {
+  const prefix = getPrefix(message, message.client);
+
+  const embed = createEmbed(
+    'HORSE RACING GUIDE',
+    'Compete with your server in the Thunderdome Derby!',
+    message
+  ).addFields(
+    {
+      name: '🏁 HOW TO PLAY',
+      value:
+        `**1. Start a race**\n\`${prefix}horserace start\`\n\n` +
+        `**2. Choose a horse**\n\`${prefix}horserace choose 3\`\n\n` +
+        '**3. Wait for the race**\n' +
+        'The entry window lasts 30 seconds. The race starts sooner if 10 players enter.\n\n' +
+        '**4. Earn points**\n' +
+        'Players who selected a winning horse earn 1 competition point.',
+      inline: false,
+    },
+    {
+      name: '🐎 THE SIX HORSES',
+      value:
+        '**1.** Thunderbolt — Balanced racer\n' +
+        '**2.** Shadowfax — Speed-focused\n' +
+        '**3.** Midnight Star — Stamina-focused\n' +
+        '**4.** Golden Arrow — All-rounder\n' +
+        '**5.** Stormbringer — Fast racer\n' +
+        '**6.** Silver Flash — Luck-focused',
+      inline: false,
+    },
+    {
+      name: '📜 RACE RULES',
+      value:
+        `• Minimum **${MIN_PLAYERS}** players.\n` +
+        `• Maximum **${MAX_PLAYERS}** players.\n` +
+        '• Each player chooses one horse and cannot change it.\n' +
+        '• The host must also choose a horse to participate.\n' +
+        '• If fewer than 2 players enter in time, the race is cancelled.\n' +
+        '• Players selecting tied winning horses each earn 1 point.',
+      inline: false,
+    },
+    {
+      name: '⌨️ COMMANDS',
+      value:
+        `\`${prefix}horserace start\` — Start a race\n` +
+        `\`${prefix}horserace choose <1-6>\` — Choose a horse\n` +
+        `\`${prefix}horserace info\` — View the active race\n` +
+        `\`${prefix}horserace cancel\` — Cancel your race (host only)\n` +
+        `\`${prefix}horserace leaderboard\` — View points\n` +
+        `\`${prefix}horserace help\` — Show this guide`,
+      inline: false,
+    }
+  ).setFooter({
+    text: `${message.guild.name} • Horse Racing`,
+  });
+
+  return message.channel.send({
+    embeds: [embed],
+  });
+}
+
+async function initializeHorseRace(client) {
+  return raceManager.init(client);
 }
 
 module.exports = {
   name: 'horserace',
   aliases: ['horse', 'horsegame', 'race'],
-  description: 'Run a persistent horse-racing competition.',
+  description: 'Run a persistent horse race competition with your server.',
   category: 'misc',
   usage: 'horserace <start|choose|info|cancel|leaderboard|help>',
-  init,
-  execute,
+  raceManager,
+  init: initializeHorseRace,
+
+  async execute(client, message, args) {
+    if (!message.guild || !message.member) return;
+
+    const action = (args[0] || 'help').toLowerCase();
+    const subArgs = args.slice(1);
+
+    switch (action) {
+      case 'start':
+        return startRace(message);
+
+      case 'choose':
+      case 'bet':
+        return chooseHorse(message, subArgs);
+
+      case 'info':
+        return raceInfo(message);
+
+      case 'cancel':
+        return raceCancel(message);
+
+      case 'leaderboard':
+      case 'points':
+        return showLeaderboard(message);
+
+      case 'help':
+        return raceHelp(message);
+
+      default:
+        return send(
+          message,
+          'Unknown Command',
+          `Use \`${getPrefix(message, client)}horserace help\` to see the available commands.`
+        );
+    }
+  },
 };
