@@ -1,13 +1,17 @@
-const { EmbedBuilder } = require('discord.js');
 const economy = require('../../handlers/economy');
+const universalHelper = require('../../handlers/universalHelper');
 
-const db = economy.db;
+// ============================================================
+// VANESSA BETTING POOL — PERSISTENT POINTS-ONLY VERSION
+// Compatible with handlers/commandHandler.js.
+// Competition points and active pools are persisted between restarts.
+// The game uses competition points for its leaderboard.
+// ============================================================
+
 const MAX_PLAYERS = 10;
-const COLOR = 0x2b2d31;
+const db = economy.db;
 
-const pools = new Map();
-const resolving = new Set();
-
+// Shared points table, kept in the existing economy database.
 db.prepare(`
   CREATE TABLE IF NOT EXISTS game_competition_points (
     game TEXT NOT NULL,
@@ -19,6 +23,7 @@ db.prepare(`
   )
 `).run();
 
+// JSON payloads preserve pool status, players, and submitted guesses.
 db.prepare(`
   CREATE TABLE IF NOT EXISTS betpool_sessions (
     pool_key TEXT PRIMARY KEY,
@@ -30,7 +35,28 @@ db.prepare(`
   )
 `).run();
 
-const saveSession = db.prepare(`
+const getPointsStmt = db.prepare(`
+  SELECT points FROM game_competition_points
+  WHERE game = 'betpool' AND guild_id = ? AND user_id = ?
+`);
+
+const addPointStmt = db.prepare(`
+  INSERT INTO game_competition_points (game, guild_id, user_id, points, updated_at)
+  VALUES ('betpool', ?, ?, ?, ?)
+  ON CONFLICT(game, guild_id, user_id) DO UPDATE SET
+    points = game_competition_points.points + excluded.points,
+    updated_at = excluded.updated_at
+`);
+
+const getLeaderboardStmt = db.prepare(`
+  SELECT user_id, points
+  FROM game_competition_points
+  WHERE game = 'betpool' AND guild_id = ? AND points > 0
+  ORDER BY points DESC, updated_at ASC, user_id ASC
+  LIMIT 10
+`);
+
+const saveSessionStmt = db.prepare(`
   INSERT INTO betpool_sessions
     (pool_key, guild_id, channel_id, host_id, payload, updated_at)
   VALUES (?, ?, ?, ?, ?, ?)
@@ -42,111 +68,360 @@ const saveSession = db.prepare(`
     updated_at = excluded.updated_at
 `);
 
-const deleteSession = db.prepare(`
-  DELETE FROM betpool_sessions WHERE pool_key = ?
-`);
+const deleteSessionStmt = db.prepare(
+  'DELETE FROM betpool_sessions WHERE pool_key = ?'
+);
 
-const addPoint = db.prepare(`
-  INSERT INTO game_competition_points
-    (game, guild_id, user_id, points, updated_at)
-  VALUES ('betpool', ?, ?, 1, ?)
-  ON CONFLICT(game, guild_id, user_id) DO UPDATE SET
-    points = game_competition_points.points + 1,
-    updated_at = excluded.updated_at
-`);
-
-const getPoints = db.prepare(`
-  SELECT points
-  FROM game_competition_points
-  WHERE game = 'betpool' AND guild_id = ? AND user_id = ?
-`);
-
-const getLeaderboard = db.prepare(`
-  SELECT user_id, points
-  FROM game_competition_points
-  WHERE game = 'betpool' AND guild_id = ? AND points > 0
-  ORDER BY points DESC, updated_at ASC
-  LIMIT 10
-`);
-
-function normalizeName(name) {
-  return String(name || '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
+function normalizePoolName(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-function displayName(name) {
-  return String(name || '')
-    .trim()
-    .replace(/\s+/g, ' ');
+function displayPoolName(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ');
 }
 
-function getKey(guildId, name) {
-  return `${guildId}:${normalizeName(name)}`;
+function createEmbed(title, description, context) {
+  const guild = context?.guild || null;
+  const client = context?.client || guild?.client;
+
+  if (!client || !guild) {
+    throw new Error('BettingPool embed requires a Discord client and guild context.');
+  }
+
+  // Use Vanessa's shared embed helper for the configured theme colour and
+  // the current server prefix. Keep the game title styling consistent.
+  return universalHelper.createEmbed(client, { guild }, {
+    title: `✦ ${title} ✦`,
+    description,
+  }).setTimestamp();
 }
 
 function getPrefix(message, client) {
-  return message.prefix ||
-    (message.guild && client.getPrefix?.(message.guild.id)) ||
-    '$';
+  if (message.prefix) return message.prefix;
+
+  if (typeof client.getPrefix === 'function' && message.guild) {
+    return client.getPrefix(message.guild.id) || '$';
+  }
+
+  return '$';
 }
 
-function makeEmbed(title, description) {
-  return new EmbedBuilder()
-    .setColor(COLOR)
-    .setTitle(`✦ ${title} ✦`)
-    .setDescription(description)
-    .setTimestamp();
-}
-
-async function send(message, title, description) {
+function send(message, title, description) {
   return message.channel.send({
-    embeds: [makeEmbed(title, description)],
+    embeds: [createEmbed(title, description, message)],
   });
 }
 
-function getPlayerName(guild, userId) {
-  return guild.members.cache.get(userId)?.displayName ||
-    `<@${userId}>`;
-}
-
-function pointsFor(guildId, userId) {
-  return Number(
-    getPoints.get(String(guildId), String(userId))?.points || 0
-  );
-}
-
-function savePool(key, pool) {
-  const payload = {
-    name: pool.name,
-    prefix: pool.prefix,
-    gameId: pool.gameId,
-    status: pool.status,
-    createdAt: pool.createdAt,
-    players: [...pool.players.entries()].map(([userId, player]) => ({
-      userId,
-      submitted: player.submitted,
-      guess: player.guess,
-      joinedAt: player.joinedAt,
-    })),
+function normalizePlayer(player) {
+  return {
+    betPlaced: Boolean(player.betPlaced),
+    betData: player.betData == null ? null : String(player.betData),
+    joinedAt: Number(player.joinedAt) || Date.now(),
   };
+}
 
-  saveSession.run(
-    key,
-    String(pool.guildId),
-    String(pool.channelId),
-    String(pool.hostId),
-    JSON.stringify(payload),
-    Date.now()
+class BettingPoolSystem {
+  constructor() {
+    this.activePools = new Map();
+    this.client = null;
+    this.resolving = new Set();
+
+    this.games = {
+      1: {
+        name: '3-Digit Match',
+        description: 'Choose a 3-digit number. Matching digits score points.',
+      },
+    };
+  }
+
+  getPoolKey(guildId, poolName) {
+    return `${guildId}:${normalizePoolName(poolName)}`;
+  }
+
+  getPool(guildId, poolName) {
+    return this.activePools.get(
+      this.getPoolKey(guildId, poolName)
+    ) || null;
+  }
+
+  getPoints(guildId, userId) {
+    return Number(
+      getPointsStmt.get(
+        String(guildId),
+        String(userId)
+      )?.points || 0
+    );
+  }
+
+  addPoint(guildId, userId, amount = 1) {
+    const value = Math.floor(Number(amount));
+
+    if (!Number.isFinite(value) || value <= 0) {
+      return this.getPoints(guildId, userId);
+    }
+
+    addPointStmt.run(
+      String(guildId),
+      String(userId),
+      value,
+      Date.now()
+    );
+
+    return this.getPoints(guildId, userId);
+  }
+
+  serializePool(pool) {
+    return {
+      name: pool.name,
+      gameId: pool.gameId,
+      status: pool.status,
+      createdAt: pool.createdAt,
+
+      players: [...pool.players.entries()].map(([userId, player]) => ({
+        userId: String(userId),
+        ...normalizePlayer(player),
+      })),
+    };
+  }
+
+  savePool(key, pool) {
+    saveSessionStmt.run(
+      String(key),
+      String(pool.guild.id),
+      String(pool.channel.id),
+      String(pool.hostId),
+      JSON.stringify(this.serializePool(pool)),
+      Date.now()
+    );
+  }
+
+  deletePool(key) {
+    deleteSessionStmt.run(String(key));
+    this.activePools.delete(String(key));
+  }
+
+  createPoolEmbed(pool) {
+    const game = this.games[pool.gameId];
+    const prefix = getPrefix(
+      { guild: pool.guild },
+      this.client
+    );
+
+    const embed = createEmbed(
+      `POOL | ${pool.name.toUpperCase()}`,
+      game
+        ? `**Game:** ${game.name}\n${game.description}`
+        : 'The host has not selected a game yet.',
+      {
+        client: this.client,
+        guild: pool.guild,
+      }
+    ).addFields(
+      {
+        name: 'HOST',
+        value: `<@${pool.hostId}>`,
+        inline: true,
+      },
+      {
+        name: 'PLAYERS',
+        value: `${pool.players.size}/${MAX_PLAYERS}`,
+        inline: true,
+      },
+      {
+        name: 'STATUS',
+        value: pool.status.toUpperCase(),
+        inline: true,
+      }
+    ).setTimestamp();
+
+    if (pool.players.size > 0) {
+      const playerLines = [];
+
+      for (const [userId, player] of pool.players) {
+        const member = pool.guild.members.cache.get(userId);
+        const name = member?.displayName || `<@${userId}>`;
+
+        playerLines.push(
+          `${name} — ${player.betPlaced ? '✅ Number submitted' : '⏳ Waiting'}`
+        );
+      }
+
+      embed.addFields({
+        name: 'PLAYERS',
+        value: playerLines.join('\n').slice(0, 1024),
+        inline: false,
+      });
+    }
+
+    if (pool.gameId === 1) {
+      embed.addFields({
+        name: 'HOW TO PLAY',
+        value:
+          `Submit a three-digit number from \`000\` to \`999\` using \`${prefix}poolbet 123\`.\n` +
+          'Each matching digit scores 1 point regardless of order. The highest score wins, and each winner earns 1 competition point.',
+        inline: false,
+      });
+    }
+
+    embed.setFooter({
+      text: `${pool.guild.name} • Betting Pool`,
+    });
+
+    return embed;
+  }
+
+  createResultEmbed(pool, results) {
+    const embed = createEmbed(
+      `${pool.name.toUpperCase()} | RESULTS`,
+      results.winners.length
+        ? `🏆 **${results.winners.length === 1 ? 'Winner' : 'Winners'} announced!**`
+        : 'No one matched a digit this round, so no points were awarded.',
+      {
+        client: this.client,
+        guild: pool.guild,
+      }
+    ).addFields({
+      name: '🎯 WINNING NUMBER',
+      value: `**${results.winningNumber}**`,
+      inline: false,
+    });
+
+    const sortedScores = [...results.scores].sort(
+      (a, b) => b.score - a.score ||
+        a.userId.localeCompare(b.userId)
+    );
+
+    const scoreLines = sortedScores.map(entry => {
+      const member = pool.guild.members.cache.get(entry.userId);
+
+      return (
+        `**${member?.displayName || `<@${entry.userId}>`}** — ` +
+        `${entry.guess} — **${entry.score} match(es)**`
+      );
+    });
+
+    embed.addFields({
+      name: '📊 SCORES',
+      value: scoreLines.join('\n').slice(0, 1024) || 'No scores available.',
+      inline: false,
+    });
+
+    if (results.winners.length > 0) {
+      const winnerLines = results.winners.map(userId => {
+        const member = pool.guild.members.cache.get(userId);
+
+        return (
+          `🏆 **${member?.displayName || `<@${userId}>`}** — ` +
+          `+1 point (Total: ${this.getPoints(pool.guild.id, userId)})`
+        );
+      });
+
+      embed.addFields({
+        name: '🏅 WINNERS',
+        value: winnerLines.join('\n').slice(0, 1024),
+        inline: false,
+      });
+    }
+
+    embed.setFooter({
+      text: `${pool.guild.name} • Betting Pool Results`,
+    });
+
+    return embed;
+  }
+
+  async init(client) {
+    this.client = client;
+
+    const rows = db.prepare(
+      'SELECT * FROM betpool_sessions'
+    ).all();
+
+    for (const row of rows) {
+      try {
+        const payload = JSON.parse(row.payload);
+
+        const guild =
+          client.guilds.cache.get(row.guild_id) ||
+          await client.guilds.fetch(row.guild_id).catch(() => null);
+
+        if (!guild) {
+          console.warn(
+            `[BettingPool] Could not restore pool ${row.pool_key}: guild unavailable.`
+          );
+          continue;
+        }
+
+        const channel =
+          guild.channels.cache.get(row.channel_id) ||
+          await guild.channels.fetch(row.channel_id).catch(() => null);
+
+        if (!channel || !channel.isTextBased()) {
+          console.warn(
+            `[BettingPool] Could not restore pool ${row.pool_key}: channel unavailable.`
+          );
+          continue;
+        }
+
+        const pool = {
+          name: displayPoolName(payload.name),
+          guild,
+          channel,
+          hostId: String(row.host_id),
+          gameId: payload.gameId == null
+            ? null
+            : Number(payload.gameId),
+
+          players: new Map(
+            (payload.players || []).map(player => [
+              String(player.userId),
+              normalizePlayer(player),
+            ])
+          ),
+
+          status: String(payload.status || 'waiting'),
+          createdAt: Number(payload.createdAt) || Date.now(),
+        };
+
+        this.activePools.set(String(row.pool_key), pool);
+      } catch (error) {
+        console.error(
+          `[BettingPool] Could not restore ${row.pool_key}:`,
+          error
+        );
+      }
+    }
+
+    console.log(
+      `[BettingPool] Restored ${this.activePools.size} active pool(s).`
+    );
+
+    // Finish a round if all players had submitted before a restart.
+    for (const [key, pool] of [...this.activePools.entries()]) {
+      const everyoneSubmitted =
+        pool.players.size >= 2 &&
+        [...pool.players.values()].every(player => player.betPlaced);
+
+      if (pool.status === 'locked' || everyoneSubmitted) {
+        await resolvePool(key);
+      }
+    }
+  }
+}
+
+const poolSystem = new BettingPoolSystem();
+
+function hasSubmittedNumber(pool) {
+  return [...pool.players.values()].some(
+    player => player.betPlaced
   );
 }
 
 function findHostedPool(guildId, userId) {
-  for (const [key, pool] of pools) {
+  for (const [key, pool] of poolSystem.activePools) {
     if (
-      pool.guildId === String(guildId) &&
-      pool.hostId === String(userId)
+      pool.guild.id === guildId &&
+      pool.hostId === userId
     ) {
       return { key, pool };
     }
@@ -156,10 +431,10 @@ function findHostedPool(guildId, userId) {
 }
 
 function findJoinedPool(guildId, userId) {
-  for (const [key, pool] of pools) {
+  for (const [key, pool] of poolSystem.activePools) {
     if (
-      pool.guildId === String(guildId) &&
-      pool.players.has(String(userId))
+      pool.guild.id === guildId &&
+      pool.players.has(userId)
     ) {
       return { key, pool };
     }
@@ -168,69 +443,407 @@ function findJoinedPool(guildId, userId) {
   return null;
 }
 
-function hasSubmitted(pool) {
-  return [...pool.players.values()].some(player => player.submitted);
+function resolveTarget(message, input) {
+  const mentioned = message.mentions?.members?.first();
+
+  if (mentioned) return mentioned;
+
+  const raw = String(input || '').trim();
+
+  if (!raw) return null;
+
+  const match =
+    raw.match(/^<@!?(\d+)>$/) ||
+    raw.match(/^(\d{17,20})$/);
+
+  const userId = match?.[1] || match?.[0];
+
+  if (userId) {
+    return message.guild.members.cache.get(userId) || null;
+  }
+
+  const query = raw.replace(/^@/, '').toLowerCase();
+
+  return message.guild.members.cache.find(member =>
+    member.user.username.toLowerCase() === query ||
+    member.displayName.toLowerCase() === query ||
+    member.user.tag?.toLowerCase() === query
+  ) || null;
+}
+
+async function createBetpool(message, args) {
+  const rawName = args.join(' ').trim();
+  const prefix = getPrefix(message, message.client);
+
+  if (!rawName) {
+    return send(
+      message,
+      'Missing Pool Name',
+      `Usage: \`${prefix}betpool create <name>\``
+    );
+  }
+
+  if (rawName.length > 40) {
+    return send(
+      message,
+      'Name Too Long',
+      'Keep pool names to 40 characters or fewer.'
+    );
+  }
+
+  if (findJoinedPool(message.guild.id, message.author.id)) {
+    return send(
+      message,
+      'Already in a Pool',
+      'Finish your current pool before creating another one.'
+    );
+  }
+
+  const key = poolSystem.getPoolKey(
+    message.guild.id,
+    rawName
+  );
+
+  if (poolSystem.activePools.has(key)) {
+    return send(
+      message,
+      'Pool Already Exists',
+      `A pool named **${displayPoolName(rawName)}** already exists in this server.`
+    );
+  }
+
+  const pool = {
+    name: displayPoolName(rawName),
+    guild: message.guild,
+    channel: message.channel,
+    hostId: message.author.id,
+    gameId: null,
+    players: new Map(),
+    status: 'waiting',
+    createdAt: Date.now(),
+  };
+
+  pool.players.set(message.author.id, {
+    betPlaced: false,
+    betData: null,
+    joinedAt: Date.now(),
+  });
+
+  poolSystem.activePools.set(key, pool);
+  poolSystem.savePool(key, pool);
+
+  const gameList = Object.entries(poolSystem.games)
+    .map(([id, game]) => `**${id}. ${game.name}** — ${game.description}`)
+    .join('\n');
+
+  const embed = createEmbed(
+    'Pool Created',
+    `Pool **${pool.name}** has been created!\n\n` +
+    `**1. Select a game:** \`${prefix}betpool play 1\`\n` +
+    `**2. Invite players:** \`${prefix}betpool invite @player\`\n` +
+    `**3. Other players join:** \`${prefix}betpool join ${pool.name}\`\n` +
+    `**4. Everyone submits a number:** \`${prefix}poolbet 123\`\n\n` +
+    `**Available games**\n${gameList}`,
+    message
+  ).setFooter({
+    text: `${message.guild.name} • Pool Created`,
+  });
+
+  return message.channel.send({
+    embeds: [embed],
+  });
+}
+
+async function setGame(message, args) {
+  const hosted = findHostedPool(
+    message.guild.id,
+    message.author.id
+  );
+
+  if (!hosted) {
+    return send(
+      message,
+      'No Pool Found',
+      `Create a pool first using \`${getPrefix(message, message.client)}betpool create <name>\`.`
+    );
+  }
+
+  const { key, pool } = hosted;
+
+  if (pool.status !== 'waiting') {
+    return send(
+      message,
+      'Pool Already Open',
+      `This pool is already in the **${pool.status}** phase.`
+    );
+  }
+
+  const gameId = Number.parseInt(args[0], 10);
+
+  if (!Number.isInteger(gameId) || !poolSystem.games[gameId]) {
+    return send(
+      message,
+      'Invalid Game',
+      `Available game IDs: ${Object.keys(poolSystem.games).join(', ')}.`
+    );
+  }
+
+  pool.gameId = gameId;
+  pool.status = 'open';
+
+  poolSystem.savePool(key, pool);
+
+  const prefix = getPrefix(message, message.client);
+
+  return send(
+    message,
+    'Game Selected',
+    `Pool **${pool.name}** will play **${poolSystem.games[gameId].name}**.\n\n` +
+    `Players can join with \`${prefix}betpool join ${pool.name}\`. ` +
+    `When everyone has joined, submit a number with \`${prefix}poolbet 123\`.`
+  );
+}
+
+async function joinBetpool(message, args) {
+  const rawName = args.join(' ').trim();
+
+  if (!rawName) {
+    return send(
+      message,
+      'Missing Pool Name',
+      `Usage: \`${getPrefix(message, message.client)}betpool join <name>\``
+    );
+  }
+
+  const key = poolSystem.getPoolKey(
+    message.guild.id,
+    rawName
+  );
+
+  const pool = poolSystem.activePools.get(key);
+
+  if (!pool) {
+    return send(
+      message,
+      'Pool Not Found',
+      `No pool named **${rawName}** exists in this server.`
+    );
+  }
+
+  if (pool.players.has(message.author.id)) {
+    return send(message, 'Already Joined', 'You are already in this pool.');
+  }
+
+  if (pool.status !== 'open') {
+    return send(
+      message,
+      'Pool Not Open',
+      `This pool is in the **${pool.status}** phase and is not accepting players.`
+    );
+  }
+
+  if (hasSubmittedNumber(pool)) {
+    return send(
+      message,
+      'Round Already Started',
+      'Players cannot join after someone has submitted a number.'
+    );
+  }
+
+  if (pool.players.size >= MAX_PLAYERS) {
+    return send(
+      message,
+      'Pool Full',
+      `This pool already has the maximum of ${MAX_PLAYERS} players.`
+    );
+  }
+
+  const existingPool = findJoinedPool(
+    message.guild.id,
+    message.author.id
+  );
+
+  if (existingPool) {
+    return send(
+      message,
+      'Already in Another Pool',
+      `You are already in **${existingPool.pool.name}**. Finish that pool first.`
+    );
+  }
+
+  pool.players.set(message.author.id, {
+    betPlaced: false,
+    betData: null,
+    joinedAt: Date.now(),
+  });
+
+  poolSystem.savePool(key, pool);
+
+  return send(
+    message,
+    'Joined Pool',
+    `You've joined **${pool.name}**!\n` +
+    `Players: **${pool.players.size}/${MAX_PLAYERS}**\n\n` +
+    `Wait for everyone to join, then submit your three-digit number using ` +
+    `\`${getPrefix(message, message.client)}poolbet 123\`.`
+  );
+}
+
+async function listGames(message) {
+  const gameLines = Object.entries(poolSystem.games)
+    .map(([id, game]) => `**Game ${id}: ${game.name}**\n${game.description}`)
+    .join('\n\n');
+
+  const serverPools = [...poolSystem.activePools.values()]
+    .filter(pool => pool.guild.id === message.guild.id);
+
+  const poolLines = serverPools.length
+    ? serverPools
+      .map(pool => `**${pool.name}** — ${pool.players.size}/${MAX_PLAYERS} players — ${pool.status}`)
+      .join('\n')
+    : 'There are no active pools in this server.';
+
+  const embed = createEmbed(
+    'Games & Active Pools',
+    `**AVAILABLE GAMES**\n${gameLines}\n\n**ACTIVE POOLS**\n${poolLines}`,
+    message
+  ).setFooter({
+    text: `${message.guild.name} • Game List`,
+  });
+
+  return message.channel.send({
+    embeds: [embed],
+  });
 }
 
 function countMatchingDigits(guess, winningNumber) {
-  const counts = {};
+  const available = {};
 
   for (const digit of winningNumber) {
-    counts[digit] = (counts[digit] || 0) + 1;
+    available[digit] = (available[digit] || 0) + 1;
   }
 
-  let score = 0;
+  let matches = 0;
 
   for (const digit of guess) {
-    if (counts[digit] > 0) {
-      score++;
-      counts[digit]--;
+    if (available[digit] > 0) {
+      matches++;
+      available[digit]--;
     }
   }
 
-  return score;
+  return matches;
 }
 
-function createPoolEmbed(pool) {
-  const playerLines = [...pool.players.entries()].map(([userId, player]) => {
-    return `${getPlayerName(pool.guild, userId)} — ${
-      player.submitted ? '✅ Number submitted' : '⏳ Waiting'
-    }`;
-  });
+async function placePoolBet(message, args) {
+  const joined = findJoinedPool(
+    message.guild.id,
+    message.author.id
+  );
 
-  return makeEmbed(
-    `POOL | ${pool.name.toUpperCase()}`,
-    `**Game:** 3-Digit Match\n` +
-    `**Host:** <@${pool.hostId}>\n` +
-    `**Players:** ${pool.players.size}/${MAX_PLAYERS}\n` +
-    `**Status:** ${pool.status}\n\n` +
-    `**Players**\n${playerLines.join('\n') || 'No players yet.'}\n\n` +
-    `Submit a number with \`${pool.prefix}poolbet 123\`.\n` +
-    'Every matching digit earns a match. Winners earn competition points.'
-  ).setFooter({
-    text: `${pool.guild.name} • Competition points only`,
+  if (!joined) {
+    return send(
+      message,
+      'No Pool Found',
+      `You are not in an active pool. Join one using \`${getPrefix(message, message.client)}betpool join <name>\`.`
+    );
+  }
+
+  const { key, pool } = joined;
+  const player = pool.players.get(message.author.id);
+
+  if (!['open', 'betting'].includes(pool.status)) {
+    return send(
+      message,
+      'Pool Not Ready',
+      `This pool is in the **${pool.status}** phase.`
+    );
+  }
+
+  if (pool.gameId !== 1) {
+    return send(
+      message,
+      'No Game Selected',
+      'The host needs to select a game first.'
+    );
+  }
+
+  if (pool.players.size < 2) {
+    return send(
+      message,
+      'Need More Players',
+      'At least two players must join before the round can start.'
+    );
+  }
+
+  if (player.betPlaced) {
+    return send(
+      message,
+      'Number Already Submitted',
+      'You have already submitted your number this round.'
+    );
+  }
+
+  const guess = args[0]?.trim();
+
+  if (args.length !== 1 || !/^\d{3}$/.test(guess || '')) {
+    return send(
+      message,
+      'Invalid Number',
+      `Submit exactly three digits from \`000\` to \`999\`. Example: \`${getPrefix(message, message.client)}poolbet 123\``
+    );
+  }
+
+  player.betPlaced = true;
+  player.betData = guess;
+  pool.status = 'betting';
+
+  poolSystem.savePool(key, pool);
+
+  await send(
+    message,
+    'Number Submitted',
+    `Your number for **${pool.name}** has been recorded.\n` +
+    `Submitted: **${guess}**\n` +
+    'Your number stays hidden until the round finishes.'
+  );
+
+  const allSubmitted = [...pool.players.values()]
+    .every(entry => entry.betPlaced);
+
+  if (allSubmitted) {
+    return resolvePool(key);
+  }
+
+  const waitingCount = [...pool.players.values()]
+    .filter(entry => !entry.betPlaced).length;
+
+  return pool.channel.send({
+    embeds: [
+      createEmbed(
+        'Waiting for Players',
+        `**${waitingCount}** player(s) still need to submit their numbers for **${pool.name}**.`,
+        message
+      ),
+    ],
   });
 }
 
 async function resolvePool(key) {
-  key = String(key);
+  const pool = poolSystem.activePools.get(String(key));
 
-  const pool = pools.get(key);
+  if (!pool || poolSystem.resolving.has(String(key))) return;
 
-  if (
-    !pool ||
-    resolving.has(key) ||
-    pool.players.size < 2 ||
-    ![...pool.players.values()].every(player => player.submitted)
-  ) {
-    return;
-  }
+  const allSubmitted = [...pool.players.values()]
+    .every(player => player.betPlaced);
 
-  resolving.add(key);
+  if (!allSubmitted || pool.players.size < 2) return;
+
+  poolSystem.resolving.add(String(key));
 
   try {
     pool.status = 'locked';
-    savePool(key, pool);
+    poolSystem.savePool(key, pool);
 
     const winningNumber = Array.from(
       { length: 3 },
@@ -239,539 +852,447 @@ async function resolvePool(key) {
 
     const scores = [...pool.players.entries()].map(([userId, player]) => ({
       userId,
-      guess: player.guess,
-      score: countMatchingDigits(player.guess, winningNumber),
+      guess: player.betData,
+      score: countMatchingDigits(player.betData, winningNumber),
     }));
 
-    const highestScore = Math.max(...scores.map(item => item.score));
+    const highestScore = Math.max(
+      ...scores.map(entry => entry.score)
+    );
 
     const winners = highestScore > 0
       ? scores
-          .filter(item => item.score === highestScore)
-          .map(item => item.userId)
+        .filter(entry => entry.score === highestScore)
+        .map(entry => entry.userId)
       : [];
 
-    // Awards and session deletion happen atomically so a restart
-    // cannot award the same round twice.
+    // Award points and delete the persisted pool in one transaction so a restart
+    // cannot award the same completed round twice.
     db.transaction(() => {
       for (const userId of winners) {
-        addPoint.run(
-          String(pool.guildId),
+        addPointStmt.run(
+          String(pool.guild.id),
           String(userId),
+          1,
           Date.now()
         );
       }
 
-      deleteSession.run(key);
+      deleteSessionStmt.run(String(key));
     })();
 
-    pools.delete(key);
+    pool.status = 'finished';
+    poolSystem.activePools.delete(String(key));
 
-    const scoreLines = scores
-      .sort((a, b) => b.score - a.score)
-      .map(item =>
-        `${getPlayerName(pool.guild, item.userId)} — ` +
-        `**${item.guess}** — ${item.score} match(es)`
+    try {
+      await pool.channel.send({
+        embeds: [
+          poolSystem.createResultEmbed(pool, {
+            winningNumber,
+            scores,
+            winners,
+          }),
+        ],
+      });
+    } catch (error) {
+      console.error(
+        '[BettingPool] Could not send results:',
+        error
       );
-
-    const winnerLines = winners.map(userId =>
-      `${getPlayerName(pool.guild, userId)} — ` +
-      `total **${pointsFor(pool.guildId, userId)} point(s)**`
+    }
+  } catch (error) {
+    console.error(
+      '[BettingPool] Round resolution failed:',
+      error
     );
 
-    await pool.channel.send({
-      embeds: [
-        makeEmbed(
-          `${pool.name.toUpperCase()} | RESULTS`,
-          `**Winning number:** ${winningNumber}\n\n` +
-          `**Scores**\n${scoreLines.join('\n').slice(0, 1500) || 'No scores.'}\n\n` +
-          `**Winner(s)**\n${winnerLines.join('\n') || 'Nobody matched a digit. No points awarded.'}`
-        ).setFooter({
-          text: `${pool.guild.name} • Crowns are untouched`,
-        }),
-      ],
-    }).catch(error => {
-      console.error('[Betpool] Failed to send result:', error);
-    });
-
-  } catch (error) {
-    console.error('[Betpool] Failed to resolve pool:', error);
-
+    // Keep the persisted pool available for recovery if the transaction failed.
   } finally {
-    resolving.delete(key);
-  }
-}
-
-async function init(client) {
-  const rows = db.prepare(`
-    SELECT * FROM betpool_sessions
-  `).all();
-
-  for (const row of rows) {
-    try {
-      const payload = JSON.parse(row.payload);
-
-      const guild =
-        client.guilds.cache.get(row.guild_id) ||
-        await client.guilds.fetch(row.guild_id).catch(() => null);
-
-      const channel = guild && (
-        guild.channels.cache.get(row.channel_id) ||
-        await guild.channels.fetch(row.channel_id).catch(() => null)
-      );
-
-      if (!guild || !channel?.isTextBased?.()) {
-        console.warn(`[Betpool] Could not restore pool ${row.pool_key}.`);
-        continue;
-      }
-
-      const pool = {
-        key: row.pool_key,
-        guildId: String(row.guild_id),
-        channelId: String(row.channel_id),
-        hostId: String(row.host_id),
-        guild,
-        channel,
-        name: displayName(payload.name),
-        prefix: payload.prefix || client.getPrefix?.(row.guild_id) || '$',
-        gameId: payload.gameId ?? null,
-        status: payload.status || 'waiting',
-        createdAt: Number(payload.createdAt) || Date.now(),
-        players: new Map(
-          (payload.players || []).map(player => [
-            String(player.userId),
-            {
-              submitted: Boolean(player.submitted),
-              guess: player.guess == null ? null : String(player.guess),
-              joinedAt: Number(player.joinedAt) || Date.now(),
-            },
-          ])
-        ),
-      };
-
-      pools.set(row.pool_key, pool);
-
-    } catch (error) {
-      console.error('[Betpool] Restore error:', error);
-    }
-  }
-
-  console.log(`[Betpool] Restored ${pools.size} pool(s).`);
-
-  for (const [key, pool] of [...pools]) {
-    const allSubmitted =
-      pool.players.size >= 2 &&
-      [...pool.players.values()].every(player => player.submitted);
-
-    if (allSubmitted) {
-      await resolvePool(key);
-    }
-  }
-}
-
-function resolveTarget(message, raw) {
-  const mentioned = message.mentions?.members?.first();
-
-  if (mentioned) {
-    return mentioned;
-  }
-
-  const value = String(raw || '').trim();
-  const match =
-    value.match(/^<@!?(\d+)>$/) ||
-    value.match(/^(\d{17,20})$/);
-
-  if (match) {
-    return message.guild.members.cache.get(match[1]) || null;
-  }
-
-  const query = value.replace(/^@/, '').toLowerCase();
-
-  return message.guild.members.cache.find(member =>
-    member.user.username.toLowerCase() === query ||
-    member.displayName.toLowerCase() === query
-  ) || null;
-}
-
-async function submitNumber(message, args) {
-  const joined = findJoinedPool(
-    message.guild.id,
-    message.author.id
-  );
-
-  if (!joined) {
-    return send(message, 'No Pool Found', 'Join a pool first with `betpool join <name>`.');
-  }
-
-  const { key, pool } = joined;
-  const player = pool.players.get(message.author.id);
-
-  if (
-    pool.gameId !== 1 ||
-    !['open', 'submitting'].includes(pool.status)
-  ) {
-    return send(message, 'Pool Not Ready', 'The host must select the game and open the pool first.');
-  }
-
-  if (pool.players.size < 2) {
-    return send(message, 'Need More Players', 'At least two players are needed.');
-  }
-
-  if (player.submitted) {
-    return send(message, 'Already Submitted', 'You already submitted your number.');
-  }
-
-  const guess = args[0];
-
-  if (args.length !== 1 || !/^\d{3}$/.test(guess || '')) {
-    return send(message, 'Invalid Number', 'Enter exactly three digits, like `poolbet 007`.');
-  }
-
-  player.submitted = true;
-  player.guess = guess;
-  pool.status = 'submitting';
-
-  savePool(key, pool);
-
-  await send(
-    message,
-    'Number Submitted',
-    `Your number for **${pool.name}** has been saved.`
-  );
-
-  if ([...pool.players.values()].every(item => item.submitted)) {
-    return resolvePool(key);
-  }
-
-  const waiting = [...pool.players.values()].filter(item => !item.submitted).length;
-
-  return pool.channel.send({
-    embeds: [
-      makeEmbed(
-        'Waiting for Players',
-        `${waiting} player(s) still need to submit their numbers.`
-      ),
-    ],
-  });
-}
-
-async function createPool(message, args, prefix) {
-  const rawName = displayName(args.join(' '));
-
-  if (!rawName) {
-    return send(message, 'Missing Name', `Usage: \`${prefix}betpool create <name>\``);
-  }
-
-  if (rawName.length > 40) {
-    return send(message, 'Name Too Long', 'Use 40 characters or fewer.');
-  }
-
-  if (findJoinedPool(message.guild.id, message.author.id)) {
-    return send(message, 'Already in a Pool', 'Finish your current pool first.');
-  }
-
-  const key = getKey(message.guild.id, rawName);
-
-  if (pools.has(key)) {
-    return send(message, 'Pool Exists', 'A pool with that name already exists in this server.');
-  }
-
-  const pool = {
-    key,
-    guildId: String(message.guild.id),
-    channelId: String(message.channel.id),
-    hostId: String(message.author.id),
-    guild: message.guild,
-    channel: message.channel,
-    name: rawName,
-    prefix,
-    gameId: null,
-    status: 'waiting',
-    createdAt: Date.now(),
-    players: new Map([
-      [message.author.id, {
-        submitted: false,
-        guess: null,
-        joinedAt: Date.now(),
-      }],
-    ]),
-  };
-
-  pools.set(key, pool);
-  savePool(key, pool);
-
-  return message.channel.send({
-    embeds: [
-      makeEmbed(
-        'Pool Created',
-        `**${pool.name}** has been created.\n\n` +
-        `1. Select the game: \`${prefix}betpool play 1\`\n` +
-        `2. Invite players: \`${prefix}betpool invite @player\`\n` +
-        `3. Players join: \`${prefix}betpool join ${pool.name}\`\n` +
-        `4. Submit a number: \`${prefix}poolbet 123\`\n\n` +
-        'Competition points only. Crowns are not used.'
-      ),
-    ],
-  });
-}
-
-async function joinPool(message, args) {
-  const name = args.join(' ');
-
-  if (!name) {
-    return send(message, 'Missing Name', 'Usage: `betpool join <name>`');
-  }
-
-  const key = getKey(message.guild.id, name);
-  const pool = pools.get(key);
-
-  if (!pool) return send(message, 'Not Found', 'No pool with that name exists.');
-  if (pool.players.has(message.author.id)) return send(message, 'Already Joined', 'You are already in this pool.');
-
-  if (pool.status !== 'open' || hasSubmitted(pool)) {
-    return send(message, 'Pool Closed', 'This pool is no longer accepting players.');
-  }
-
-  if (pool.players.size >= MAX_PLAYERS) {
-    return send(message, 'Pool Full', `Maximum ${MAX_PLAYERS} players.`);
-  }
-
-  if (findJoinedPool(message.guild.id, message.author.id)) {
-    return send(message, 'Already in a Pool', 'Finish your current pool first.');
-  }
-
-  pool.players.set(message.author.id, {
-    submitted: false,
-    guess: null,
-    joinedAt: Date.now(),
-  });
-
-  savePool(key, pool);
-
-  return send(
-    message,
-    'Joined Pool',
-    `You joined **${pool.name}**. Players: ${pool.players.size}/${MAX_PLAYERS}.`
-  );
-}
-
-async function selectGame(message, args) {
-  const hosted = findHostedPool(message.guild.id, message.author.id);
-
-  if (!hosted) return send(message, 'No Pool Found', 'Create a pool first.');
-  if (hosted.pool.status !== 'waiting') return send(message, 'Already Open', 'This pool is already open.');
-
-  if (Number(args[0]) !== 1) {
-    return send(message, 'Invalid Game', 'Available game: `1` — 3-Digit Match.');
-  }
-
-  hosted.pool.gameId = 1;
-  hosted.pool.status = 'open';
-  savePool(hosted.key, hosted.pool);
-
-  return send(
-    message,
-    'Game Open',
-    `**${hosted.pool.name}** is accepting players. Use \`${getPrefix(message, message.client)}poolbet 123\` to submit a number.`
-  );
-}
-
-async function showList(message) {
-  const active = [...pools.values()]
-    .filter(pool => pool.guildId === String(message.guild.id))
-    .map(pool => `**${pool.name}** — ${pool.players.size}/${MAX_PLAYERS} — ${pool.status}`);
-
-  return send(message, 'Active Pools', active.join('\n') || 'No active pools.');
-}
-
-async function showInfo(message, args) {
-  const name = args.join(' ');
-  const pool = name
-    ? pools.get(getKey(message.guild.id, name))
-    : findJoinedPool(message.guild.id, message.author.id)?.pool;
-
-  if (!pool) return send(message, 'Not Found', 'Specify a pool name or join a pool first.');
-
-  return message.channel.send({
-    embeds: [createPoolEmbed(pool)],
-  });
-}
-
-async function invitePlayer(message, args, prefix) {
-  const hosted = findHostedPool(message.guild.id, message.author.id);
-
-  if (!hosted) return send(message, 'No Pool Found', 'You need to host the pool.');
-
-  const pool = hosted.pool;
-
-  if (pool.status !== 'open' || hasSubmitted(pool)) {
-    return send(message, 'Pool Closed', 'Invite players before anyone submits a number.');
-  }
-
-  const target = resolveTarget(message, args.join(' '));
-
-  if (!target) return send(message, 'Player Not Found', 'Mention a server member.');
-
-  if (pool.players.has(target.id)) {
-    return send(message, 'Already Joined', 'That member is already in the pool.');
-  }
-
-  if (pool.players.size >= MAX_PLAYERS) {
-    return send(message, 'Pool Full', `Maximum ${MAX_PLAYERS} players.`);
-  }
-
-  try {
-    await target.send({
-      embeds: [
-        makeEmbed(
-          'Pool Invitation',
-          `${message.member.displayName} invited you to **${pool.name}** in **${message.guild.name}**.\n` +
-          `Join with \`${prefix}betpool join ${pool.name}\`.`
-        ),
-      ],
-    });
-
-    return send(message, 'Invite Sent', `Invitation sent to ${target}.`);
-
-  } catch {
-    return send(message, 'DM Failed', `Ask ${target} to join using \`${prefix}betpool join ${pool.name}\`.`);
+    poolSystem.resolving.delete(String(key));
   }
 }
 
 async function kickPlayer(message, args) {
-  const hosted = findHostedPool(message.guild.id, message.author.id);
+  const hosted = findHostedPool(
+    message.guild.id,
+    message.author.id
+  );
 
-  if (!hosted) return send(message, 'No Pool Found', 'You need to host a pool.');
+  if (!hosted) {
+    return send(
+      message,
+      'No Pool Found',
+      'You need to host a pool to kick a player.'
+    );
+  }
 
   const { key, pool } = hosted;
 
-  if (pool.status !== 'open' || hasSubmitted(pool)) {
-    return send(message, 'Too Late', 'Players can only be removed before submissions begin.');
+  if (pool.status !== 'open' || hasSubmittedNumber(pool)) {
+    return send(
+      message,
+      'Cannot Kick Player',
+      'Players can only be removed before anyone submits a number.'
+    );
   }
 
   const target = resolveTarget(message, args.join(' '));
 
-  if (!target || target.id === pool.hostId || !pool.players.has(target.id)) {
-    return send(message, 'Invalid Player', 'Mention a player in your pool, not yourself.');
+  if (!target) {
+    return send(
+      message,
+      'Player Not Found',
+      'Mention a valid server member to kick.'
+    );
+  }
+
+  if (target.id === pool.hostId) {
+    return send(
+      message,
+      'Invalid Target',
+      'You cannot kick yourself as host. Delete the pool instead.'
+    );
+  }
+
+  if (!pool.players.has(target.id)) {
+    return send(
+      message,
+      'Player Not in Pool',
+      `${target.displayName} is not in your pool.`
+    );
   }
 
   pool.players.delete(target.id);
-  savePool(key, pool);
+  poolSystem.savePool(key, pool);
 
-  return send(message, 'Player Removed', `${target.displayName} was removed from **${pool.name}**.`);
+  return send(
+    message,
+    'Player Removed',
+    `${target.displayName} has been removed from **${pool.name}**.`
+  );
 }
 
-async function deletePool(message, args) {
-  const name = args.join(' ');
+async function invitePlayer(message, args) {
+  const hosted = findHostedPool(
+    message.guild.id,
+    message.author.id
+  );
 
-  if (!name) return send(message, 'Missing Name', 'Usage: `betpool delete <name>`');
+  if (!hosted) {
+    return send(
+      message,
+      'No Pool Found',
+      'You need to host a pool to invite players.'
+    );
+  }
 
-  const key = getKey(message.guild.id, name);
-  const pool = pools.get(key);
+  const { pool } = hosted;
 
-  if (!pool) return send(message, 'Not Found', 'That pool does not exist.');
-  if (pool.hostId !== message.author.id) return send(message, 'Denied', 'Only the host can delete the pool.');
+  if (pool.status !== 'open' || hasSubmittedNumber(pool)) {
+    return send(
+      message,
+      'Pool Not Accepting Players',
+      'Invite players before anyone submits a number.'
+    );
+  }
 
-  deleteSession.run(key);
-  pools.delete(key);
+  const target = resolveTarget(message, args.join(' '));
 
-  return send(message, 'Pool Deleted', `**${pool.name}** was deleted.`);
+  if (!target) {
+    return send(
+      message,
+      'Player Not Found',
+      'Mention a valid server member to invite.'
+    );
+  }
+
+  if (pool.players.has(target.id)) {
+    return send(
+      message,
+      'Already Joined',
+      `${target.displayName} is already in your pool.`
+    );
+  }
+
+  if (pool.players.size >= MAX_PLAYERS) {
+    return send(
+      message,
+      'Pool Full',
+      `Your pool already has ${MAX_PLAYERS} players.`
+    );
+  }
+
+  const prefix = getPrefix(message, message.client);
+
+  const inviteEmbed = createEmbed(
+    'Pool Invitation',
+    `${message.member.displayName} invited you to join **${pool.name}** in **${message.guild.name}**.\n\n` +
+    `Join using \`${prefix}betpool join ${pool.name}\`.`,
+    message
+  );
+
+  try {
+    await target.send({
+      embeds: [inviteEmbed],
+    });
+
+    return send(
+      message,
+      'Invitation Sent',
+      `An invitation was sent to ${target}.`
+    );
+  } catch {
+    return send(
+      message,
+      'Could Not DM Player',
+      `I couldn't DM ${target}. Ask them to use \`${prefix}betpool join ${pool.name}\` instead.`
+    );
+  }
+}
+
+async function deleteBetpool(message, args) {
+  const rawName = args.join(' ').trim();
+
+  if (!rawName) {
+    return send(
+      message,
+      'Missing Pool Name',
+      `Usage: \`${getPrefix(message, message.client)}betpool delete <name>\``
+    );
+  }
+
+  const key = poolSystem.getPoolKey(
+    message.guild.id,
+    rawName
+  );
+
+  const pool = poolSystem.activePools.get(key);
+
+  if (!pool) {
+    return send(
+      message,
+      'Pool Not Found',
+      `No pool named **${rawName}** exists in this server.`
+    );
+  }
+
+  if (pool.hostId !== message.author.id) {
+    return send(
+      message,
+      'Permission Denied',
+      'Only the host can delete this pool.'
+    );
+  }
+
+  poolSystem.deletePool(key);
+
+  return send(
+    message,
+    'Pool Deleted',
+    `Pool **${pool.name}** has been deleted.`
+  );
+}
+
+async function poolInfo(message, args) {
+  let pool = null;
+
+  const rawName = args.join(' ').trim();
+
+  if (rawName) {
+    pool = poolSystem.getPool(
+      message.guild.id,
+      rawName
+    );
+  } else {
+    pool =
+      findJoinedPool(message.guild.id, message.author.id)?.pool ||
+      null;
+  }
+
+  if (!pool) {
+    return send(
+      message,
+      'Pool Not Found',
+      `Specify a valid pool name, or join an active pool first. Example: \`${getPrefix(message, message.client)}betpool info monkey\``
+    );
+  }
+
+  return message.channel.send({
+    embeds: [poolSystem.createPoolEmbed(pool)],
+  });
 }
 
 async function showLeaderboard(message) {
-  const rows = getLeaderboard.all(String(message.guild.id));
-
-  if (!rows.length) {
-    return send(message, 'Betpool Leaderboard', 'No competition points earned yet.');
-  }
-
-  const lines = rows.map((row, index) =>
-    `**${index + 1}.** ${getPlayerName(message.guild, row.user_id)} — **${row.points} point(s)**`
+  const entries = getLeaderboardStmt.all(
+    String(message.guild.id)
   );
 
-  return send(message, 'Betpool Leaderboard', lines.join('\n'));
-}
-
-async function help(message, prefix) {
-  return send(
-    message,
-    'Betpool Help',
-    `\`${prefix}betpool create <name>\` — create a pool\n` +
-    `\`${prefix}betpool play 1\` — open the game\n` +
-    `\`${prefix}betpool join <name>\` — join a pool\n` +
-    `\`${prefix}poolbet 123\` — submit a number\n` +
-    `\`${prefix}betpool info [name]\` — view a pool\n` +
-    `\`${prefix}betpool list\` — list active pools\n` +
-    `\`${prefix}betpool invite @user\` — invite a player\n` +
-    `\`${prefix}betpool kick @user\` — kick a player\n` +
-    `\`${prefix}betpool delete <name>\` — delete your pool\n` +
-    `\`${prefix}betpool leaderboard\` — show points\n\n` +
-    'Points and open pools are saved in economy.sqlite. No Crown stakes or payouts.'
-  );
-}
-
-async function execute(client, message, args) {
-  if (!message.guild || !message.member) return;
-
-  const prefix = getPrefix(message, client);
-  const content = message.content.trim();
-
-  const commandText = content.startsWith(prefix)
-    ? content.slice(prefix.length).trim()
-    : content;
-
-  const parts = commandText.split(/\s+/).filter(Boolean);
-  const invoked = (parts.shift() || 'betpool').toLowerCase();
-
-  if (invoked === 'poolbet') {
-    return submitNumber(message, parts);
+  if (!entries.length) {
+    return send(
+      message,
+      'Points Leaderboard',
+      'Nobody has earned any competition points yet. Play a pool to get started!'
+    );
   }
 
-  const action = (parts.shift() || 'help').toLowerCase();
+  const lines = entries.map((entry, index) => {
+    const member = message.guild.members.cache.get(entry.user_id);
 
-  switch (action) {
-    case 'create':
-      return createPool(message, parts, prefix);
+    return (
+      `**${index + 1}.** ` +
+      `${member?.displayName || `<@${entry.user_id}>`} — ` +
+      `**${entry.points} point(s)**`
+    );
+  });
 
-    case 'join':
-      return joinPool(message, parts);
+  return message.channel.send({
+    embeds: [
+      createEmbed(
+        'Competition Leaderboard',
+        lines.join('\n'),
+        message
+      ).setFooter({
+        text: `${message.guild.name} • Betting Pool Leaderboard`,
+      }),
+    ],
+  });
+}
 
-    case 'play':
-      return selectGame(message, parts);
+async function betpoolHelp(message) {
+  const prefix = getPrefix(message, message.client);
 
-    case 'list':
-      return showList(message);
+  const embed = createEmbed(
+    'BETTING POOL GUIDE',
+    'Play a three-digit matching game with your server.',
+    message
+  ).addFields(
+    {
+      name: '🎮 HOW TO START',
+      value:
+        `**1. Create a pool**\n\`${prefix}betpool create monkey\`\n\n` +
+        `**2. Select the game**\n\`${prefix}betpool play 1\`\n\n` +
+        `**3. Invite or join**\n\`${prefix}betpool invite @player\`\n` +
+        `\`${prefix}betpool join monkey\`\n\n` +
+        `**4. Submit a number**\n\`${prefix}poolbet 123\``,
+      inline: false,
+    },
+    {
+      name: '🎯 GAME RULES',
+      value:
+        '• Choose exactly three digits, from `000` to `999`.\n' +
+        '• The bot generates a random three-digit number.\n' +
+        '• Matching digits count regardless of order, but repeated digits only match as many times as they appear.\n' +
+        '• Highest score wins; each winner earns 1 point.\n' +
+        '• If everyone scores zero, nobody earns a point.',
+      inline: false,
+    },
+    {
+      name: '⌨️ COMMANDS',
+      value:
+        `\`${prefix}betpool create <name>\` — Create\n` +
+        `\`${prefix}betpool join <name>\` — Join\n` +
+        `\`${prefix}betpool play <number>\` — Select game\n` +
+        `\`${prefix}poolbet <000-999>\` — Submit number\n` +
+        `\`${prefix}betpool list\` — View games and pools\n` +
+        `\`${prefix}betpool info <name>\` — View pool\n` +
+        `\`${prefix}betpool invite @player\` — Invite\n` +
+        `\`${prefix}betpool kick @player\` — Remove player\n` +
+        `\`${prefix}betpool delete <name>\` — Delete\n` +
+        `\`${prefix}betpool leaderboard\` — View points\n` +
+        `\`${prefix}betpool help\` — This guide`,
+      inline: false,
+    },
+    {
+      name: '📌 IMPORTANT',
+      value: `The host automatically joins. Each pool can hold up to ${MAX_PLAYERS} players.`,
+      inline: false,
+    }
+  ).setFooter({
+    text: `${message.guild.name} • Game Guide`,
+  });
 
-    case 'info':
-      return showInfo(message, parts);
+  return message.channel.send({
+    embeds: [embed],
+  });
+}
 
-    case 'invite':
-      return invitePlayer(message, parts, prefix);
-
-    case 'kick':
-      return kickPlayer(message, parts);
-
-    case 'delete':
-      return deletePool(message, parts);
-
-    case 'leaderboard':
-    case 'points':
-      return showLeaderboard(message);
-
-    case 'help':
-      return help(message, prefix);
-
-    default:
-      return help(message, prefix);
-  }
+async function initializeBetpool(client) {
+  return poolSystem.init(client);
 }
 
 module.exports = {
   name: 'betpool',
   aliases: ['bettingpool', 'poolbet'],
-  description: 'Play a persistent three-digit competition game.',
+  description: 'Create and play a persistent three-digit matching pool game.',
   category: 'misc',
   usage: 'betpool <create|join|play|list|info|invite|kick|delete|leaderboard|help>',
-  init,
-  execute,
+  poolSystem,
+  init: initializeBetpool,
+
+  async execute(client, message, args) {
+    if (!message.guild || !message.member) return;
+
+    // The command loader resolves aliases to this module, so inspect the
+    // original invocation to distinguish $poolbet from $betpool.
+    const prefix = getPrefix(message, client);
+    const rawContent = message.content.trim();
+
+    const commandText = rawContent.startsWith(prefix)
+      ? rawContent.slice(prefix.length).trim()
+      : rawContent;
+
+    const parts = commandText.split(/\s+/).filter(Boolean);
+    const invokedName = (parts.shift() || '').toLowerCase();
+    const commandArgs = parts;
+
+    if (invokedName === 'poolbet') {
+      return placePoolBet(message, commandArgs);
+    }
+
+    const action = (commandArgs.shift() || '').toLowerCase();
+
+    switch (action) {
+      case 'create':
+        return createBetpool(message, commandArgs);
+
+      case 'join':
+        return joinBetpool(message, commandArgs);
+
+      case 'play':
+        return setGame(message, commandArgs);
+
+      case 'list':
+        return listGames(message);
+
+      case 'info':
+        return poolInfo(message, commandArgs);
+
+      case 'invite':
+        return invitePlayer(message, commandArgs);
+
+      case 'kick':
+        return kickPlayer(message, commandArgs);
+
+      case 'delete':
+        return deleteBetpool(message, commandArgs);
+
+      case 'leaderboard':
+      case 'points':
+        return showLeaderboard(message);
+
+      case 'help':
+        return betpoolHelp(message);
+
+      default: {
+        const p = getPrefix(message, client);
+
+        return send(
+          message,
+          'Betting Pool',
+          `Use \`${p}betpool help\` to see the command list.\n` +
+          `Create a pool with \`${p}betpool create <name>\`.`
+        );
+      }
+    }
+  },
 };
