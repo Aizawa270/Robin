@@ -427,18 +427,6 @@ boosterRolesDB.prepare(`
 
 // ============================================================
 // BOOSTER ROLE SETTINGS
-//
-// member_category_role_id
-//   -> Normal/member booster roles go immediately below this.
-//
-// staff_gate_role_id
-//   -> Having this role identifies someone as staff.
-//
-// staff_category_role_id
-//   -> Staff booster roles go immediately below this.
-//
-// Each guild has its own configuration, making the system
-// completely universal across different servers.
 // ============================================================
 
 boosterRolesDB.prepare(`
@@ -480,7 +468,6 @@ client.getPrefix = (guildId) => {
 
 // ============================================================
 // TIKTOK VIDEO DOWNLOADER
-// Automatically detects TikTok links and uploads the video.
 // ============================================================
 
 const tiktokDownloadsInProgress = new Set();
@@ -706,7 +693,6 @@ async function handleTikTokPreview(message) {
       `[TikTok] Downloaded ${(videoBuffer.length / 1048576).toFixed(2)} MiB`
     );
 
-    // Reply to the original message with only the video.
     await message.reply({
       files: [
         {
@@ -763,8 +749,6 @@ async function handleTikTokPreview(message) {
 
 // ============================================================
 // BOOSTER ROLE CLEANUP
-// Deletes a user's custom booster role and its database record.
-// Never touches Discord's built-in Server Booster role.
 // ============================================================
 
 async function deleteBoosterRoleForUser(
@@ -869,12 +853,6 @@ async function deleteBoosterRoleForUser(
 
 // ============================================================
 // BOOSTER ROLE STARTUP RECONCILIATION
-//
-// Existing boosters are detected, but their roles are NOT
-// automatically created. They must run !br create themselves.
-//
-// If the bot was offline when someone stopped boosting, the
-// custom role is deleted when Vanessa comes back online.
 // ============================================================
 
 async function initializeBoosterRoleTracking() {
@@ -884,8 +862,6 @@ async function initializeBoosterRoleTracking() {
     let members;
 
     try {
-      // Requires the privileged Server Members intent to be
-      // enabled in the Discord Developer Portal.
       members = await guild.members.fetch();
     } catch (error) {
       console.error(
@@ -893,8 +869,6 @@ async function initializeBoosterRoleTracking() {
         error
       );
 
-      // Do not risk deleting ownership records when member
-      // status could not be verified.
       continue;
     }
 
@@ -915,8 +889,6 @@ async function initializeBoosterRoleTracking() {
     for (const record of records) {
       const member = members.get(record.user_id);
 
-      // A record with no current member or no current boost
-      // must be cleaned up.
       if (!member || !member.premiumSince) {
         await deleteBoosterRoleForUser(
           guild,
@@ -927,9 +899,6 @@ async function initializeBoosterRoleTracking() {
         continue;
       }
 
-      // If the custom role was deleted while Vanessa was
-      // offline, remove the stale mapping. The booster can
-      // create a new role by running !br create.
       if (!guild.roles.cache.has(record.role_id)) {
         database.prepare(`
           DELETE FROM booster_roles
@@ -967,6 +936,36 @@ client.once('ready', async () => {
   economy.init(client);
   shopSystem.init(client);
 
+  // ==========================================================
+  // RESTORE PERSISTENT GAME SESSIONS
+  // Both game commands must export init(client).
+  // loadCommands(client) runs before client.login(), so the
+  // command modules are already available here.
+  // ==========================================================
+
+  for (const commandName of ['betpool', 'horserace']) {
+    const gameCommand = client.commands?.get(commandName);
+
+    if (typeof gameCommand?.init !== 'function') {
+      console.warn(
+        `[Games] ${commandName} has no init(client) function. ` +
+        'Check that the persistent game file is installed.'
+      );
+
+      continue;
+    }
+
+    try {
+      await gameCommand.init(client);
+
+    } catch (error) {
+      console.error(
+        `[Games] Failed to restore ${commandName}:`,
+        error
+      );
+    }
+  }
+
   await messageTracker.init(client);
 
   birthdayService(client);
@@ -977,6 +976,7 @@ client.once('ready', async () => {
   // Reconcile booster roles before the bot is fully operational.
   try {
     await initializeBoosterRoleTracking();
+
   } catch (error) {
     console.error(
       '[Booster Roles] Startup reconciliation failed:',
@@ -1048,6 +1048,7 @@ client.once('ready', async () => {
             giveaway.message_id
           );
         }
+
       } else {
         setTimeout(() => {
           if (startGiveaway?.endGiveaway) {
@@ -1065,6 +1066,7 @@ client.once('ready', async () => {
       console.log(
         '[Giveaway] startgiveaway command not found - skipping restore'
       );
+
     } else {
       console.error('[Giveaway] Restore failed:', error);
     }
@@ -1093,6 +1095,7 @@ client.on('messageCreate', async (message) => {
     if (client.automod?.checkMessage) {
       await client.automod.checkMessage(message);
     }
+
   } catch (error) {
     console.error('Automod error:', error);
   }
@@ -1103,6 +1106,7 @@ client.on('messageCreate', async (message) => {
     if (watchwordCommand?.checkWatchwords) {
       await watchwordCommand.checkWatchwords(client, message);
     }
+
   } catch (error) {}
 });
 
@@ -1125,8 +1129,6 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         `[Booster Roles] ${newMember.user.tag} started boosting ${newMember.guild.name}`
       );
 
-      // Do not create a role automatically.
-      // The member must run !br create.
       return;
     }
 
@@ -1152,8 +1154,6 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 
 // ============================================================
 // MANUAL ROLE DELETION TRACKING
-// If someone deletes their personal role manually, remove its
-// mapping so they can use !br create again while boosting.
 // ============================================================
 
 client.on('roleDelete', (role) => {
