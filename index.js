@@ -902,10 +902,10 @@ async function initializeBoosterRoleTracking() {
       if (!guild.roles.cache.has(record.role_id)) {
         database.prepare(`
           DELETE FROM booster_roles
-          WHERE guild_id = ? AND user_id = ?
+          WHERE guild_id = ? AND role_id = ?
         `).run(
           guild.id,
-          record.user_id
+          record.role_id
         );
 
         console.log(
@@ -935,6 +935,29 @@ client.once('ready', async () => {
 
   economy.init(client);
   shopSystem.init(client);
+
+  // ==========================================================
+  // STAFF APPLICATION SYSTEM
+  // Restore application state and pending channel deletions.
+  // ==========================================================
+
+  const staffAppCommand = client.commands?.get('staffapp');
+
+  if (typeof staffAppCommand?.init === 'function') {
+    try {
+      await staffAppCommand.init(client);
+    } catch (error) {
+      console.error(
+        '[StaffApp] Startup initialization failed:',
+        error
+      );
+    }
+  } else {
+    console.warn(
+      '[StaffApp] Command or init(client) function not found. ' +
+      'Check commands/mod/staffapp.js and its exports.'
+    );
+  }
 
   // ==========================================================
   // RESTORE PERSISTENT GAME SESSIONS
@@ -1204,6 +1227,53 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
+// ============================================================
+// STAFF APPLICATION BUTTONS + MODALS
+// Keep separate from the existing 1v1 interaction handler.
+// ============================================================
+
+client.on('interactionCreate', async (interaction) => {
+  const customId = interaction.customId;
+
+  if (
+    typeof customId !== 'string' ||
+    !customId.startsWith('staffapp:')
+  ) {
+    return;
+  }
+
+  const staffAppCommand = client.commands?.get('staffapp');
+
+  if (
+    typeof staffAppCommand?.handleInteraction !== 'function'
+  ) {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'The staff application system is unavailable.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
+
+    return;
+  }
+
+  try {
+    await staffAppCommand.handleInteraction(client, interaction);
+  } catch (error) {
+    console.error(
+      '[StaffApp] Unhandled interaction error:',
+      error
+    );
+
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'Something went wrong with the staff application.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
+  }
+});
+
 // ===== MESSAGE DELETE / SNIPE =====
 client.on('messageDelete', async (message) => {
   if (!message.guild || message.author?.bot) {
@@ -1428,6 +1498,14 @@ function closeDatabases() {
 
     if (client.shopDB?.open) {
       client.shopDB.close();
+    }
+
+    // ========================================================
+    // STAFF APPLICATION DATABASE
+    // ========================================================
+
+    if (client.staffAppDB?.open) {
+      client.staffAppDB.close();
     }
 
     console.log(
