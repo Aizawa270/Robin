@@ -1,127 +1,167 @@
-const { EmbedBuilder } = require('discord.js');
+const {
+    EmbedBuilder,
+} = require('discord.js');
+
 const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 
-// ============================================================
-// FETCH
-// ============================================================
-
-let fetchFn = global.fetch;
-
-if (!fetchFn) {
-    try {
-        fetchFn = require('node-fetch');
-    } catch {}
-}
-
-// ============================================================
+// ================================
 // CONFIGURATION
-// ============================================================
-
-let config = null;
-
-try {
-    config = require('../config');
-} catch {}
-
-const DEFAULT_COLOR =
-    config?.colors?.theme ||
-    config?.colors?.banner ||
-    '#ec4899';
-
-const REQUEST_TIMEOUT_MS = 10000;
+// ================================
 
 const ALLOWED_ACTIONS = new Set([
     'hug',
     'kiss',
     'slap',
+    'pat',
+    'cuddle',
+    'handhold',
 ]);
 
-// ============================================================
+const GIFUKAI_ACTIONS = new Set([
+    'hug',
+    'kiss',
+    'pat',
+]);
+
+const NEKOSBEST_API = 'https://nekos.best/api/v2';
+const GIFUKAI_API = 'https://api.gifukai.com/v1';
+
+const REQUEST_TIMEOUT = 12000;
+
+// ================================
 // DATABASE
-// ============================================================
+// ================================
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const dataDir = path.join(__dirname, '..', 'data');
 
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
 }
 
 const db = new Database(
-    path.join(DATA_DIR, 'action_gifs.sqlite')
+    path.join(dataDir, 'action_gifs.sqlite')
 );
 
 db.pragma('journal_mode = WAL');
-db.pragma('busy_timeout = 5000');
 
-db.prepare(`
-    CREATE TABLE IF NOT EXISTS action_counts (
+db.exec(`
+    CREATE TABLE IF NOT EXISTS action_gif_usage (
         guild_id TEXT NOT NULL,
         actor_id TEXT NOT NULL,
         target_id TEXT NOT NULL,
         action TEXT NOT NULL,
         count INTEGER NOT NULL DEFAULT 0,
-        last_used_at INTEGER NOT NULL DEFAULT 0,
-
         PRIMARY KEY (
             guild_id,
             actor_id,
             target_id,
             action
         )
+    );
+`);
+
+const getUsageStatement = db.prepare(`
+    SELECT count
+    FROM action_gif_usage
+    WHERE guild_id = ?
+      AND actor_id = ?
+      AND target_id = ?
+      AND action = ?
+`);
+
+const incrementUsageStatement = db.prepare(`
+    INSERT INTO action_gif_usage (
+        guild_id,
+        actor_id,
+        target_id,
+        action,
+        count
     )
-`).run();
+    VALUES (?, ?, ?, ?, 1)
+    ON CONFLICT (
+        guild_id,
+        actor_id,
+        target_id,
+        action
+    )
+    DO UPDATE SET count = count + 1
+`);
 
-// ============================================================
-// NEKOSBEST USER-AGENT
-// Generated automatically. No .env configuration required.
-// ============================================================
+function getUsageCount(guildId, actorId, targetId, action) {
+    const row = getUsageStatement.get(
+        guildId,
+        actorId,
+        targetId,
+        action
+    );
 
-function getUserAgent(client) {
-    const botId = client?.user?.id;
-
-    if (botId) {
-        const inviteUrl =
-            `https://discord.com/oauth2/authorize` +
-            `?client_id=${botId}&scope=bot`;
-
-        return `Vanessa (${inviteUrl})`;
-    }
-
-    return 'Vanessa (https://discord.com)';
+    return row ? row.count : 0;
 }
 
-// ============================================================
-// API REQUEST
-// ============================================================
+function incrementUsage(guildId, actorId, targetId, action) {
+    incrementUsageStatement.run(
+        guildId,
+        actorId,
+        targetId,
+        action
+    );
 
-async function requestJson(url, headers = {}) {
-    if (!fetchFn) {
-        throw new Error('Fetch is unavailable.');
+    return getUsageCount(
+        guildId,
+        actorId,
+        targetId,
+        action
+    );
+}
+
+// ================================
+// ORDINAL NUMBERS
+// ================================
+
+function getOrdinal(number) {
+    const remainder100 = number % 100;
+
+    if (remainder100 >= 11 && remainder100 <= 13) {
+        return `${number}th`;
     }
 
+    switch (number % 10) {
+        case 1:
+            return `${number}st`;
+        case 2:
+            return `${number}nd`;
+        case 3:
+            return `${number}rd`;
+        default:
+            return `${number}th`;
+    }
+}
+
+// ================================
+// HTTP REQUESTS
+// ================================
+
+async function requestJson(url) {
     const controller = new AbortController();
 
     const timeout = setTimeout(() => {
         controller.abort();
-    }, REQUEST_TIMEOUT_MS);
+    }, REQUEST_TIMEOUT);
 
     try {
-        const response = await fetchFn(url, {
+        const response = await fetch(url, {
             method: 'GET',
-
             headers: {
                 Accept: 'application/json',
-                ...headers,
             },
-
             signal: controller.signal,
         });
 
         if (!response.ok) {
             throw new Error(
-                `HTTP ${response.status} from ${url}`
+                `API returned HTTP ${response.status}`
             );
         }
 
@@ -131,446 +171,295 @@ async function requestJson(url, headers = {}) {
     }
 }
 
-// ============================================================
-// GIF SOURCES
-// ============================================================
-
-function getGifSources(action, client) {
-    const sources = [];
-
-    // Gifukai is the primary provider for hug and kiss.
-    // It requires neither an API key nor custom configuration.
-
-    if (action === 'hug' || action === 'kiss') {
-        sources.push({
-            name: 'Gifukai',
-
-            url: `https://api.gifukai.com/v1/${action}`,
-
-            headers: {},
-
-            extract(data) {
-                return data?.url;
-            },
-        });
+function validateGifUrl(url) {
+    if (typeof url !== 'string' || !url.trim()) {
+        return null;
     }
 
-    // NekosBest supports hug, kiss, and slap.
-    // The User-Agent is generated automatically.
+    try {
+        const parsedUrl = new URL(url);
 
-    sources.push({
-        name: 'NekosBest',
+        if (parsedUrl.protocol !== 'https:') {
+            return null;
+        }
 
-        url: `https://nekos.best/api/v2/${action}`,
-
-        headers: {
-            'User-Agent': getUserAgent(client),
-        },
-
-        extract(data) {
-            return data?.results?.[0]?.url;
-        },
-    });
-
-    return sources;
+        return parsedUrl.toString();
+    } catch {
+        return null;
+    }
 }
 
-// ============================================================
-// FETCH ACTION GIF
-// ============================================================
+// ================================
+// GIF API SOURCES
+// ================================
 
-async function fetchActionGif(action, client) {
-    if (!ALLOWED_ACTIONS.has(action)) {
-        throw new Error(
-            `Unsupported action: ${action}`
-        );
+async function getGifukaiGif(action) {
+    if (!GIFUKAI_ACTIONS.has(action)) {
+        return null;
     }
 
-    const sources = getGifSources(action, client);
+    try {
+        const data = await requestJson(
+            `${GIFUKAI_API}/${encodeURIComponent(action)}`
+        );
 
-    let lastError = null;
+        const possibleUrls = [
+            data?.url,
+            data?.gif,
+            data?.data?.url,
+            data?.result?.url,
+            data?.results?.[0]?.url,
+        ];
 
-    for (const source of sources) {
-        try {
-            const data = await requestJson(
-                source.url,
-                source.headers
-            );
+        for (const url of possibleUrls) {
+            const validUrl = validateGifUrl(url);
 
-            const gifUrl = source.extract(data);
-
-            if (
-                typeof gifUrl !== 'string' ||
-                !gifUrl.trim()
-            ) {
-                throw new Error(
-                    `${source.name} returned no GIF URL.`
-                );
+            if (validUrl) {
+                return validUrl;
             }
+        }
 
-            let parsedUrl;
+        return null;
+    } catch (error) {
+        console.warn(
+            `[ActionGIF] Gifukai failed for "${action}":`,
+            error.message
+        );
 
-            try {
-                parsedUrl = new URL(gifUrl);
-            } catch {
-                throw new Error(
-                    `${source.name} returned an invalid URL.`
-                );
+        return null;
+    }
+}
+
+async function getNekosBestGif(action) {
+    if (!ALLOWED_ACTIONS.has(action)) {
+        return null;
+    }
+
+    try {
+        const data = await requestJson(
+            `${NEKOSBEST_API}/${encodeURIComponent(action)}`
+        );
+
+        const possibleUrls = [
+            data?.results?.[0]?.url,
+            data?.url,
+            data?.data?.url,
+        ];
+
+        for (const url of possibleUrls) {
+            const validUrl = validateGifUrl(url);
+
+            if (validUrl) {
+                return validUrl;
             }
+        }
 
-            if (parsedUrl.protocol !== 'https:') {
-                throw new Error(
-                    `${source.name} returned a non-HTTPS URL.`
-                );
-            }
+        return null;
+    } catch (error) {
+        console.warn(
+            `[ActionGIF] NekosBest failed for "${action}":`,
+            error.message
+        );
 
-            return parsedUrl.toString();
-        } catch (error) {
-            lastError = error;
+        return null;
+    }
+}
 
-            console.warn(
-                `[ActionGIF] ${source.name} failed for "${action}":`,
-                error.message
-            );
+// ================================
+// FETCH ACTION GIF
+// ================================
+
+async function fetchActionGif(action) {
+    if (!ALLOWED_ACTIONS.has(action)) {
+        throw new Error(`Unsupported GIF action: ${action}`);
+    }
+
+    // Try Gifukai first for supported actions.
+    if (GIFUKAI_ACTIONS.has(action)) {
+        const gifukaiGif = await getGifukaiGif(action);
+
+        if (gifukaiGif) {
+            return gifukaiGif;
         }
     }
 
+    // Fall back to NekosBest.
+    const nekosBestGif = await getNekosBestGif(action);
+
+    if (nekosBestGif) {
+        return nekosBestGif;
+    }
+
     throw new Error(
-        `All GIF sources failed for "${action}". ` +
-        `${lastError?.message || 'Unknown error.'}`
+        `No GIF could be retrieved for action "${action}".`
     );
 }
 
-// ============================================================
+// ================================
 // RESOLVE TARGET USER
-// ============================================================
+// ================================
 
-async function resolveTargetUser(client, message, args) {
-    const mentionedUser =
-        message.mentions?.users?.first();
-
-    if (mentionedUser) {
-        return mentionedUser;
+async function resolveTargetUser(message, args) {
+    if (!args || args.length === 0) {
+        return null;
     }
 
-    const input = args?.[0];
+    const input = args.join(' ').trim();
 
     if (!input) {
         return null;
     }
 
-    // Use the universal resolver from commandHandler.js.
+    // Discord mention: <@123> or <@!123>
+    const mentionMatch = input.match(/^<@!?(\d+)>$/);
 
-    if (typeof message.resolveUser === 'function') {
+    // Raw Discord ID.
+    const idMatch = input.match(/^(\d{17,20})$/);
+
+    const userId = mentionMatch?.[1] || idMatch?.[1];
+
+    if (userId) {
         try {
-            return await message.resolveUser(input);
+            return await message.client.users.fetch(userId);
         } catch {
             return null;
         }
     }
 
-    // Fallback resolver.
-
-    const raw = String(input).trim();
-
-    if (!raw) {
+    // Search cached guild members by username, display name,
+    // nickname, or Discord tag.
+    if (!message.guild) {
         return null;
     }
 
-    const mentionMatch = raw.match(
-        /^<@!?(\d{15,20})>$/
-    );
+    const search = input.toLowerCase();
 
-    const userId = mentionMatch
-        ? mentionMatch[1]
-        : raw;
+    const cachedMember = message.guild.members.cache.find(member => {
+        const username = member.user.username?.toLowerCase();
+        const displayName = member.displayName?.toLowerCase();
+        const tag = member.user.tag?.toLowerCase();
 
-    if (/^\d{15,20}$/.test(userId)) {
-        const cached = client.users.cache.get(userId);
-
-        if (cached) {
-            return cached;
-        }
-
-        return await client.users
-            .fetch(userId)
-            .catch(() => null);
-    }
-
-    const lowered = raw.toLowerCase();
-
-    return (
-        client.users.cache.find(user => (
-            user.username?.toLowerCase() === lowered ||
-            user.globalName?.toLowerCase() === lowered ||
-            user.tag?.toLowerCase() === lowered
-        )) || null
-    );
-}
-
-// ============================================================
-// ORDINAL NUMBERS
-// 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ...
-// ============================================================
-
-function getOrdinal(number) {
-    const value = Math.abs(Number(number));
-
-    const lastTwoDigits = value % 100;
-
-    if (
-        lastTwoDigits >= 11 &&
-        lastTwoDigits <= 13
-    ) {
-        return `${value}th`;
-    }
-
-    switch (value % 10) {
-        case 1:
-            return `${value}st`;
-
-        case 2:
-            return `${value}nd`;
-
-        case 3:
-            return `${value}rd`;
-
-        default:
-            return `${value}th`;
-    }
-}
-
-// ============================================================
-// DATABASE COUNTERS
-// ============================================================
-
-const incrementActionStmt = db.prepare(`
-    INSERT INTO action_counts (
-        guild_id,
-        actor_id,
-        target_id,
-        action,
-        count,
-        last_used_at
-    )
-    VALUES (?, ?, ?, ?, 1, ?)
-
-    ON CONFLICT (
-        guild_id,
-        actor_id,
-        target_id,
-        action
-    )
-    DO UPDATE SET
-        count = action_counts.count + 1,
-        last_used_at = excluded.last_used_at
-`);
-
-const getActionCountStmt = db.prepare(`
-    SELECT count
-    FROM action_counts
-    WHERE guild_id = ?
-      AND actor_id = ?
-      AND target_id = ?
-      AND action = ?
-`);
-
-const incrementAndGetCount = db.transaction(
-    (guildId, actorId, targetId, action) => {
-        incrementActionStmt.run(
-            guildId,
-            actorId,
-            targetId,
-            action,
-            Date.now()
+        return (
+            username === search ||
+            displayName === search ||
+            tag === search
         );
+    });
 
-        const result = getActionCountStmt.get(
-            guildId,
-            actorId,
-            targetId,
-            action
-        );
-
-        return Number(result?.count || 0);
-    }
-);
-
-// ============================================================
-// EMBED BUILDER
-// ============================================================
-
-function makeEmbed(message, options = {}) {
-    let embed;
-
-    if (typeof message.createEmbed === 'function') {
-        embed = message.createEmbed({
-            title: options.title,
-            description: options.description,
-            image: options.image,
-        });
-    } else {
-        embed = new EmbedBuilder()
-            .setColor(DEFAULT_COLOR)
-            .setTitle(options.title)
-            .setDescription(options.description);
-
-        if (options.image) {
-            embed.setImage(options.image);
-        }
-    }
-
-    embed.setTimestamp();
-
-    return embed;
+    return cachedMember?.user || null;
 }
 
-// ============================================================
+// ================================
 // EXECUTE ACTION
-// ============================================================
+// ================================
 
-async function executeAction(
-    client,
-    message,
-    args,
-    options
-) {
+async function executeAction(client, message, args, options = {}) {
     const {
         action,
         verb,
-        title,
-        selfMessage,
+        title = 'Action!',
+        selfMessage = 'You cannot target yourself!',
+        usage,
     } = options;
-
-    // --------------------------------------------------------
-    // SERVER ONLY
-    // --------------------------------------------------------
 
     if (!message.guild) {
         return message.reply(
-            'You can only use this command in a server.'
+            'This command can only be used inside a server.'
         );
     }
 
-    // --------------------------------------------------------
-    // RESOLVE TARGET
-    // --------------------------------------------------------
+    if (!ALLOWED_ACTIONS.has(action)) {
+        console.error(
+            `[ActionGIF] Unsupported action configured: ${action}`
+        );
 
-    const target = await resolveTargetUser(
-        client,
-        message,
-        args
-    );
-
-    if (!target) {
-        const prefix = message.prefix || '$';
-
-        const embed = makeEmbed(message, {
-            title: `${title} Usage`,
-
-            description:
-                `Please provide a user.\n` +
-                `Example: \`${prefix}${action} @User\``,
-        });
-
-        return message.reply({
-            embeds: [embed],
-
-            allowedMentions: {
-                parse: [],
-            },
-        });
+        return message.reply(
+            'This action is not configured correctly.'
+        );
     }
 
-    // --------------------------------------------------------
-    // PREVENT SELF-TARGETING
-    // --------------------------------------------------------
+    if (!verb) {
+        return message.reply(
+            'This action is missing its configured verb.'
+        );
+    }
+
+    const target = await resolveTargetUser(message, args);
+
+    if (!target) {
+        const usageText = usage || `${action} @user`;
+
+        return message.reply(
+            `Please mention a valid user.\nUsage: \`${usageText}\``
+        );
+    }
 
     if (target.id === message.author.id) {
         return message.reply(selfMessage);
     }
 
-    // --------------------------------------------------------
-    // FETCH GIF
-    // --------------------------------------------------------
-
+    // Retrieve the GIF before incrementing the usage count.
     let gifUrl;
 
     try {
-        gifUrl = await fetchActionGif(
-            action,
-            client
-        );
+        gifUrl = await fetchActionGif(action);
     } catch (error) {
         console.error(
-            `[ActionGIF] ${action} failed:`,
+            `[ActionGIF] Failed to fetch "${action}" GIF:`,
             error
         );
 
         return message.reply(
-            `I couldn't fetch a ${action} GIF right now. ` +
-            'Please try again later.'
+            'I could not fetch a GIF right now. Please try again later.'
         );
     }
 
-    // --------------------------------------------------------
-    // UPDATE PERSISTENT COUNTER
-    // --------------------------------------------------------
-
-    let count;
-
-    try {
-        count = incrementAndGetCount(
-            String(message.guild.id),
-            String(message.author.id),
-            String(target.id),
-            action
-        );
-    } catch (error) {
-        console.error(
-            `[ActionGIF] Counter update failed for "${action}":`,
-            error
-        );
-
-        return message.reply(
-            'Something went wrong while saving the action counter.'
-        );
-    }
-
-    // --------------------------------------------------------
-    // BUILD RESULT EMBED
-    // --------------------------------------------------------
+    const count = incrementUsage(
+        message.guild.id,
+        message.author.id,
+        target.id,
+        action
+    );
 
     const ordinal = getOrdinal(count);
 
-    const description =
-        `${message.author} ${verb} ${target} ` +
-        `for the **${ordinal}** time!`;
+    const actorName = message.member?.displayName
+        || message.author.username;
 
-    const embed = makeEmbed(message, {
-        title,
-        description,
-        image: gifUrl,
-    });
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(title)
+        .setDescription(
+            `**${actorName}** ${verb} <@${target.id}> for the **${ordinal}** time!`
+        )
+        .setImage(gifUrl)
+        .setFooter({
+            text: `${action} • ${count} time${count === 1 ? '' : 's'}`,
+        })
+        .setTimestamp();
 
-    // --------------------------------------------------------
-    // SEND RESULT
-    // --------------------------------------------------------
+    try {
+        return await message.reply({
+            embeds: [embed],
+            allowedMentions: {
+                users: [target.id],
+            },
+        });
+    } catch (error) {
+        console.error(
+            `[ActionGIF] Failed to send "${action}" embed:`,
+            error
+        );
 
-    return message.reply({
-        embeds: [embed],
-
-        // Prevent the action from pinging either user.
-
-        allowedMentions: {
-            parse: [],
-        },
-    });
+        return message.reply(
+            'I fetched the GIF, but could not send the embed.'
+        ).catch(() => null);
+    }
 }
 
-// ============================================================
+// ================================
 // EXPORTS
-// ============================================================
+// ================================
 
 module.exports = {
     executeAction,
