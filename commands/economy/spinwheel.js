@@ -38,9 +38,9 @@ const CENTER_Y = 0.5;
 // Slightly oversized so no edge/glow of the old pointer is left behind.
 const POINTER = [[206, -2], [298, -2], [252, 66]];
 
-// The pointer area on the spinning layer is filled by copying wheel texture
-// from this many radians to the left/right (20 degrees = inside the neighbouring segments).
-const PATCH_ANGLE = Math.PI / 9;
+// The pointer hole is filled with texture copied from the seam this many
+// segments clockwise (2 = the Lost | Lost seam, same black -> red colours).
+const PATCH_SEGMENTS = 2;
 
 // 9 equal segments, clockwise starting just RIGHT of the pointer.
 // LOST 4/9, x1 2/9, x2 2/9, x3 1/9  -> expected return is exactly 100% before boosts.
@@ -136,26 +136,18 @@ async function loadAssets() {
 
       const cx = w * CENTER_X;
       const cy = h * CENTER_Y;
-      const [left, right, tip] = POINTER;
 
-      const fillHalf = (poly, angle) => {
-        cctx.save();
-        cctx.beginPath();
-        cctx.moveTo(poly[0][0], poly[0][1]);
-        cctx.lineTo(poly[1][0], poly[1][1]);
-        cctx.lineTo(poly[2][0], poly[2][1]);
-        cctx.closePath();
-        cctx.clip();
-        // Wipe the old pointer pixels first.
-        cctx.clearRect(0, 0, w, h);
-        cctx.translate(cx, cy);
-        cctx.rotate(angle);
-        cctx.drawImage(original, -cx, -cy);
-        cctx.restore();
-      };
-
-      fillHalf([left, [tip[0], right[1]], tip], PATCH_ANGLE);
-      fillHalf([[tip[0], left[1]], right, tip], -PATCH_ANGLE);
+      // The pointer sits on a black -> red seam (x3 | x2). The seam two
+      // segments further round (Lost black | Lost red) is identical, so copy
+      // that spot (rotated back by 2 segments) into the pointer hole.
+      cctx.save();
+      triangle(cctx, POINTER, 1, 0, 0);
+      cctx.clip();
+      cctx.clearRect(0, 0, w, h);
+      cctx.translate(cx, cy);
+      cctx.rotate(-PATCH_SEGMENTS * SEGMENT_ANGLE);
+      cctx.drawImage(original, -cx, -cy);
+      cctx.restore();
 
       return { original, clean, w, h };
     })();
@@ -188,6 +180,10 @@ function renderFrame(assets, rotation, size = GIF_SIZE) {
   ctx.save();
   triangle(ctx, POINTER, scale, ox, oy);
   ctx.clip();
+  // Blank the area first: the original has transparent pixels around the
+  // pointer, and the spinning layer would show through them as a 2nd arrow.
+  ctx.fillStyle = '#1e1f22';
+  ctx.fillRect(0, 0, size, size);
   ctx.drawImage(original, ox, oy, drawW, drawH);
   ctx.restore();
 
