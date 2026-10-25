@@ -9,6 +9,16 @@ const {
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
+const ANIMATION_DELAY_MS = 400;
+
+// Unicode dice faces used during the rolling animation.
+const DICE_FACES = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function randomDiceFace() {
+  return DICE_FACES[randomInt(0, DICE_FACES.length)];
+}
 
 function buildEmbed(message, data = {}) {
   if (typeof message.createEmbed === 'function') {
@@ -68,8 +78,7 @@ function money(client, amount) {
 function rollDistinctDice() {
   const rollA = randomInt(1, 7);
 
-  // randomInt(1, 6) returns 1 through 5.
-  // Shift values at or above rollA up by one to skip rollA.
+  // Generate 1–5, then skip the first die's number.
   let rollB = randomInt(1, 6);
 
   if (rollB >= rollA) {
@@ -99,17 +108,14 @@ function parsePick(raw) {
 }
 
 /**
- * Calculates a fair base profit for the selected bet.
+ * Calculates the base profit for the selected bet.
  *
  * Among the 15 possible unordered pairs of different dice results:
  * - 6 pairs match neither pick.
  * - 8 pairs match exactly one pick.
  * - 1 pair matches both picks.
  *
- * Therefore:
- *   6 * (-bet) + 8 * oneMatchProfit + twoMatchProfit = 0
- *
- * Integer adjustments ensure this remains true for odd-numbered bets.
+ * Integer adjustments keep the expected base profit fair for odd bets.
  */
 function calculateBaseProfit(amount, matchCount) {
   if (matchCount === 0) {
@@ -130,6 +136,23 @@ function calculateBaseProfit(amount, matchCount) {
   }
 
   return 0;
+}
+
+/**
+ * Creates an embed showing the rolling dice.
+ */
+function buildRollingEmbed(message, pick1, pick2, amount, client) {
+  return buildEmbed(message, {
+    title: '🎲 Dice Rolling...',
+    description:
+      `**Bet:** ${money(client, amount)}\n` +
+      `**Your Picks:** ${pick1}, ${pick2}\n\n` +
+      `### Rolling the Dice\n` +
+      `${randomDiceFace()}　${randomDiceFace()}\n\n` +
+      '*The dice are rolling...*',
+    thumbnail: message.author.displayAvatarURL({ size: 256 }),
+    footer: `Requested by ${message.author.username}`,
+  });
 }
 
 module.exports = {
@@ -261,7 +284,8 @@ module.exports = {
       });
     }
 
-    // Roll two distinct dice.
+    // Calculate the REAL result once, before starting the animation.
+    // The animation is visual only and cannot change the outcome.
     const [rollA, rollB] = rollDistinctDice();
 
     // Count how many dice match either of the user's two distinct picks.
@@ -269,11 +293,10 @@ module.exports = {
       (rollA === pick1 || rollA === pick2 ? 1 : 0) +
       (rollB === pick1 || rollB === pick2 ? 1 : 0);
 
-    // Calculate the mathematically fair base profit.
+    // Calculate the base profit.
     const baseProfit = calculateBaseProfit(amount, matchCount);
 
     // Preserve the existing economy boost mechanic.
-    // Note that an active boost increases expected returns.
     const boostedProfit =
       baseProfit > 0
         ? boostProfit(client, guildId, userId, baseProfit)
@@ -281,7 +304,6 @@ module.exports = {
 
     // The bet has already been deducted.
     // On any match, return the stake and add the profit.
-    // This also correctly returns the stake if the profit is zero.
     if (matchCount > 0) {
       const payout = amount + boostedProfit;
 
@@ -303,35 +325,67 @@ module.exports = {
 
     if (matchCount === 0) {
       resultText =
-        '### ❌ No Match!\n' +
+        '### No Match!\n' +
         'You matched **0** numbers and lost **' +
         `${money(client, amount)}**.`;
     } else if (boostedProfit === 0) {
       resultText =
-        '### ✅ Matched!\n' +
+        '### Matched!\n' +
         `You matched **${matchCount}** number` +
         `${matchCount === 1 ? '' : 's'}. ` +
         'Your bet was returned, so you broke even.';
     } else {
       resultText =
-        '### ✅ Good Guess!\n' +
+        '### Good Guess!\n' +
         `You matched **${matchCount}** number` +
         `${matchCount === 1 ? '' : 's'} and earned a profit of ` +
         `**${money(client, boostedProfit)}**.`;
     }
 
-    const embed = buildEmbed(message, {
+    // Prepare the final embed containing the actual two numbers.
+    const finalEmbed = buildEmbed(message, {
       title: '🎲 Dice Rolled',
       description:
         `**Bet:** ${money(client, amount)}\n` +
-        `**Your Picks:** ${pick1}, ${pick2}\n` +
-        `**Rolled:** ${rollA}, ${rollB}\n\n` +
+        `**Your Picks:** ${pick1}, ${pick2}\n\n` +
+        `### Results\n` +
+        `Rolled: **${rollA}, ${rollB}**\n\n` +
         `${resultText}\n\n` +
         `**Balance:** ${money(client, newBalance)}`,
       thumbnail: message.author.displayAvatarURL({ size: 256 }),
       footer: `Requested by ${message.author.username}`,
     });
 
-    return message.reply({ embeds: [embed] });
+    // Send the initial rolling embed.
+    const sentMessage = await message.reply({
+      embeds: [
+        buildRollingEmbed(message, pick1, pick2, amount, client),
+      ],
+    });
+
+    // Animate the dice by editing the SAME message.
+    // The actual result remains unchanged throughout the animation.
+    for (let frame = 0; frame < 3; frame++) {
+      await sleep(ANIMATION_DELAY_MS);
+
+      const rollingEmbed = buildRollingEmbed(
+        message,
+        pick1,
+        pick2,
+        amount,
+        client
+      );
+
+      await sentMessage.edit({
+        embeds: [rollingEmbed],
+      });
+    }
+
+    // Replace the rolling animation with the actual results.
+    await sleep(ANIMATION_DELAY_MS);
+
+    return sentMessage.edit({
+      embeds: [finalEmbed],
+    });
   },
 };
