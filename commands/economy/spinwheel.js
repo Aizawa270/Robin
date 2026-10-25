@@ -17,8 +17,11 @@ const {
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
 
-// Put your wheel image here (the PNG you sent).
+// Two images in your assets folder (both 504x495):
+//  - spinwheel.png         the wheel with the pointer removed (this one spins)
+//  - spinwheel-pointer.png only the red pointer (this one stays fixed on top)
 const WHEEL_IMAGE_PATH = path.join(__dirname, '../../assets/spinwheel.png');
+const POINTER_IMAGE_PATH = path.join(__dirname, '../../assets/spinwheel-pointer.png');
 
 // GIF settings. Bigger size / more frames = smoother but bigger file (Discord limit 8MB).
 const GIF_SIZE = 320;
@@ -28,19 +31,9 @@ const FULL_TURNS = 3;
 const SPIN_MS = GIF_FRAMES * GIF_FRAME_DELAY_MS;
 const LOAD_BUFFER_MS = 1200; // time for Discord to upload/load the GIF before revealing
 
-// Where the wheel's centre is inside your image, as a fraction of width/height.
-// If the wheel wobbles while spinning, nudge these a little (e.g. 0.504).
-const CENTER_X = 0.5;
-const CENTER_Y = 0.5;
-
-// The pointer triangle baked into your image (source-pixel coordinates).
-// It is cut out of the spinning layer and redrawn fixed on top.
-// Slightly oversized so no edge/glow of the old pointer is left behind.
-const POINTER = [[206, -2], [298, -2], [252, 66]];
-
-// The pointer hole is filled with texture copied from the seam this many
-// segments clockwise (2 = the Lost | Lost seam, same black -> red colours).
-const PATCH_SEGMENTS = 2;
+// Exact centre of the wheel inside the image, as a fraction of width/height.
+const CENTER_X = 0.4994;
+const CENTER_Y = 0.5079;
 
 // 9 equal segments, clockwise starting just RIGHT of the pointer.
 // LOST 4/9, x1 2/9, x2 2/9, x3 1/9  -> expected return is exactly 100% before boosts.
@@ -111,52 +104,19 @@ function createWheelEmbed(message, title, description, imageName) {
 
 let assetsPromise = null;
 
-function triangle(ctx, pts, scale, ox, oy) {
-  ctx.beginPath();
-  ctx.moveTo(ox + pts[0][0] * scale, oy + pts[0][1] * scale);
-  ctx.lineTo(ox + pts[1][0] * scale, oy + pts[1][1] * scale);
-  ctx.lineTo(ox + pts[2][0] * scale, oy + pts[2][1] * scale);
-  ctx.closePath();
-}
-
 async function loadAssets() {
   if (!assetsPromise) {
     assetsPromise = (async () => {
-      const original = await loadImage(WHEEL_IMAGE_PATH);
-      const w = original.width;
-      const h = original.height;
-
-      // Copy of the wheel with the pointer removed, so no ghost pointer
-      // rotates around the rim. The hole is filled with real wheel texture:
-      // the left half from the segment to the left, the right half from the
-      // segment to the right (rotated copies of the same image).
-      const clean = createCanvas(w, h);
-      const cctx = clean.getContext('2d');
-      cctx.drawImage(original, 0, 0);
-
-      const cx = w * CENTER_X;
-      const cy = h * CENTER_Y;
-
-      // The pointer sits on a black -> red seam (x3 | x2). The seam two
-      // segments further round (Lost black | Lost red) is identical, so copy
-      // that spot (rotated back by 2 segments) into the pointer hole.
-      cctx.save();
-      triangle(cctx, POINTER, 1, 0, 0);
-      cctx.clip();
-      cctx.clearRect(0, 0, w, h);
-      cctx.translate(cx, cy);
-      cctx.rotate(-PATCH_SEGMENTS * SEGMENT_ANGLE);
-      cctx.drawImage(original, -cx, -cy);
-      cctx.restore();
-
-      return { original, clean, w, h };
+      const wheel = await loadImage(WHEEL_IMAGE_PATH);
+      const pointer = await loadImage(POINTER_IMAGE_PATH);
+      return { wheel, pointer, w: wheel.width, h: wheel.height };
     })();
   }
   return assetsPromise;
 }
 
 function renderFrame(assets, rotation, size = GIF_SIZE) {
-  const { original, clean, w, h } = assets;
+  const { wheel, pointer, w, h } = assets;
   const canvas = createCanvas(size, size);
   const ctx = canvas.getContext('2d');
 
@@ -169,23 +129,15 @@ function renderFrame(assets, rotation, size = GIF_SIZE) {
   ctx.fillStyle = '#1e1f22';
   ctx.fillRect(0, 0, size, size);
 
-  // Spinning layer.
+  // Spinning wheel (no pointer in this image).
   ctx.save();
   ctx.translate(ox + drawW * CENTER_X, oy + drawH * CENTER_Y);
   ctx.rotate(rotation);
-  ctx.drawImage(clean, -drawW * CENTER_X, -drawH * CENTER_Y, drawW, drawH);
+  ctx.drawImage(wheel, -drawW * CENTER_X, -drawH * CENTER_Y, drawW, drawH);
   ctx.restore();
 
-  // Fixed pointer from the original image.
-  ctx.save();
-  triangle(ctx, POINTER, scale, ox, oy);
-  ctx.clip();
-  // Blank the area first: the original has transparent pixels around the
-  // pointer, and the spinning layer would show through them as a 2nd arrow.
-  ctx.fillStyle = '#1e1f22';
-  ctx.fillRect(0, 0, size, size);
-  ctx.drawImage(original, ox, oy, drawW, drawH);
-  ctx.restore();
+  // Fixed pointer on top.
+  ctx.drawImage(pointer, ox, oy, drawW, drawH);
 
   return canvas;
 }
