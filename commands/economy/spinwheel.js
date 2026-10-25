@@ -35,8 +35,12 @@ const CENTER_Y = 0.5;
 
 // The pointer triangle baked into your image (source-pixel coordinates).
 // It is cut out of the spinning layer and redrawn fixed on top.
-const POINTER = [[216, 0], [288, 0], [252, 58]];
-const POINTER_PATCH_COLOR = '#14090c';
+// Slightly oversized so no edge/glow of the old pointer is left behind.
+const POINTER = [[206, -2], [298, -2], [252, 66]];
+
+// The pointer area on the spinning layer is filled by copying wheel texture
+// from this many radians to the left/right (20 degrees = inside the neighbouring segments).
+const PATCH_ANGLE = Math.PI / 9;
 
 // 9 equal segments, clockwise starting just RIGHT of the pointer.
 // LOST 4/9, x1 2/9, x2 2/9, x3 1/9  -> expected return is exactly 100% before boosts.
@@ -122,14 +126,36 @@ async function loadAssets() {
       const w = original.width;
       const h = original.height;
 
-      // Copy of the wheel with the pointer painted over, so a ghost
-      // pointer doesn't rotate around the rim.
+      // Copy of the wheel with the pointer removed, so no ghost pointer
+      // rotates around the rim. The hole is filled with real wheel texture:
+      // the left half from the segment to the left, the right half from the
+      // segment to the right (rotated copies of the same image).
       const clean = createCanvas(w, h);
       const cctx = clean.getContext('2d');
       cctx.drawImage(original, 0, 0);
-      triangle(cctx, POINTER, 1, 0, 0);
-      cctx.fillStyle = POINTER_PATCH_COLOR;
-      cctx.fill();
+
+      const cx = w * CENTER_X;
+      const cy = h * CENTER_Y;
+      const [left, right, tip] = POINTER;
+
+      const fillHalf = (poly, angle) => {
+        cctx.save();
+        cctx.beginPath();
+        cctx.moveTo(poly[0][0], poly[0][1]);
+        cctx.lineTo(poly[1][0], poly[1][1]);
+        cctx.lineTo(poly[2][0], poly[2][1]);
+        cctx.closePath();
+        cctx.clip();
+        // Wipe the old pointer pixels first.
+        cctx.clearRect(0, 0, w, h);
+        cctx.translate(cx, cy);
+        cctx.rotate(angle);
+        cctx.drawImage(original, -cx, -cy);
+        cctx.restore();
+      };
+
+      fillHalf([left, [tip[0], right[1]], tip], PATCH_ANGLE);
+      fillHalf([[tip[0], left[1]], right, tip], -PATCH_ANGLE);
 
       return { original, clean, w, h };
     })();
@@ -370,10 +396,8 @@ module.exports = {
       } else {
         description =
           `**Bet:** ${money(client, amount)}\n\n` +
-          `### 🎉 ${boostedProfit > 0 ? 'You Won!' : 'Stake Returned'}\n` +
+          `### ${boostedProfit > 0 ? 'You Won!' : 'Stake Returned'}\n` +
           `The wheel landed on **${selected.label}**!\n` +
-          `**Base profit:** ${money(client, baseProfit)}\n` +
-          `**Actual profit:** ${money(client, boostedProfit)}\n` +
           `**Total payout:** ${money(client, payout)}\n\n` +
           `**Balance:** ${money(client, balanceAfter)}`;
       }
