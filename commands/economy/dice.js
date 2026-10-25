@@ -40,7 +40,9 @@ function buildEmbed(message, data = {}) {
       footer: data.footer,
     });
 
-    if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+    if (data.thumbnail) {
+      embed.setThumbnail(data.thumbnail);
+    }
 
     if (data.footer) {
       if (typeof data.footer === 'string') {
@@ -79,16 +81,14 @@ function money(client, amount) {
 }
 
 /**
- * Generates dice results using the configured match probabilities.
+ * Generates two DIFFERENT dice numbers using weighted match probabilities.
  *
  * 0 matches: 35%
  * 1 match:   53%
  * 2 matches: 12%
  *
- * Both dice may show the same number.
- *
- * The category is selected first, then dice are generated that
- * produce exactly that category under the existing match-count rules.
+ * The dice can never show the same number.
+ * The selected outcome category is decided before generating the dice.
  */
 function rollDiceForPicks(pick1, pick2) {
   const outcomeRoll = randomInt(0, 100);
@@ -97,7 +97,9 @@ function rollDiceForPicks(pick1, pick2) {
 
   if (outcomeRoll < NO_MATCH_CHANCE) {
     targetMatches = 0;
-  } else if (outcomeRoll < NO_MATCH_CHANCE + ONE_MATCH_CHANCE) {
+  } else if (
+    outcomeRoll < NO_MATCH_CHANCE + ONE_MATCH_CHANCE
+  ) {
     targetMatches = 1;
   } else {
     targetMatches = 2;
@@ -109,16 +111,22 @@ function rollDiceForPicks(pick1, pick2) {
     number => number !== pick1 && number !== pick2
   );
 
-  // 35%: Neither die matches either selected number.
-  // Repeated unselected numbers are allowed.
+  // 35%: Neither die matches either pick.
+  // Select two DIFFERENT numbers from the four unselected numbers.
   if (targetMatches === 0) {
     const rollA = randomFrom(unselectedNumbers);
-    const rollB = randomFrom(unselectedNumbers);
+
+    const remainingNumbers = unselectedNumbers.filter(
+      number => number !== rollA
+    );
+
+    const rollB = randomFrom(remainingNumbers);
 
     return [rollA, rollB];
   }
 
-  // 53%: Exactly one die matches either selected number.
+  // 53%: Exactly one die matches either pick.
+  // One selected number and one unselected number are guaranteed.
   if (targetMatches === 1) {
     const matchingNumber = randomFrom(selectedNumbers);
     const nonMatchingNumber = randomFrom(unselectedNumbers);
@@ -131,12 +139,14 @@ function rollDiceForPicks(pick1, pick2) {
     return [nonMatchingNumber, matchingNumber];
   }
 
-  // 12%: Both dice match either selected number.
-  // Both dice can show the same selected number.
-  const rollA = randomFrom(selectedNumbers);
-  const rollB = randomFrom(selectedNumbers);
+  // 12%: Both selected numbers appear.
+  // Because the picks must be different, the dice are different too.
+  // Randomize their order.
+  if (randomInt(0, 2) === 0) {
+    return [pick1, pick2];
+  }
 
-  return [rollA, rollB];
+  return [pick2, pick1];
 }
 
 function parsePick(raw) {
@@ -150,7 +160,7 @@ function parsePick(raw) {
 
   const text = String(raw).trim();
 
-  // Only accept a whole-number input.
+  // Only accept a whole-number input from 1 through 6.
   if (!/^[1-6]$/.test(text)) {
     return null;
   }
@@ -169,7 +179,7 @@ function parsePick(raw) {
  * 1 match:   profit equals the bet.
  * 2 matches: profit equals twice the bet.
  *
- * The existing boost mechanic can increase positive profit.
+ * Active economy boosts can increase positive profit.
  */
 function calculateBaseProfit(amount, matchCount) {
   if (matchCount === 1) {
@@ -264,7 +274,8 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: '🎲 Dice',
-            description: `The maximum bet is **${money(client, MAX_BET)}**.`,
+            description:
+              `The maximum bet is **${money(client, MAX_BET)}**.`,
           }),
         ],
       });
@@ -329,17 +340,18 @@ module.exports = {
       });
     }
 
-    // Calculate the actual result before the animation.
-    // The animation never changes the result or payout.
+    // Determine the actual result before the animation.
+    // The result cannot change during the animation.
     const [rollA, rollB] = rollDiceForPicks(pick1, pick2);
 
     // Count each die that matches either selected number.
-    // Two dice showing the same selected number count as 2 matches.
+    // Since the dice are always different, matching the same
+    // selected number twice is impossible.
     const matchCount =
       (rollA === pick1 || rollA === pick2 ? 1 : 0) +
       (rollB === pick1 || rollB === pick2 ? 1 : 0);
 
-    // Calculate profit using the new payout rules.
+    // Calculate profit using the configured payout rules.
     const baseProfit = calculateBaseProfit(amount, matchCount);
 
     // Preserve the existing economy boost mechanic.
@@ -349,7 +361,7 @@ module.exports = {
         : 0;
 
     // The bet has already been deducted.
-    // On any match, return the stake plus the profit.
+    // On any match, return the original stake plus the profit.
     if (matchCount > 0) {
       const payout = amount + boostedProfit;
 
@@ -426,7 +438,7 @@ module.exports = {
       });
     }
 
-    // Reveal the final results.
+    // Reveal the final result.
     await sleep(ANIMATION_DELAY_MS);
 
     return sentMessage.edit({
