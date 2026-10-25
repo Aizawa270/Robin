@@ -933,6 +933,41 @@ client.once('ready', async () => {
 
   console.log('[Status] Set to: .gg/hanging');
 
+  // ==========================================================
+  // NICKNAME BAN + REACTION BAN INITIALIZATION
+  // ==========================================================
+
+  for (const commandName of [
+    'nickban',
+    'reactionban',
+  ]) {
+    const restrictionCommand =
+      client.commands?.get(commandName);
+
+    if (
+      typeof restrictionCommand?.init !== 'function'
+    ) {
+      console.error(
+        `[Restrictions] ${commandName} is missing init(client).`
+      );
+
+      continue;
+    }
+
+    try {
+      await restrictionCommand.init(client);
+
+      console.log(
+        `[Restrictions] ${commandName} initialized successfully.`
+      );
+    } catch (error) {
+      console.error(
+        `[Restrictions] Failed to initialize ${commandName}:`,
+        error
+      );
+    }
+  }
+
   economy.init(client);
   shopSystem.init(client);
 
@@ -1412,9 +1447,44 @@ client.on('messageUpdate', (oldMsg, newMsg) => {
 });
 
 // ===== REACTION SNIPE =====
+// Ignore reactions from members who are reaction-banned.
 client.on('messageReactionAdd', (reaction, user) => {
   if (user.bot) {
     return;
+  }
+
+  const guildId =
+    reaction.message.guildId ||
+    reaction.message.guild?.id;
+
+  if (
+    guildId &&
+    client.__reactionBanSystemReady &&
+    client.automodDB
+  ) {
+    try {
+      const restricted = client.automodDB.prepare(`
+        SELECT 1
+        FROM reaction_bans
+        WHERE guild_id = ? AND user_id = ?
+      `).get(
+        guildId,
+        user.id
+      );
+
+      if (restricted) {
+        return;
+      }
+    } catch (error) {
+      console.error(
+        '[Reaction Snipe] Failed to check reaction restriction:',
+        error
+      );
+
+      // Fail closed: don't record a reaction when the
+      // restriction status could not be verified.
+      return;
+    }
   }
 
   const channelId = reaction.message.channel.id;
