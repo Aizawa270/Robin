@@ -9,15 +9,26 @@ const {
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
-const ANIMATION_DELAY_MS = 400;
+const ANIMATION_DELAY_MS = 300;
 
 // Unicode dice faces used during the rolling animation.
 const DICE_FACES = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Desired outcome probabilities, out of 100.
+const NO_MATCH_CHANCE = 35;
+const ONE_MATCH_CHANCE = 53;
+const TWO_MATCH_CHANCE = 12;
+
+const DICE_NUMBERS = [1, 2, 3, 4, 5, 6];
+
 function randomDiceFace() {
   return DICE_FACES[randomInt(0, DICE_FACES.length)];
+}
+
+function randomFrom(array) {
+  return array[randomInt(0, array.length)];
 }
 
 function buildEmbed(message, data = {}) {
@@ -68,28 +79,72 @@ function money(client, amount) {
 }
 
 /**
- * Rolls two different dice.
+ * Generates dice results using the configured match probabilities.
  *
- * First die: uniformly selected from 1 through 6.
- * Second die: uniformly selected from the five remaining numbers.
+ * 0 matches: 35%
+ * 1 match:   53%
+ * 2 matches: 12%
  *
- * Every ordered pair of distinct results has the same probability.
+ * Both dice may show the same number.
+ *
+ * The category is selected first, then dice are generated that
+ * produce exactly that category under the existing match-count rules.
  */
-function rollDistinctDice() {
-  const rollA = randomInt(1, 7);
+function rollDiceForPicks(pick1, pick2) {
+  const outcomeRoll = randomInt(0, 100);
 
-  // Generate 1–5, then skip the first die's number.
-  let rollB = randomInt(1, 6);
+  let targetMatches;
 
-  if (rollB >= rollA) {
-    rollB += 1;
+  if (outcomeRoll < NO_MATCH_CHANCE) {
+    targetMatches = 0;
+  } else if (outcomeRoll < NO_MATCH_CHANCE + ONE_MATCH_CHANCE) {
+    targetMatches = 1;
+  } else {
+    targetMatches = 2;
   }
+
+  const selectedNumbers = [pick1, pick2];
+
+  const unselectedNumbers = DICE_NUMBERS.filter(
+    number => number !== pick1 && number !== pick2
+  );
+
+  // 35%: Neither die matches either selected number.
+  // Repeated unselected numbers are allowed.
+  if (targetMatches === 0) {
+    const rollA = randomFrom(unselectedNumbers);
+    const rollB = randomFrom(unselectedNumbers);
+
+    return [rollA, rollB];
+  }
+
+  // 53%: Exactly one die matches either selected number.
+  if (targetMatches === 1) {
+    const matchingNumber = randomFrom(selectedNumbers);
+    const nonMatchingNumber = randomFrom(unselectedNumbers);
+
+    // Randomize which die shows the matching number.
+    if (randomInt(0, 2) === 0) {
+      return [matchingNumber, nonMatchingNumber];
+    }
+
+    return [nonMatchingNumber, matchingNumber];
+  }
+
+  // 12%: Both dice match either selected number.
+  // Both dice can show the same selected number.
+  const rollA = randomFrom(selectedNumbers);
+  const rollB = randomFrom(selectedNumbers);
 
   return [rollA, rollB];
 }
 
 function parsePick(raw) {
-  if (raw === undefined || raw === null || String(raw).trim() === '') {
+  if (
+    raw === undefined ||
+    raw === null ||
+    String(raw).trim() === ''
+  ) {
     return null;
   }
 
@@ -108,31 +163,21 @@ function parsePick(raw) {
 }
 
 /**
- * Calculates the base profit for the selected bet.
+ * Calculates profit separately from the returned stake.
  *
- * Among the 15 possible unordered pairs of different dice results:
- * - 6 pairs match neither pick.
- * - 8 pairs match exactly one pick.
- * - 1 pair matches both picks.
+ * 0 matches: lose the stake.
+ * 1 match:   profit equals the bet.
+ * 2 matches: profit equals twice the bet.
  *
- * Integer adjustments keep the expected base profit fair for odd bets.
+ * The existing boost mechanic can increase positive profit.
  */
 function calculateBaseProfit(amount, matchCount) {
-  if (matchCount === 0) {
-    return 0;
-  }
-
-  const oneMatchProfit = Math.floor(amount / 2);
-
-  const twoMatchProfit =
-    (6 * amount) - (8 * oneMatchProfit);
-
   if (matchCount === 1) {
-    return oneMatchProfit;
+    return amount;
   }
 
   if (matchCount === 2) {
-    return twoMatchProfit;
+    return amount * 2;
   }
 
   return 0;
@@ -157,7 +202,7 @@ function buildRollingEmbed(message, pick1, pick2, amount, client) {
 
 module.exports = {
   name: 'dice',
-  aliases: ['roll'],
+  aliases: ['roll', 'd'],
   description: 'Pick two dice numbers and try your luck.',
   category: 'economy',
   usage: '$dice <amount> <number1> <number2>',
@@ -284,16 +329,17 @@ module.exports = {
       });
     }
 
-    // Calculate the REAL result once, before starting the animation.
-    // The animation is visual only and cannot change the outcome.
-    const [rollA, rollB] = rollDistinctDice();
+    // Calculate the actual result before the animation.
+    // The animation never changes the result or payout.
+    const [rollA, rollB] = rollDiceForPicks(pick1, pick2);
 
-    // Count how many dice match either of the user's two distinct picks.
+    // Count each die that matches either selected number.
+    // Two dice showing the same selected number count as 2 matches.
     const matchCount =
       (rollA === pick1 || rollA === pick2 ? 1 : 0) +
       (rollB === pick1 || rollB === pick2 ? 1 : 0);
 
-    // Calculate the base profit.
+    // Calculate profit using the new payout rules.
     const baseProfit = calculateBaseProfit(amount, matchCount);
 
     // Preserve the existing economy boost mechanic.
@@ -303,7 +349,7 @@ module.exports = {
         : 0;
 
     // The bet has already been deducted.
-    // On any match, return the stake and add the profit.
+    // On any match, return the stake plus the profit.
     if (matchCount > 0) {
       const payout = amount + boostedProfit;
 
@@ -342,7 +388,7 @@ module.exports = {
         `**${money(client, boostedProfit)}**.`;
     }
 
-    // Prepare the final embed containing the actual two numbers.
+    // Prepare the final embed showing the actual dice results.
     const finalEmbed = buildEmbed(message, {
       title: '🎲 Dice Rolled',
       description:
@@ -364,7 +410,6 @@ module.exports = {
     });
 
     // Animate the dice by editing the SAME message.
-    // The actual result remains unchanged throughout the animation.
     for (let frame = 0; frame < 3; frame++) {
       await sleep(ANIMATION_DELAY_MS);
 
@@ -381,7 +426,7 @@ module.exports = {
       });
     }
 
-    // Replace the rolling animation with the actual results.
+    // Reveal the final results.
     await sleep(ANIMATION_DELAY_MS);
 
     return sentMessage.edit({
