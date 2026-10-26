@@ -22,11 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: true
-          fetch-depth: 0
-
-      - name: Pull latest data from git
-        run: |
-          git pull origin main || git pull origin master || echo "No remote changes"
+          fetch-depth: 1
 
       - name: Ensure data directory exists
         run: mkdir -p data
@@ -47,7 +43,14 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 g++ make libsqlite3-dev pkg-config
+          sudo apt-get install -y python3 g++ make libsqlite3-dev pkg-config sqlite3
+
+      - name: Merge any leftover WAL files into the databases
+        run: |
+          for f in data/*.sqlite; do
+            [ -f "$f" ] && sqlite3 "$f" "PRAGMA wal_checkpoint(TRUNCATE);" || true
+          done
+          rm -f data/*-wal data/*-shm
 
       - name: Install project dependencies
         run: |
@@ -70,58 +73,109 @@ jobs:
           echo "WEATHERAPI_KEY=${{ secrets.WEATHERAPI_KEY }}" >> .env
           echo "REMOVEBG_API_KEY=${{ secrets.REMOVEBG_API_KEY }}" >> .env
 
+      - name: Create database save script
+        run: |
+          cat > "$RUNNER_TEMP/save_db.sh" <<'EOF'
+          #!/usr/bin/env bash
+          # Safely snapshot the live databases and push them to the repo.
+          # Git is never run inside the folder holding the live databases,
+          # so the bot's files are never swapped out from under it, and the
+          # push always lines up with whatever is currently on GitHub.
+          set -u
+          shopt -s nullglob
+
+          SRC="${GITHUB_WORKSPACE}/data"
+          SNAP="$(mktemp -d)"
+          REPO_DIR="$(mktemp -d)"
+          BRANCH="${GITHUB_REF_NAME:-main}"
+
+          # 1. Consistent snapshots (includes anything still sitting in the WAL).
+          for f in "$SRC"/*.sqlite "$SRC"/*.db; do
+            sqlite3 "$f" ".timeout 5000" ".backup '$SNAP/$(basename "$f")'" \
+              || echo "Backup failed for $f"
+          done
+
+          # Any non-database files in data/ (json etc.).
+          for f in "$SRC"/*; do
+            case "$f" in
+              *.sqlite|*.db|*-wal|*-shm) ;;
+              *) [ -f "$f" ] && cp "$f" "$SNAP/" ;;
+            esac
+          done
+
+          # 2. Fresh clone, so we are always up to date with GitHub.
+          git clone -q --depth 1 --branch "$BRANCH" \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$REPO_DIR" || { echo "Clone failed"; exit 1; }
+
+          cd "$REPO_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          for i in 1 2 3 4; do
+            git fetch -q --depth 1 origin "$BRANCH" && git reset -q --hard FETCH_HEAD
+
+            mkdir -p data
+            # Stale WAL/SHM files must never be stored in the repo.
+            git rm -q -f --ignore-unmatch 'data/*-wal' 'data/*-shm' >/dev/null 2>&1 || true
+
+            cp "$SNAP"/* data/ 2>/dev/null || true
+            git add -A data
+
+            if git diff --staged --quiet; then
+              echo "No database changes to save"
+              exit 0
+            fi
+
+            git commit -q -m "chore: auto-save databases [skip ci]"
+
+            if git push -q origin "HEAD:$BRANCH"; then
+              echo "Databases saved successfully"
+              exit 0
+            fi
+
+            echo "Push failed, retrying ($i/4)..."
+            sleep 2
+          done
+
+          echo "Could not save databases after 4 attempts"
+          exit 1
+          EOF
+          chmod +x "$RUNNER_TEMP/save_db.sh"
+
       - name: Start bot with periodic database backup
         timeout-minutes: 355
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+          SAVE="$RUNNER_TEMP/save_db.sh"
+
           node index.js &
           BOT_PID=$!
           echo "Bot started with PID: $BOT_PID"
-          
-          save_databases() {
-            echo "Saving databases..."
-            git add data/*.sqlite data/*.db data/*.sqlite-wal data/*.sqlite-shm 2>/dev/null || true
-            git add data/ 2>/dev/null || true
-            
-            if ! git diff --staged --quiet 2>/dev/null; then
-              git commit -m "chore: auto-save databases [skip ci]" 2>/dev/null || true
-              
-              for i in 1 2 3; do
-                if git push 2>/dev/null; then
-                  echo "Databases saved successfully"
-                  break
-                else
-                  echo "Push failed, retrying ($i/3)..."
-                  git pull --rebase origin main 2>/dev/null || git pull --rebase origin master 2>/dev/null || true
-                  sleep 2
-                fi
-              done
-            else
-              echo "No database changes to save"
-            fi
-          }
-          
+
+          # If this run is cancelled/restarted, stop the bot cleanly so SQLite
+          # flushes everything. The final step below then saves the databases.
+          trap 'echo "Stop signal received"; kill -TERM $BOT_PID 2>/dev/null; wait $BOT_PID 2>/dev/null; exit 0' TERM INT
+
           COUNTER=0
           while kill -0 $BOT_PID 2>/dev/null; do
-            sleep 300
+            sleep 300 &
+            wait $!
             COUNTER=$((COUNTER + 1))
-            
-            if [ $((COUNTER % 6)) -eq 0 ]; then
-              save_databases
+
+            # Save every 10 minutes.
+            if [ $((COUNTER % 2)) -eq 0 ]; then
+              bash "$SAVE" || true
             fi
-            
+
             if [ $COUNTER -ge 70 ]; then
-              echo "Approaching timeout, saving and stopping bot..."
-              save_databases
-              kill $BOT_PID
+              echo "Approaching timeout, stopping bot..."
+              kill -TERM $BOT_PID 2>/dev/null
+              wait $BOT_PID 2>/dev/null
               break
             fi
           done
-          
-          echo "Bot stopped, performing final save..."
-          save_databases
+
+          echo "Bot stopped."
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
@@ -132,15 +186,14 @@ jobs:
       - name: Final database backup
         if: always()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add data/*.sqlite data/*.db data/*.sqlite-wal data/*.sqlite-shm || true
-          git add data/ || true
-          
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: final database backup [skip ci]" || true
-            git push || echo "Final push failed, but periodic saves should have worked"
+          # Make sure the bot is fully stopped so the databases are flushed.
+          pkill -TERM -f "node index.js" || true
+          sleep 5
+
+          if [ -f "$RUNNER_TEMP/save_db.sh" ]; then
+            bash "$RUNNER_TEMP/save_db.sh" || echo "Final save failed"
+          else
+            echo "Save script missing, nothing to save"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
