@@ -24,6 +24,15 @@ jobs:
           persist-credentials: true
           fetch-depth: 1
 
+      # A run starts on the commit that was latest when it was triggered.
+      # If the previous run was still saving at that moment, that commit is
+      # stale, so always grab the newest saved data before doing anything else.
+      - name: Pull latest data from git
+        run: |
+          git fetch --depth 1 origin "$GITHUB_REF_NAME"
+          git reset --hard FETCH_HEAD
+          git log -1 --format='Loaded data from commit %h (%cd): %s'
+
       - name: Ensure data directory exists
         run: mkdir -p data
 
