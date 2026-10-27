@@ -9,12 +9,19 @@ const {
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
-const ANIMATION_DELAY_MS = 300;
+const ANIMATION_DELAY_MS = 500;
+
+// Discord limits message edits (about 5 per 5 seconds per channel), so keep
+// the animation short and skip it when the channel is already busy.
+const ANIMATION_FRAMES = 2;
 
 // Unicode dice faces used during the rolling animation.
 const DICE_FACES = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// Number of dice games currently animating, per channel.
+const busyChannels = new Map();
 
 // Desired outcome probabilities, out of 100.
 const NO_MATCH_CHANCE = 35;
@@ -86,9 +93,6 @@ function money(client, amount) {
  * 0 matches: 35%
  * 1 match:   53%
  * 2 matches: 12%
- *
- * The dice can never show the same number.
- * The selected outcome category is decided before generating the dice.
  */
 function rollDiceForPicks(pick1, pick2) {
   const outcomeRoll = randomInt(0, 100);
@@ -111,8 +115,6 @@ function rollDiceForPicks(pick1, pick2) {
     number => number !== pick1 && number !== pick2
   );
 
-  // 35%: Neither die matches either pick.
-  // Select two DIFFERENT numbers from the four unselected numbers.
   if (targetMatches === 0) {
     const rollA = randomFrom(unselectedNumbers);
 
@@ -125,13 +127,10 @@ function rollDiceForPicks(pick1, pick2) {
     return [rollA, rollB];
   }
 
-  // 53%: Exactly one die matches either pick.
-  // One selected number and one unselected number are guaranteed.
   if (targetMatches === 1) {
     const matchingNumber = randomFrom(selectedNumbers);
     const nonMatchingNumber = randomFrom(unselectedNumbers);
 
-    // Randomize which die shows the matching number.
     if (randomInt(0, 2) === 0) {
       return [matchingNumber, nonMatchingNumber];
     }
@@ -139,9 +138,6 @@ function rollDiceForPicks(pick1, pick2) {
     return [nonMatchingNumber, matchingNumber];
   }
 
-  // 12%: Both selected numbers appear.
-  // Because the picks must be different, the dice are different too.
-  // Randomize their order.
   if (randomInt(0, 2) === 0) {
     return [pick1, pick2];
   }
@@ -160,7 +156,6 @@ function parsePick(raw) {
 
   const text = String(raw).trim();
 
-  // Only accept a whole-number input from 1 through 6.
   if (!/^[1-6]$/.test(text)) {
     return null;
   }
@@ -173,13 +168,9 @@ function parsePick(raw) {
 }
 
 /**
- * Calculates profit separately from the returned stake.
- *
  * 0 matches: lose the stake.
  * 1 match:   profit equals the bet.
  * 2 matches: profit equals twice the bet.
- *
- * Active economy boosts can increase positive profit.
  */
 function calculateBaseProfit(amount, matchCount) {
   if (matchCount === 1) {
@@ -193,9 +184,6 @@ function calculateBaseProfit(amount, matchCount) {
   return 0;
 }
 
-/**
- * Creates an embed showing the rolling dice.
- */
 function buildRollingEmbed(message, pick1, pick2, amount, client) {
   return buildEmbed(message, {
     title: '🎲 Dice Rolling...',
@@ -208,6 +196,17 @@ function buildRollingEmbed(message, pick1, pick2, amount, client) {
     thumbnail: message.author.displayAvatarURL({ size: 256 }),
     footer: `Requested by ${message.author.username}`,
   });
+}
+
+// Edit that never throws. Returns true when it worked.
+async function tryEdit(sentMessage, payload) {
+  try {
+    await sentMessage.edit(payload);
+    return true;
+  } catch (error) {
+    console.error('[Dice] Message edit failed:', error?.message || error);
+    return false;
+  }
 }
 
 module.exports = {
@@ -231,7 +230,6 @@ module.exports = {
       });
     }
 
-    // Validate the bet.
     const amountText = String(args[0] ?? '').trim();
 
     if (!/^\d+$/.test(amountText)) {
@@ -297,7 +295,6 @@ module.exports = {
       });
     }
 
-    // Check cooldown before taking currency.
     const remaining = useCooldown(
       guildId,
       userId,
@@ -340,44 +337,73 @@ module.exports = {
       });
     }
 
-    // Determine the actual result before the animation.
-    // The result cannot change during the animation.
-    const [rollA, rollB] = rollDiceForPicks(pick1, pick2);
+    // ------------------------------------------------------------
+    // Decide the result and pay out BEFORE any Discord messages.
+    // If anything fails here, the bet is refunded.
+    // ------------------------------------------------------------
+    let settled = false;
+    let rollA;
+    let rollB;
+    let matchCount;
+    let boostedProfit;
+    let newBalance;
 
-    // Count each die that matches either selected number.
-    // Since the dice are always different, matching the same
-    // selected number twice is impossible.
-    const matchCount =
-      (rollA === pick1 || rollA === pick2 ? 1 : 0) +
-      (rollB === pick1 || rollB === pick2 ? 1 : 0);
+    try {
+      [rollA, rollB] = rollDiceForPicks(pick1, pick2);
 
-    // Calculate profit using the configured payout rules.
-    const baseProfit = calculateBaseProfit(amount, matchCount);
+      matchCount =
+        (rollA === pick1 || rollA === pick2 ? 1 : 0) +
+        (rollB === pick1 || rollB === pick2 ? 1 : 0);
 
-    // Preserve the existing economy boost mechanic.
-    const boostedProfit =
-      baseProfit > 0
-        ? boostProfit(client, guildId, userId, baseProfit)
-        : 0;
+      const baseProfit = calculateBaseProfit(amount, matchCount);
 
-    // The bet has already been deducted.
-    // On any match, return the original stake plus the profit.
-    if (matchCount > 0) {
-      const payout = amount + boostedProfit;
+      boostedProfit =
+        baseProfit > 0
+          ? Math.max(
+              0,
+              Math.floor(
+                Number(
+                  boostProfit(client, guildId, userId, baseProfit)
+                ) || 0
+              )
+            )
+          : 0;
 
-      client.economy.addCrowns(
-        guildId,
-        userId,
-        payout,
-        {
-          type: 'dice_win',
-          reason: 'Dice winnings',
-          actorId: userId,
+      if (matchCount > 0) {
+        client.economy.addCrowns(
+          guildId,
+          userId,
+          amount + boostedProfit,
+          {
+            type: 'dice_win',
+            reason: 'Dice winnings',
+            actorId: userId,
+          }
+        );
+      }
+
+      settled = true;
+      newBalance = client.economy.getBalance(guildId, userId);
+
+    } catch (error) {
+      console.error('[Dice] Error while settling bet:', error);
+
+      if (!settled) {
+        try {
+          client.economy.addCrowns(guildId, userId, amount, {
+            type: 'dice_refund',
+            reason: 'Dice error refund',
+            actorId: userId,
+          });
+        } catch (refundError) {
+          console.error('[Dice] Refund failed:', refundError);
         }
-      );
-    }
+      }
 
-    const newBalance = client.economy.getBalance(guildId, userId);
+      return message.reply({
+        content: 'Something went wrong with the dice. Your bet was refunded.',
+      }).catch(() => {});
+    }
 
     let resultText;
 
@@ -400,7 +426,6 @@ module.exports = {
         `**${money(client, boostedProfit)}**.`;
     }
 
-    // Prepare the final embed showing the actual dice results.
     const finalEmbed = buildEmbed(message, {
       title: '🎲 Dice Rolled',
       description:
@@ -414,35 +439,67 @@ module.exports = {
       footer: `Requested by ${message.author.username}`,
     });
 
-    // Send the initial rolling embed.
-    const sentMessage = await message.reply({
-      embeds: [
-        buildRollingEmbed(message, pick1, pick2, amount, client),
-      ],
-    });
+    // ------------------------------------------------------------
+    // Show the animation and result. Nothing below can lose money.
+    // ------------------------------------------------------------
+    const channelId = message.channel.id;
+    const activeInChannel = busyChannels.get(channelId) || 0;
 
-    // Animate the dice by editing the SAME message.
-    for (let frame = 0; frame < 3; frame++) {
+    busyChannels.set(channelId, activeInChannel + 1);
+
+    try {
+      let sentMessage = null;
+
+      try {
+        sentMessage = await message.reply({
+          embeds: [
+            buildRollingEmbed(message, pick1, pick2, amount, client),
+          ],
+        });
+      } catch (error) {
+        console.error('[Dice] Could not send rolling message:', error?.message || error);
+      }
+
+      if (!sentMessage) {
+        // Original message gone or reply failed: post the result directly.
+        await message.channel.send({ embeds: [finalEmbed] }).catch(() => {});
+        return;
+      }
+
+      // Only animate when nobody else is rolling in this channel.
+      const frames = activeInChannel === 0 ? ANIMATION_FRAMES : 0;
+
+      for (let frame = 0; frame < frames; frame++) {
+        await sleep(ANIMATION_DELAY_MS);
+
+        await tryEdit(sentMessage, {
+          embeds: [
+            buildRollingEmbed(message, pick1, pick2, amount, client),
+          ],
+        });
+      }
+
       await sleep(ANIMATION_DELAY_MS);
 
-      const rollingEmbed = buildRollingEmbed(
-        message,
-        pick1,
-        pick2,
-        amount,
-        client
-      );
-
-      await sentMessage.edit({
-        embeds: [rollingEmbed],
+      const revealed = await tryEdit(sentMessage, {
+        embeds: [finalEmbed],
       });
+
+      if (!revealed) {
+        // The edit failed: send the result as a fresh message instead.
+        await message.channel.send({ embeds: [finalEmbed] }).catch(error => {
+          console.error('[Dice] Could not send result:', error?.message || error);
+        });
+      }
+
+    } finally {
+      const left = (busyChannels.get(channelId) || 1) - 1;
+
+      if (left <= 0) {
+        busyChannels.delete(channelId);
+      } else {
+        busyChannels.set(channelId, left);
+      }
     }
-
-    // Reveal the final result.
-    await sleep(ANIMATION_DELAY_MS);
-
-    return sentMessage.edit({
-      embeds: [finalEmbed],
-    });
   },
 };
