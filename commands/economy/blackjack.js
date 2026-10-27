@@ -12,7 +12,14 @@ const {
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
+
+// One running game per PLAYER (not per channel), so any number of
+// people can play at the same time.
 const activeGames = new Map();
+
+function gameKey(guildId, userId) {
+  return `${guildId}:${userId}`;
+}
 
 function buildEmbed(message, data = {}) {
   if (typeof message?.createEmbed === 'function') {
@@ -143,7 +150,7 @@ function renderEmbed(session, revealDealer = false, status = 'Your move') {
 async function finalizeGame(session, messageLike = null, reason = 'stand') {
   if (session.ended) return;
   session.ended = true;
-  activeGames.delete(session.channel.id);
+  activeGames.delete(session.key);
 
   let outcome = 'push';
   let status = 'Tie';
@@ -241,12 +248,15 @@ module.exports = {
       });
     }
 
-    if (activeGames.has(message.channel.id)) {
+    const key = gameKey(message.guild.id, message.author.id);
+
+    // Only blocks the SAME player from starting a second hand.
+    if (activeGames.has(key)) {
       return message.reply({
         embeds: [
           buildEmbed(message, {
             title: 'Blackjack',
-            description: 'A blackjack game is already running in this channel.',
+            description: 'You already have a blackjack game running. Finish it first.',
           }),
         ],
       });
@@ -318,6 +328,7 @@ module.exports = {
 
     const deck = createDeck();
     const session = {
+      key,
       client,
       guild: message.guild,
       channel: message.channel,
@@ -331,12 +342,26 @@ module.exports = {
       messageRef: message,
     };
 
-    activeGames.set(message.channel.id, session);
+    activeGames.set(key, session);
 
-    session.message = await message.reply({
-      embeds: [renderEmbed(session, false, 'Your move')],
-      components: [activeRow()],
-    });
+    try {
+      session.message = await message.reply({
+        embeds: [renderEmbed(session, false, 'Your move')],
+        components: [activeRow()],
+      });
+    } catch (error) {
+      // Could not even show the game: give the bet back and free the slot.
+      console.error('[Blackjack] Could not send game message:', error?.message || error);
+      activeGames.delete(key);
+
+      client.economy.addCrowns(message.guild.id, message.author.id, bet, {
+        type: 'blackjack_refund',
+        reason: 'Blackjack failed to start',
+        actorId: message.author.id,
+      });
+
+      return;
+    }
 
     if (isNaturalBlackjack(session.playerHand) || isNaturalBlackjack(session.dealerHand)) {
       const reason = isNaturalBlackjack(session.playerHand) ? 'natural' : 'stand';
