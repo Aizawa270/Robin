@@ -7,7 +7,7 @@ const {
 } = require('discord.js');
 
 const farm = require('../../handlers/farmService');
-const { emoji, seedEmoji } = require('../../handlers/farmEmojis');
+const { emoji, seedEmoji, EMOJIS } = require('../../handlers/farmEmojis');
 
 const { FarmError, CFG } = farm;
 
@@ -147,6 +147,7 @@ function helpEmbed(ctx) {
       ].join('\n')),
       field('Economy', [
         line('$farm shop', 'Seeds, tools, supplies and decorations'),
+        line('$farm iteminfo <item>', 'Details and price of a shop item'),
         line('$farm buy <item> [amount]', 'Buy from the shop'),
         line('$farm sell <crop> [amount|all]', 'Sell produce'),
         line('$farm sell all', 'Sell all produce'),
@@ -302,6 +303,114 @@ function deliverEmbed(ctx, r) {
 
 function errorEmbed(ctx, text) {
   return mkEmbed(ctx.message, { title: 'Farm', description: text });
+}
+
+// ---------- Item info ----------
+
+// Turns a custom emoji string like <:wheat:123> or <a:wheat:123> into an image URL
+// so it can be used as the embed thumbnail. Returns null when no emoji is set.
+function emojiUrl(key) {
+  const m = /^<(a?):\w+:(\d+)>$/.exec(String(EMOJIS[key] || '').trim());
+  if (!m) return null;
+  return `https://cdn.discordapp.com/emojis/${m[2]}.${m[1] ? 'gif' : 'png'}?size=128`;
+}
+
+function itemInfoEmbed(ctx, item) {
+  const d = farm.hasFarm(ctx.gid, ctx.uid) ? farm.getDashboard(ctx.gid, ctx.uid) : null;
+  const level = d ? d.player.level : null;
+
+  const unlock = level === null
+    ? `Level ${item.level}`
+    : level >= item.level
+      ? `Level ${item.level} (unlocked)`
+      : `Level ${item.level} (you are level ${level})`;
+
+  const fields = [
+    field('Price', item.cost > 0 ? money(item.cost) : 'Free', true),
+    field('Unlocks At', unlock, true),
+  ];
+
+  let iconKey = item.id;
+  let body = '';
+  let buyCmd = null;
+
+  if (item.kind === 'seed') {
+    const c = item.crop;
+    const market = farm.getMarket(ctx.gid);
+    const unit = farm.unitPrice(c, market);
+    const avg = (c.yield[0] + c.yield[1]) / 2;
+    const profit = Math.round(avg * c.price - c.seedCost);
+    const name = c.name.toLowerCase();
+
+    iconKey = EMOJIS[`seed_${c.id}`] ? `seed_${c.id}` : c.id;
+    buyCmd = `$farm buy ${name} [amount]`;
+    body =
+      `Seeds for **${c.name}**. Plant them in an empty plot with \`$farm plant ${name}\`, wait for them to grow, ` +
+      'then harvest and sell the produce or use it for contracts.' +
+      (c.berry ? '\nThis is a berry crop and gives extra produce during Pollination Season.' : '');
+
+    fields.push(
+      field('Tier', c.tier, true),
+      field('Grow Time', `${dur(c.growMs)}\nBefore watering can bonus`, true),
+      field('Yield', `${c.yield[0]} to ${c.yield[1]} per plot`, true),
+      field('Sells For', `${money(unit)} each now\nBase ${money(c.price)}`, true),
+      field('Est. Profit', `${profit >= 0 ? '' : '-'}${money(Math.abs(profit))} per plot\nBase price, average yield`, true),
+      field('Farming XP', `${num(c.xp)} per plot`, true)
+    );
+  } else if (item.kind === 'can') {
+    const pct = Math.round(item.bonus * 100);
+
+    buyCmd = item.cost > 0 ? `$farm buy ${item.name.toLowerCase()}` : null;
+    body =
+      `A permanent tool. Crops you plant while you own it grow **${pct}% faster**. ` +
+      'It does not speed up crops that are already growing, and it replaces your previous watering can.' +
+      (item.cost > 0 ? '' : '\nEveryone starts with this one.');
+
+    fields.push(field('Effect', `${pct}% faster growth`, true));
+    if (d) fields.push(field('Status', d.player.can_tier >= item.tier ? 'You own this or a better can' : 'Not owned', true));
+  } else if (item.kind === 'hoe') {
+    const pct = Math.round(item.chance * 100);
+
+    buyCmd = `$farm buy ${item.name.toLowerCase()}`;
+    body =
+      `A permanent tool. Every plot you harvest has a **${pct}% chance** of giving bonus produce ` +
+      "equal to 25% of that plot's yield (at least 1 extra). It replaces your previous hoe.";
+
+    fields.push(field('Effect', `${pct}% bonus produce chance per plot`, true));
+    if (d) fields.push(field('Status', d.player.hoe_tier >= item.tier ? 'You own this or a better hoe' : 'Not owned', true));
+  } else if (item.kind === 'fert') {
+    const pct = Math.round(item.cut * 100);
+    const drop = CFG.HARVEST_DROPS.find(x => x.item === item.id);
+
+    iconKey = `fert_${item.id}`;
+    buyCmd = `$farm buy ${item.id} fertilizer [amount]`;
+    body =
+      `A one-use supply. Removes **${pct}%** of the remaining grow time on a growing plot. ` +
+      `A plot can be fertilized up to ${CFG.MAX_FERT_PER_PLOT} times, and it saves the most when used early on a long crop.\n` +
+      `Use it with \`$farm fertilize <plot> ${item.id}\`.`;
+
+    fields.push(field('Effect', `-${pct}% remaining grow time`, true));
+    if (drop) {
+      fields.push(field('Free Drop', `${Math.round(drop.chance * 100)}% chance per harvested plot\nFrom level ${drop.minLevel}`, true));
+    }
+  } else if (item.kind === 'decor') {
+    buyCmd = `$farm buy ${item.name.toLowerCase()}`;
+    body =
+      'A cosmetic decoration. It does not change growth or prices. ' +
+      'It shows on your dashboard and inventory, adds to your Farm Value, and you can own one of each.';
+
+    if (d) fields.push(field('Status', d.decor.some(x => x.id === item.id) ? 'Owned' : 'Not owned', true));
+  }
+
+  if (buyCmd) body += `\n\nBuy with \`${buyCmd}\``;
+
+  return mkEmbed(ctx.message, {
+    title: item.name,
+    description: body,
+    fields,
+    thumbnail: emojiUrl(iconKey) || avatar(ctx),
+    footer: 'Browse everything with $farm shop',
+  });
 }
 
 // ============================================================
@@ -513,7 +622,7 @@ function shopView(ctx, state) {
   return {
     embed: mkEmbed(ctx.message, {
       title,
-      description: slice.join('\n\n') + '\n\nBuy with `$farm buy <item> [amount]`',
+      description: slice.join('\n\n') + '\n\nBuy with `$farm buy <item> [amount]`\nDetails with `$farm iteminfo <item>`',
       footer: `Page ${page + 1} of ${pages}  |  Balance: ${num(d.wallet)} Crowns`,
       thumbnail: avatar(ctx),
     }),
@@ -866,6 +975,15 @@ async function route(ctx, sub, rest) {
     case 'store': {
       const cat = SHOP_CATS.find(c => c.value === String(rest[0] || '').toLowerCase())?.value;
       return startSession(ctx, 'shop', { cat });
+    }
+
+    case 'iteminfo':
+    case 'item': {
+      if (!rest.length) throw new FarmError('Use `$farm iteminfo <item>`. See `$farm shop` for everything you can look up.');
+      const query = rest.join(' ');
+      const item = farm.resolveShopItem(query);
+      if (!item) throw new FarmError(`I could not find "${query}" in the shop.`);
+      return message.reply({ embeds: [itemInfoEmbed(ctx, item)] });
     }
 
     case 'market':
