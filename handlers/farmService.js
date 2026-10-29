@@ -442,9 +442,13 @@ function unitPrice(crop, market) {
 
 const avgYield = c => (c.yield[0] + c.yield[1]) / 2;
 
+// Scales quest targets and flat coin rewards to the crop price level.
+// Falls back to 1 so an older farmConfig.js still works.
+const QUEST_MULT = Number(CFG.QUEST_VALUE_MULT) > 0 ? Number(CFG.QUEST_VALUE_MULT) : 1;
+
 function buildQuests(level) {
   const eligible = CFG.CROPS.filter(c => c.level <= level);
-  const targetValue = 120 + level * 30;
+  const targetValue = (120 + level * 30) * QUEST_MULT;
   const quests = [];
   const usedCrops = new Set();
 
@@ -469,7 +473,7 @@ function buildQuests(level) {
     kind: 'harvest_plots',
     crop_id: null,
     target: plotsN,
-    coins: plotsN * (30 + level * 6),
+    coins: plotsN * (30 + level * 6) * QUEST_MULT,
     xp: plotsN * 12,
   });
 
@@ -478,10 +482,10 @@ function buildQuests(level) {
     quests.push(cropQuest());
   } else if (roll === 1) {
     const n = 10 + level * 2;
-    quests.push({ kind: 'sell_any', crop_id: null, target: n, coins: n * 6, xp: Math.round(n * 1.5) });
+    quests.push({ kind: 'sell_any', crop_id: null, target: n, coins: n * 6 * QUEST_MULT, xp: Math.round(n * 1.5) });
   } else {
     const n = Math.min(12, 3 + Math.floor(level / 3));
-    quests.push({ kind: 'plant_any', crop_id: null, target: n, coins: n * (20 + level * 4), xp: n * 8 });
+    quests.push({ kind: 'plant_any', crop_id: null, target: n, coins: n * (20 + level * 4) * QUEST_MULT, xp: n * 8 });
   }
 
   return quests.slice(0, CFG.DAILY_QUEST_COUNT);
