@@ -160,21 +160,49 @@ module.exports = {
       );
     }
 
-    // ---------- Emoji limit check (static vs. animated) ----------
-    await message.guild.emojis.fetch();
+        // ---------- Emoji limit check (boost-tier aware) ----------
+    let currentGuild;
+    let emojiCache;
 
-    if (emojiData.animated) {
-      const animatedLimit = message.guild.animatedEmojiLimit ?? 50;
-      const currentAnimated = message.guild.emojis.cache.filter(e => e.animated).size;
-      if (currentAnimated >= animatedLimit) {
-        return message.reply(`This server has reached the animated emoji limit (${animatedLimit}).`);
-      }
-    } else {
-      const staticLimit = message.guild.staticEmojiLimit ?? 50;
-      const currentStatic = message.guild.emojis.cache.filter(e => !e.animated).size;
-      if (currentStatic >= staticLimit) {
-        return message.reply(`This server has reached the static emoji limit (${staticLimit}).`);
-      }
+    try {
+      // Refresh the guild so we use its current boost tier.
+      currentGuild = await message.guild.fetch();
+
+      // Fetch the server's current emojis.
+      emojiCache = await currentGuild.emojis.fetch();
+    } catch (error) {
+      console.error('Steal emoji limit check failed:', error);
+
+      return message.reply(
+        'Could not check the server emoji slots. Please try again.'
+      );
+    }
+
+    // Maximum slots for each emoji type, by server boost tier.
+    const emojiLimitsByTier = {
+      0: 50,
+      1: 100,
+      2: 150,
+      3: 250
+    };
+
+    const tier = Number(currentGuild.premiumTier) || 0;
+    const emojiLimit = emojiLimitsByTier[tier] ?? 50;
+
+    // Count only emojis matching the type being added.
+    const currentCount = emojiCache.filter(
+      emoji => emoji.animated === emojiData.animated
+    ).size;
+
+    if (currentCount >= emojiLimit) {
+      const emojiType = emojiData.animated
+        ? 'animated'
+        : 'static';
+
+      return message.reply(
+        `This server has reached its ${emojiType} emoji limit ` +
+        `(${currentCount}/${emojiLimit}).`
+      );
     }
 
     // ---------- Name handling ----------
