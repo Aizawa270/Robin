@@ -11,22 +11,34 @@ function buildEmbed(message, data = {}) {
     });
 
     if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+
     if (data.footer) {
-      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-      else embed.setFooter(data.footer);
+      if (typeof data.footer === 'string') {
+        embed.setFooter({ text: data.footer });
+      } else {
+        embed.setFooter(data.footer);
+      }
     }
 
     return embed;
   }
 
-  const embed = new EmbedBuilder().setColor('#FF69B4').setTimestamp();
+  const embed = new EmbedBuilder()
+    .setColor(data.color || '#0f172a')
+    .setTimestamp();
+
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
   if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+
   if (data.footer) {
-    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-    else embed.setFooter(data.footer);
+    if (typeof data.footer === 'string') {
+      embed.setFooter({ text: data.footer });
+    } else {
+      embed.setFooter(data.footer);
+    }
   }
+
   return embed;
 }
 
@@ -39,24 +51,135 @@ module.exports = {
 
   async execute(client, message, args) {
     if (!message.guild) return;
-    if (!client.economy) return message.reply('Economy is not initialized.');
 
-    const itemId = String(args[0] || '').padStart(2, '0');
-    if (!itemId.trim()) return message.reply('Use: `$buy <item id>`');
+    if (!client.economy) {
+      return message.reply('Economy is not initialized.');
+    }
 
-    const item = listShopItems('normal', message.guild.id).find(i => String(i.item_id) === itemId);
-    if (!item) return message.reply('That item does not exist.');
+    const rawId = String(args[0] || '').trim();
 
-    const result = await buyItem('normal', client, message.guild, message.author, itemId);
+    if (!rawId) {
+      return message.reply({
+        embeds: [
+          buildEmbed(message, {
+            title: 'Purchase Failed',
+            description: 'Please provide an item ID.\n\nUsage: `$buy <item id>`',
+            thumbnail: message.guild.iconURL({ size: 256 }),
+          }),
+        ],
+      });
+    }
+
+    const itemId = rawId.padStart(2, '0');
+
+    const item = listShopItems('normal', message.guild.id)
+      .find(i => String(i.item_id) === itemId);
+
+    if (!item) {
+      return message.reply({
+        embeds: [
+          buildEmbed(message, {
+            title: 'Item Not Found',
+            description: `No shop item with ID **${rawId}** exists.`,
+            thumbnail: message.guild.iconURL({ size: 256 }),
+          }),
+        ],
+      });
+    }
+
+    // Check the user's balance before attempting the purchase.
+    const balance = client.economy.getBalance(
+      message.guild.id,
+      message.author.id
+    );
+
+    const price = Number(item.price || 0);
+
+    if (balance < price) {
+      const needed = price - balance;
+
+      return message.reply({
+        embeds: [
+          buildEmbed(message, {
+            title: 'Insufficient Crowns',
+            description:
+              `You don't have enough Crowns to purchase **${item.name}**.\n\n` +
+              `**Item Price**\n${money(client, price)}\n\n` +
+              `**Your Balance**\n${money(client, balance)}\n\n` +
+              `**Crowns Needed**\n${money(client, needed)}`,
+            thumbnail: message.guild.iconURL({ size: 256 }),
+            footer: 'Earn more Crowns and try again.',
+            color: '#b91c1c',
+          }),
+        ],
+      });
+    }
+
+    const result = await buyItem(
+      'normal',
+      client,
+      message.guild,
+      message.author,
+      itemId
+    );
 
     if (!result.ok) {
       if (result.reason === 'cooldown') {
-        return message.reply(`That item is on cooldown for **${Math.ceil(result.remaining / 1000)}s**.`);
+        const remaining = client.shopSystem?.formatDuration
+          ? client.shopSystem.formatDuration(result.remaining)
+          : `${Math.ceil(result.remaining / 1000)}s`;
+
+        return message.reply({
+          embeds: [
+            buildEmbed(message, {
+              title: 'Item on Cooldown',
+              description:
+                `You must wait **${remaining}** before buying **${item.name}** again.`,
+              thumbnail: message.guild.iconURL({ size: 256 }),
+            }),
+          ],
+        });
       }
+
       if (result.reason === 'already_has_custom') {
-        return message.reply('You already have a custom role. Let that one expire or get deleted first.');
+        return message.reply({
+          embeds: [
+            buildEmbed(message, {
+              title: 'Custom Role Already Owned',
+              description:
+                'You already have an active custom role.\n\n' +
+                'Wait for it to expire before purchasing another one.',
+              thumbnail: message.guild.iconURL({ size: 256 }),
+            }),
+          ],
+        });
       }
-      return message.reply('You could not buy that item.');
+
+      if (result.reason === 'role_create_failed') {
+        return message.reply({
+          embeds: [
+            buildEmbed(message, {
+              title: 'Purchase Failed',
+              description:
+                'Discord could not create your custom role.\n' +
+                'Your Crowns have been refunded. Please try again later.',
+              thumbnail: message.guild.iconURL({ size: 256 }),
+            }),
+          ],
+        });
+      }
+
+      return message.reply({
+        embeds: [
+          buildEmbed(message, {
+            title: 'Purchase Failed',
+            description:
+              'Your purchase could not be completed. Your balance may have changed, ' +
+              'or the item may no longer be available.',
+            thumbnail: message.guild.iconURL({ size: 256 }),
+          }),
+        ],
+      });
     }
 
     if (result.purchasedCustomRole) {
@@ -65,10 +188,15 @@ module.exports = {
           buildEmbed(message, {
             title: 'Purchase Complete',
             description:
-              `You bought **${result.item.name}** for **${money(client, result.item.price)}**.\n\n` +
-              `A role named **Custom Role** was created and given to you.\n` +
-              `Use \`$customrename <role_id> <new name>\`, \`$customhex <role_id> #hex\`, or \`$customicon <role_id>\` to manage it.`,
+              `You purchased **${result.item.name}** for **${money(client, result.item.price)}**.\n\n` +
+              `A custom role has been created and assigned to you.\n\n` +
+              '**Customize your role**\n' +
+              '`$customrename <role_id> <new name>`\n' +
+              '`$customhex <role_id> #hex`\n' +
+              '`$customicon <role_id>`',
             thumbnail: message.guild.iconURL({ size: 256 }),
+            footer: 'Your custom role lasts 30 days.',
+            color: '#16a34a',
           }),
         ],
       });
@@ -78,8 +206,11 @@ module.exports = {
       embeds: [
         buildEmbed(message, {
           title: 'Purchase Complete',
-          description: `You bought **${result.item.name}** for **${money(client, result.item.price)}**.`,
+          description:
+            `You purchased **${result.item.name}** for **${money(client, result.item.price)}**.`,
           thumbnail: message.guild.iconURL({ size: 256 }),
+          footer: 'The item has been added to your inventory.',
+          color: '#16a34a',
         }),
       ],
     });
