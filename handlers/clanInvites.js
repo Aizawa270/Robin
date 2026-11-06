@@ -1,3 +1,4 @@
+
 'use strict';
 
 // Persistent clan invitations. Uses the same economy.sqlite connection as
@@ -78,21 +79,21 @@ function reject(token, userId, now = Date.now()) {
 }
 
 const acceptTx = db.transaction((token, userId, now) => {
-  const row = getInvite.get(String(token));
-  if (!row) return { ok: false, code: 'missing' };
-  if (String(row.invitee_id) !== String(userId)) return { ok: false, code: 'not_invited_user' };
-  if (row.status !== 'pending') return { ok: false, code: 'not_pending' };
-  if (Number(row.expires_at) <= now) {
-    expireStmt.run(String(token));
-    return { ok: false, code: 'expired' };
-  }
+ const row = getInvite.get(String(token));
+ if (!row) return { ok: false, code: 'missing' };
+ if (String(row.invitee_id) !== String(userId)) return { ok: false, code: 'not_invited_user' };
+ if (row.status !== 'pending') return { ok: false, code: 'not_pending' };
+ if (Number(row.expires_at) <= now) {
+     expireStmt.run(String(token));
+     return { ok: false, code: 'expired' };
+ }
 
-  // Claim the invitation inside the same transaction as the membership change.
-  const claimed = db.prepare(`
-    UPDATE clan_invites SET status = 'accepted'
-    WHERE token = ? AND invitee_id = ? AND status = 'pending' AND expires_at > ?
-  `).run(String(token), String(userId), Number(now));
-  if (!claimed.changes) return { ok: false, code: 'not_pending' };
+ // Claim the invitation inside the same transaction as the membership change.
+ const claimed = db.prepare(`
+   UPDATE clan_invites SET status = 'accepted'
+   WHERE token = ? AND invitee_id = ? AND status = 'pending' AND expires_at > ?
+ `).run(String(token), String(userId), Number(now));
+ if (!claimed.changes) return { ok: false, code: 'not_pending' };
 
   const joined = clanService.joinClan(row.guild_id, row.invitee_id, row.clan_id, now, true);
   return { ok: true, rejected: false, invite: row, ...joined };
@@ -107,3 +108,4 @@ function prune(now = Date.now()) {
 }
 
 module.exports = { create, get, accept, reject, prune };
+
