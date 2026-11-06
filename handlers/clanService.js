@@ -538,7 +538,7 @@ function recordGame(guildId, userId, game, result, now = Date.now()) {
   try {
     const found = getMembership(guildId, userId);
     if (!found) return null;
-    const allowedGames = new Set(['coinflip', 'spinwheel', 'dice', 'blackjack']);
+    const allowedGames = new Set(['coinflip', 'spinwheel', 'dice', 'blackjack', 'horserace', 'betpool']);
     if (!allowedGames.has(String(game))) return null;
     const notes = {};
     db.transaction(() => {
