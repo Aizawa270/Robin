@@ -4,7 +4,7 @@ const clanCommand = require('./clan');
 
 module.exports = {
   name: 'cq',
-  aliases: ['clanquest'],
+  aliases: [],
   description: 'View your clan\'s daily quests.',
   category: 'economy',
   usage: '$cq',
