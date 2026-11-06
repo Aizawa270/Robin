@@ -227,6 +227,22 @@ function handleError(message, error) {
   return replyEmbed(message, 'Clan System', description).catch(() => null);
 }
 
+// Nickname tagging is a cosmetic follow-up. A Discord permission/hierarchy
+// failure must never undo a successful clan database operation.
+async function syncClanNickname(client, guildId, userId) {
+  try {
+    await client.clanNicknameTags?.syncUser(guildId, userId);
+  } catch (error) {
+    console.error('[Clan Nicknames] Could not sync member nickname:', error);
+  }
+}
+
+async function syncClanMemberNicknames(client, guildId, clanId) {
+  for (const member of getClanMembers(clanId)) {
+    await syncClanNickname(client, guildId, member.user_id);
+  }
+}
+
 async function handleInteraction(client, interaction) {
   if (!interaction.isButton?.()) return false;
   const parts = String(interaction.customId || '').split(':');
@@ -258,6 +274,9 @@ async function handleInteraction(client, interaction) {
 
     if (!result.rejected && result.notes) {
       await clan.announce(interaction.channel, result.notes);
+    }
+    if (!result.rejected && interaction.guildId) {
+      await syncClanNickname(client, interaction.guildId, interaction.user.id);
     }
     const embed = new EmbedBuilder()
       .setColor(RED)
@@ -320,6 +339,7 @@ module.exports = {
         const name = args.slice(1).join(' ').trim();
         if (!name) return replyEmbed(message, 'Clan Name', `Use \`${prefix}clan name <name>\`.`);
         const created = clan.createFromVoucher(gid, uid, name);
+        await syncClanNickname(client, gid, uid);
         return replyEmbed(message, 'Clan Created', `**${created.name}** has been created. You are its Owner. Use \`${prefix}clan info\` to view your clan.`);
       }
 
@@ -328,11 +348,13 @@ module.exports = {
         if (!name) return replyEmbed(message, 'Join a Clan', `Use \`${prefix}clan join <name>\`.`);
         const joined = clan.joinByName(gid, uid, name);
         await clan.announce(message.channel, joined.notes);
+        await syncClanNickname(client, gid, uid);
         return replyEmbed(message, 'Clan Joined', `You joined **${joined.clan.name}** as a Member.`);
       }
 
       if (sub === 'leave') {
         const left = clan.leaveClan(gid, uid);
+        await syncClanNickname(client, gid, uid);
         return replyEmbed(message, 'Left Clan', `You left **${left.clan.name}**. You must wait 5 days before rejoining that clan.`);
       }
 
@@ -340,6 +362,7 @@ module.exports = {
         const name = args.slice(1).join(' ').trim();
         if (!name) return replyEmbed(message, 'Rename Clan', `Use \`${prefix}clan rename <new name>\`. Cost: ${money(CFG.RENAME_COST)}.`);
         const result = clan.renameClan(gid, uid, name);
+        await syncClanMemberNicknames(client, gid, result.clan.id);
         return replyEmbed(message, 'Clan Renamed', `**${result.oldName}** is now **${result.clan.name}**.\nCost: ${money(result.cost)}.`);
       }
 
@@ -373,6 +396,7 @@ module.exports = {
         const target = await resolveTarget(message, args[1]);
         if (!target) return replyEmbed(message, 'Kick Failed', `Use \`${prefix}clan kick <@user>\`.`);
         const result = clan.kickMember(gid, uid, target.id);
+        await syncClanNickname(client, gid, target.id);
         return replyEmbed(message, 'Member Kicked', `<@${target.id}> was removed from **${result.clan.name}**.`);
       }
 
