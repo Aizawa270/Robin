@@ -1,19 +1,19 @@
-
+// index.js
 
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 
 const {
-Client,
-GatewayIntentBits,
-Partials,
-ActivityType,
+  Client,
+  GatewayIntentBits,
+  Partials,
+  ActivityType,
 } = require('discord.js');
 
 const {
-loadCommands,
-handleMessage,
+  loadCommands,
+  handleMessage,
 } = require('./handlers/commandHandler');
 
 const messageTracker = require('./handlers/messageTracker');
@@ -38,27 +38,27 @@ const { setupVCHandler } = require('./handlers/vcHandler');
 
 // ===== CLIENT =====
 const client = new Client({
-intents: [
-GatewayIntentBits.Guilds,
-GatewayIntentBits.GuildMessages,
-GatewayIntentBits.MessageContent,
-GatewayIntentBits.GuildMembers,
-GatewayIntentBits.GuildMessageReactions,
-GatewayIntentBits.GuildVoiceStates,
-],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildVoiceStates,
+  ],
 
-partials: [
-Partials.Message,
-Partials.Channel,
-Partials.Reaction,
-],
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.Reaction,
+  ],
 });
 
 // ===== DATA FOLDER =====
 const DATA_DIR = path.join(__dirname, 'data');
 
 if (!fs.existsSync(DATA_DIR)) {
-fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 // ===== VC HANDLER INITIALIZATION =====
@@ -70,55 +70,83 @@ setupVCHandler(client);
 const prefixlessDB = new Database(path.join(DATA_DIR, 'prefixless.sqlite'));
 prefixlessDB.pragma('journal_mode = WAL');
 
-prefixlessDB.prepare(  CREATE TABLE IF NOT EXISTS prefixless_guild (   guild_id TEXT NOT NULL,   user_id TEXT NOT NULL,   PRIMARY KEY (guild_id, user_id)   )  ).run();
+prefixlessDB.prepare(`
+  CREATE TABLE IF NOT EXISTS prefixless_guild (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+  )
+`).run();
 
 client.prefixlessDB = prefixlessDB;
 client.prefixlessByGuild = new Map();
 
 for (const row of prefixlessDB
-.prepare('SELECT guild_id, user_id FROM prefixless_guild')
-.all()) {
-const guildId = String(row.guild_id);
-const userId = String(row.user_id);
+  .prepare('SELECT guild_id, user_id FROM prefixless_guild')
+  .all()) {
+  const guildId = String(row.guild_id);
+  const userId = String(row.user_id);
 
-if (!client.prefixlessByGuild.has(guildId)) {
-client.prefixlessByGuild.set(guildId, new Set());
-}
+  if (!client.prefixlessByGuild.has(guildId)) {
+    client.prefixlessByGuild.set(guildId, new Set());
+  }
 
-client.prefixlessByGuild.get(guildId).add(userId);
+  client.prefixlessByGuild.get(guildId).add(userId);
 }
 
 client.isPrefixless = (guildId, userId) => {
-if (!guildId || !userId) return false;
+  if (!guildId || !userId) return false;
 
-return (
-client.prefixlessByGuild
-.get(String(guildId))
-?.has(String(userId)) ?? false
-);
+  return (
+    client.prefixlessByGuild
+      .get(String(guildId))
+      ?.has(String(userId)) ?? false
+  );
 };
 
 // Bot Blacklist
-prefixlessDB.prepare(  CREATE TABLE IF NOT EXISTS bot_blacklist (   user_id TEXT PRIMARY KEY   )  ).run();
+prefixlessDB.prepare(`
+  CREATE TABLE IF NOT EXISTS bot_blacklist (
+    user_id TEXT PRIMARY KEY
+  )
+`).run();
 
 client.botBlacklist = new Set(
-prefixlessDB
-.prepare('SELECT user_id FROM bot_blacklist')
-.all()
-.map(row => row.user_id)
+  prefixlessDB
+    .prepare('SELECT user_id FROM bot_blacklist')
+    .all()
+    .map(row => row.user_id)
 );
 
-console.log([BotBlacklist] Loaded ${client.botBlacklist.size} entries);
+console.log(`[BotBlacklist] Loaded ${client.botBlacklist.size} entries`);
 
 // ===== QUARANTINE DB =====
 const quarantineDB = new Database(path.join(DATA_DIR, 'quarantine.sqlite'));
 quarantineDB.pragma('journal_mode = WAL');
 
-quarantineDB.prepare(  CREATE TABLE IF NOT EXISTS quarantine (   user_id TEXT PRIMARY KEY,   roles TEXT   )  ).run();
+quarantineDB.prepare(`
+  CREATE TABLE IF NOT EXISTS quarantine (
+    user_id TEXT PRIMARY KEY,
+    roles TEXT
+  )
+`).run();
 
-quarantineDB.prepare(  CREATE TABLE IF NOT EXISTS quarantine_settings (   guild_id TEXT PRIMARY KEY,   channel_id TEXT NOT NULL,   role_id TEXT NOT NULL   )  ).run();
+quarantineDB.prepare(`
+  CREATE TABLE IF NOT EXISTS quarantine_settings (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    role_id TEXT NOT NULL
+  )
+`).run();
 
-quarantineDB.prepare(  CREATE TABLE IF NOT EXISTS quarantine_access (   guild_id TEXT NOT NULL,   target_type TEXT NOT NULL,   target_id TEXT NOT NULL,   PRIMARY KEY (guild_id, target_type, target_id)   )  ).run();
+quarantineDB.prepare(`
+  CREATE TABLE IF NOT EXISTS quarantine_access (
+    guild_id TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    PRIMARY KEY (guild_id, target_type, target_id)
+  )
+`).run();
 
 client.quarantineDB = quarantineDB;
 
@@ -126,7 +154,15 @@ client.quarantineDB = quarantineDB;
 const giveawayDB = new Database(path.join(DATA_DIR, 'giveaways.sqlite'));
 giveawayDB.pragma('journal_mode = WAL');
 
-giveawayDB.prepare(  CREATE TABLE IF NOT EXISTS giveaways (   message_id TEXT PRIMARY KEY,   channel_id TEXT,   name TEXT,   winner_count INTEGER,   end_timestamp INTEGER   )  ).run();
+giveawayDB.prepare(`
+  CREATE TABLE IF NOT EXISTS giveaways (
+    message_id TEXT PRIMARY KEY,
+    channel_id TEXT,
+    name TEXT,
+    winner_count INTEGER,
+    end_timestamp INTEGER
+  )
+`).run();
 
 client.giveawayDB = giveawayDB;
 
@@ -134,7 +170,12 @@ client.giveawayDB = giveawayDB;
 const prefixDB = new Database(path.join(DATA_DIR, 'prefixes.sqlite'));
 prefixDB.pragma('journal_mode = WAL');
 
-prefixDB.prepare(  CREATE TABLE IF NOT EXISTS prefixes (   guild_id TEXT PRIMARY KEY,   prefix TEXT   )  ).run();
+prefixDB.prepare(`
+  CREATE TABLE IF NOT EXISTS prefixes (
+    guild_id TEXT PRIMARY KEY,
+    prefix TEXT
+  )
+`).run();
 
 client.prefixDB = prefixDB;
 
@@ -143,11 +184,38 @@ const fameDB = new Database(path.join(DATA_DIR, 'fame.sqlite'));
 fameDB.pragma('journal_mode = WAL');
 fameDB.pragma('synchronous = NORMAL');
 
-fameDB.prepare(  CREATE TABLE IF NOT EXISTS fame_points_guild (   guild_id TEXT NOT NULL,   user_id TEXT NOT NULL,   reputation INTEGER DEFAULT 0,   stupidity INTEGER DEFAULT 0,   black INTEGER DEFAULT 0,   last_updated INTEGER DEFAULT (strftime('%s','now')*1000),   PRIMARY KEY (guild_id, user_id)   )  ).run();
+fameDB.prepare(`
+  CREATE TABLE IF NOT EXISTS fame_points_guild (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    reputation INTEGER DEFAULT 0,
+    stupidity INTEGER DEFAULT 0,
+    black INTEGER DEFAULT 0,
+    last_updated INTEGER DEFAULT (strftime('%s','now')*1000),
+    PRIMARY KEY (guild_id, user_id)
+  )
+`).run();
 
-fameDB.prepare(  CREATE TABLE IF NOT EXISTS fame_logs_guild (   id INTEGER PRIMARY KEY AUTOINCREMENT,   guild_id TEXT NOT NULL,   giver_id TEXT NOT NULL,   receiver_id TEXT NOT NULL,   point_type TEXT NOT NULL,   timestamp INTEGER DEFAULT (strftime('%s','now')*1000)   )  ).run();
+fameDB.prepare(`
+  CREATE TABLE IF NOT EXISTS fame_logs_guild (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    giver_id TEXT NOT NULL,
+    receiver_id TEXT NOT NULL,
+    point_type TEXT NOT NULL,
+    timestamp INTEGER DEFAULT (strftime('%s','now')*1000)
+  )
+`).run();
 
-fameDB.prepare(  CREATE TABLE IF NOT EXISTS fame_cooldowns_guild (   guild_id TEXT NOT NULL,   giver_id TEXT NOT NULL,   point_type TEXT NOT NULL,   last_given INTEGER NOT NULL,   PRIMARY KEY (guild_id, giver_id, point_type)   )  ).run();
+fameDB.prepare(`
+  CREATE TABLE IF NOT EXISTS fame_cooldowns_guild (
+    guild_id TEXT NOT NULL,
+    giver_id TEXT NOT NULL,
+    point_type TEXT NOT NULL,
+    last_given INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, giver_id, point_type)
+  )
+`).run();
 
 client.fameDB = fameDB;
 console.log('[Fame] Database initialized');
@@ -156,7 +224,16 @@ console.log('[Fame] Database initialized');
 const watchwordDB = new Database(path.join(DATA_DIR, 'watchwords.sqlite'));
 watchwordDB.pragma('journal_mode = WAL');
 
-watchwordDB.prepare(  CREATE TABLE IF NOT EXISTS watchwords (   id INTEGER PRIMARY KEY AUTOINCREMENT,   user_id TEXT NOT NULL,   guild_id TEXT NOT NULL,   word TEXT NOT NULL,   created_at INTEGER DEFAULT (strftime('%s','now')*1000),   UNIQUE(user_id, guild_id, word)   )  ).run();
+watchwordDB.prepare(`
+  CREATE TABLE IF NOT EXISTS watchwords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    word TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s','now')*1000),
+    UNIQUE(user_id, guild_id, word)
+  )
+`).run();
 
 client.watchwordDB = watchwordDB;
 console.log('[Watchword] Database initialized');
@@ -166,21 +243,77 @@ const automodDB = new Database(path.join(DATA_DIR, 'automod.sqlite'));
 automodDB.pragma('journal_mode = WAL');
 automodDB.pragma('synchronous = NORMAL');
 
-automodDB.prepare(  CREATE TABLE IF NOT EXISTS automod_channel (   guild_id TEXT PRIMARY KEY,   channel_id TEXT   )  ).run();
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS automod_channel (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT
+  )
+`).run();
 
-automodDB.prepare(  CREATE TABLE IF NOT EXISTS automod_alert_list (   guild_id TEXT,   target_type TEXT,   target_id TEXT,   PRIMARY KEY (guild_id, target_type, target_id)   )  ).run();
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS automod_alert_list (
+    guild_id TEXT,
+    target_type TEXT,
+    target_id TEXT,
+    PRIMARY KEY (guild_id, target_type, target_id)
+  )
+`).run();
 
-automodDB.prepare(  CREATE TABLE IF NOT EXISTS blacklist_hard (   guild_id TEXT,   word TEXT,   PRIMARY KEY (guild_id, word)   )  ).run();
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS blacklist_hard (
+    guild_id TEXT,
+    word TEXT,
+    PRIMARY KEY (guild_id, word)
+  )
+`).run();
 
-automodDB.prepare(  CREATE TABLE IF NOT EXISTS blacklist_soft (   guild_id TEXT,   word TEXT,   PRIMARY KEY (guild_id, word)   )  ).run();
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS blacklist_soft (
+    guild_id TEXT,
+    word TEXT,
+    PRIMARY KEY (guild_id, word)
+  )
+`).run();
 
-automodDB.prepare(  CREATE TABLE IF NOT EXISTS automod_warns (   id INTEGER PRIMARY KEY AUTOINCREMENT,   guild_id TEXT,   user_id TEXT,   moderator_id TEXT,   reason TEXT,   timestamp INTEGER   )  ).run();
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS automod_warns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT,
+    user_id TEXT,
+    moderator_id TEXT,
+    reason TEXT,
+    timestamp INTEGER
+  )
+`).run();
 
-automodDB.prepare(  CREATE TABLE IF NOT EXISTS automod_warn_counts (   guild_id TEXT,   user_id TEXT,   count INTEGER DEFAULT 0,   PRIMARY KEY (guild_id, user_id)   )  ).run();
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS automod_warn_counts (
+    guild_id TEXT,
+    user_id TEXT,
+    count INTEGER DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+  )
+`).run();
 
-automodDB.prepare(  CREATE TABLE IF NOT EXISTS modstats (   id INTEGER PRIMARY KEY AUTOINCREMENT,   guild_id TEXT,   moderator_id TEXT,   target_id TEXT,   action_type TEXT,   reason TEXT,   duration TEXT,   timestamp INTEGER   )  ).run();
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS modstats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT,
+    moderator_id TEXT,
+    target_id TEXT,
+    action_type TEXT,
+    reason TEXT,
+    duration TEXT,
+    timestamp INTEGER
+  )
+`).run();
 
-automodDB.prepare(  CREATE TABLE IF NOT EXISTS modlogs_channel (   guild_id TEXT PRIMARY KEY,   channel_id TEXT NOT NULL   )  ).run();
+automodDB.prepare(`
+  CREATE TABLE IF NOT EXISTS modlogs_channel (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL
+  )
+`).run();
 
 client.automodDB = automodDB;
 client.modstatsDB = automodDB;
@@ -190,7 +323,14 @@ const battleDB = new Database(path.join(DATA_DIR, 'battles.sqlite'));
 battleDB.pragma('journal_mode = WAL');
 battleDB.pragma('synchronous = NORMAL');
 
-battleDB.prepare(  CREATE TABLE IF NOT EXISTS ongoing_battles (   channel_id TEXT PRIMARY KEY,   user1_id TEXT,   user2_id TEXT,   start_timestamp INTEGER   )  ).run();
+battleDB.prepare(`
+  CREATE TABLE IF NOT EXISTS ongoing_battles (
+    channel_id TEXT PRIMARY KEY,
+    user1_id TEXT,
+    user2_id TEXT,
+    start_timestamp INTEGER
+  )
+`).run();
 
 client.battleDB = battleDB;
 
@@ -199,9 +339,31 @@ const spyDB = new Database(path.join(DATA_DIR, 'spy.sqlite'));
 spyDB.pragma('journal_mode = WAL');
 spyDB.pragma('synchronous = NORMAL');
 
-spyDB.prepare(  CREATE TABLE IF NOT EXISTS spy_lobbies (   lobby_id INTEGER PRIMARY KEY AUTOINCREMENT,   guild_id TEXT NOT NULL UNIQUE,   host_id TEXT NOT NULL,   channel_id TEXT,   spy_channel_id TEXT,   secret_word TEXT,   status TEXT NOT NULL DEFAULT 'lobby',   round INTEGER DEFAULT 0,   created_at INTEGER DEFAULT (strftime('%s','now')*1000)   )  ).run();
+spyDB.prepare(`
+  CREATE TABLE IF NOT EXISTS spy_lobbies (
+    lobby_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL UNIQUE,
+    host_id TEXT NOT NULL,
+    channel_id TEXT,
+    spy_channel_id TEXT,
+    secret_word TEXT,
+    status TEXT NOT NULL DEFAULT 'lobby',
+    round INTEGER DEFAULT 0,
+    created_at INTEGER DEFAULT (strftime('%s','now')*1000)
+  )
+`).run();
 
-spyDB.prepare(  CREATE TABLE IF NOT EXISTS spy_players (   id INTEGER PRIMARY KEY AUTOINCREMENT,   lobby_id INTEGER NOT NULL,   user_id TEXT NOT NULL,   alive INTEGER DEFAULT 1,   is_spy INTEGER DEFAULT 0,   joined_at INTEGER DEFAULT (strftime('%s','now')*1000),   FOREIGN KEY(lobby_id) REFERENCES spy_lobbies(lobby_id) ON DELETE CASCADE   )  ).run();
+spyDB.prepare(`
+  CREATE TABLE IF NOT EXISTS spy_players (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lobby_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    alive INTEGER DEFAULT 1,
+    is_spy INTEGER DEFAULT 0,
+    joined_at INTEGER DEFAULT (strftime('%s','now')*1000),
+    FOREIGN KEY(lobby_id) REFERENCES spy_lobbies(lobby_id) ON DELETE CASCADE
+  )
+`).run();
 
 client.spyDB = spyDB;
 
@@ -210,9 +372,25 @@ const boosterRolesDB = new Database(path.join(DATA_DIR, 'boosterroles.sqlite'));
 boosterRolesDB.pragma('journal_mode = WAL');
 boosterRolesDB.pragma('synchronous = NORMAL');
 
-boosterRolesDB.prepare(  CREATE TABLE IF NOT EXISTS booster_roles (   guild_id TEXT NOT NULL,   user_id TEXT NOT NULL,   role_id TEXT NOT NULL,   created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),   PRIMARY KEY (guild_id, user_id),   UNIQUE (guild_id, role_id)   )  ).run();
+boosterRolesDB.prepare(`
+  CREATE TABLE IF NOT EXISTS booster_roles (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+    PRIMARY KEY (guild_id, user_id),
+    UNIQUE (guild_id, role_id)
+  )
+`).run();
 
-boosterRolesDB.prepare(  CREATE TABLE IF NOT EXISTS booster_role_settings (   guild_id TEXT PRIMARY KEY,   member_category_role_id TEXT,   staff_gate_role_id TEXT,   staff_category_role_id TEXT   )  ).run();
+boosterRolesDB.prepare(`
+  CREATE TABLE IF NOT EXISTS booster_role_settings (
+    guild_id TEXT PRIMARY KEY,
+    member_category_role_id TEXT,
+    staff_gate_role_id TEXT,
+    staff_category_role_id TEXT
+  )
+`).run();
 
 client.boosterRolesDB = boosterRolesDB;
 console.log('[Booster Roles] Database initialized');
@@ -228,13 +406,13 @@ client.blacklistCache = new Map();
 
 // ===== PREFIX FUNCTION =====
 client.getPrefix = guildId => {
-if (!guildId) return '$';
+  if (!guildId) return '$';
 
-const row = client.prefixDB
-.prepare('SELECT prefix FROM prefixes WHERE guild_id = ?')
-.get(guildId);
+  const row = client.prefixDB
+    .prepare('SELECT prefix FROM prefixes WHERE guild_id = ?')
+    .get(guildId);
 
-return row?.prefix || '$';
+  return row?.prefix || '$';
 };
 
 // ============================================================
@@ -244,236 +422,233 @@ return row?.prefix || '$';
 const tiktokDownloadsInProgress = new Set();
 
 function getTikTokUploadLimit(message) {
-const MiB = 1024 * 1024;
-const tier = Number(message.guild?.premiumTier || 0);
+  const MiB = 1024 * 1024;
+  const tier = Number(message.guild?.premiumTier || 0);
 
-return tier >= 2 ? 24 * MiB : 9 * MiB;
+  return tier >= 2 ? 24 * MiB : 9 * MiB;
 }
 
 async function readTikTokResponse(response, maxBytes) {
-const contentLength = Number(
-response.headers.get('content-length')
-);
+  const contentLength = Number(
+    response.headers.get('content-length')
+  );
 
-if (
-Number.isFinite(contentLength) &&
-contentLength > 0 &&
-contentLength > maxBytes
-) {
-await response.body?.cancel().catch(() => {});
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > 0 &&
+    contentLength > maxBytes
+  ) {
+    await response.body?.cancel().catch(() => {});
 
-const error = new Error('TikTok video exceeds the upload limit.');  
-error.code = 'TIKTOK_TOO_LARGE';  
-throw error;
+    const error = new Error('TikTok video exceeds the upload limit.');
+    error.code = 'TIKTOK_TOO_LARGE';
+    throw error;
+  }
 
-}
+  if (!response.body) {
+    throw new Error('The video response contained no data.');
+  }
 
-if (!response.body) {
-throw new Error('The video response contained no data.');
-}
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
 
-const reader = response.body.getReader();
-const chunks = [];
-let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
 
-try {
-while (true) {
-const { done, value } = await reader.read();
+      if (done) break;
 
-if (done) break;  
+      totalBytes += value.byteLength;
 
-  totalBytes += value.byteLength;  
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => {});
 
-  if (totalBytes > maxBytes) {  
-    await reader.cancel().catch(() => {});  
+        const error = new Error('TikTok video exceeds the upload limit.');
+        error.code = 'TIKTOK_TOO_LARGE';
+        throw error;
+      }
 
-    const error = new Error('TikTok video exceeds the upload limit.');  
-    error.code = 'TIKTOK_TOO_LARGE';  
-    throw error;  
-  }  
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  }
 
-  chunks.push(Buffer.from(value));  
-}
+  if (totalBytes === 0) {
+    throw new Error('The downloaded video was empty.');
+  }
 
-} catch (error) {
-await reader.cancel().catch(() => {});
-throw error;
-}
-
-if (totalBytes === 0) {
-throw new Error('The downloaded video was empty.');
-}
-
-return Buffer.concat(chunks, totalBytes);
+  return Buffer.concat(chunks, totalBytes);
 }
 
 async function handleTikTokPreview(message) {
-if (!message.guild || !message.content) return;
+  if (!message.guild || !message.content) return;
 
-const urls = message.content.match(/https?://[^\s<>]+/gi);
-if (!urls) return;
+  const urls = message.content.match(/https?:\/\/[^\s<>]+/gi);
+  if (!urls) return;
 
-let originalUrl = null;
+  let originalUrl = null;
 
-for (const rawUrl of urls) {
-const cleanedUrl = rawUrl.replace(/[.,!?;:)]]+$/, '');
+  for (const rawUrl of urls) {
+    const cleanedUrl = rawUrl.replace(/[.,!?;:)\]]+$/, '');
 
-try {  
-  const parsed = new URL(cleanedUrl);  
-  const hostname = parsed.hostname.toLowerCase();  
+    try {
+      const parsed = new URL(cleanedUrl);
+      const hostname = parsed.hostname.toLowerCase();
 
-  if (  
-    hostname !== 'tiktok.com' &&  
-    !hostname.endsWith('.tiktok.com')  
-  ) continue;  
+      if (
+        hostname !== 'tiktok.com' &&
+        !hostname.endsWith('.tiktok.com')
+      ) continue;
 
-  if (  
-    parsed.protocol !== 'https:' &&  
-    parsed.protocol !== 'http:'  
-  ) continue;  
+      if (
+        parsed.protocol !== 'https:' &&
+        parsed.protocol !== 'http:'
+      ) continue;
 
-  originalUrl = parsed;  
-  break;  
-} catch {  
-  continue;  
-}
+      originalUrl = parsed;
+      break;
+    } catch {
+      continue;
+    }
+  }
 
-}
+  if (!originalUrl) return;
 
-if (!originalUrl) return;
+  const lockKey = `${message.guild.id}:${originalUrl.pathname}`;
 
-const lockKey = ${message.guild.id}:${originalUrl.pathname};
+  if (
+    tiktokDownloadsInProgress.has(lockKey) ||
+    tiktokDownloadsInProgress.size >= 3
+  ) return;
 
-if (
-tiktokDownloadsInProgress.has(lockKey) ||
-tiktokDownloadsInProgress.size >= 3
-) return;
+  tiktokDownloadsInProgress.add(lockKey);
 
-tiktokDownloadsInProgress.add(lockKey);
+  const maxBytes = getTikTokUploadLimit(message);
+  const controller = new AbortController();
 
-const maxBytes = getTikTokUploadLimit(message);
-const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  timeout.unref?.();
 
-const timeout = setTimeout(() => controller.abort(), 30000);
-timeout.unref?.();
+  try {
+    const directUrl = new URL(originalUrl.toString());
 
-try {
-const directUrl = new URL(originalUrl.toString());
+    directUrl.protocol = 'https:';
+    directUrl.hostname = directUrl.hostname.replace(
+      /tiktok\.com$/i,
+      'tiktokfix.com'
+    );
 
-directUrl.protocol = 'https:';  
-directUrl.hostname = directUrl.hostname.replace(  
-  /tiktok\.com$/i,  
-  'tiktokfix.com'  
-);  
+    directUrl.port = '';
+    directUrl.username = '';
+    directUrl.password = '';
+    directUrl.hash = '';
+    directUrl.search = '';
+    directUrl.searchParams.set('isDirect', 'true');
 
-directUrl.port = '';  
-directUrl.username = '';  
-directUrl.password = '';  
-directUrl.hash = '';  
-directUrl.search = '';  
-directUrl.searchParams.set('isDirect', 'true');  
+    console.log(`[TikTok] Downloading video from ${message.author.tag}`);
 
-console.log(`[TikTok] Downloading video from ${message.author.tag}`);  
+    const response = await fetch(directUrl.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
 
-const response = await fetch(directUrl.toString(), {  
-  method: 'GET',  
-  redirect: 'follow',  
-  signal: controller.signal,  
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (compatible; VanessaDiscordBot/1.0)',
+        Accept:
+          'video/mp4, video/*, application/octet-stream, */*',
+      },
+    });
 
-  headers: {  
-    'User-Agent':  
-      'Mozilla/5.0 (compatible; VanessaDiscordBot/1.0)',  
-    Accept:  
-      'video/mp4, video/*, application/octet-stream, */*',  
-  },  
-});  
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`TikTokFix returned HTTP ${response.status}.`);
+    }
 
-if (!response.ok) {  
-  await response.body?.cancel().catch(() => {});  
-  throw new Error(`TikTokFix returned HTTP ${response.status}.`);  
-}  
+    const contentType = (
+      response.headers.get('content-type') || ''
+    ).split(';')[0].trim().toLowerCase();
 
-const contentType = (  
-  response.headers.get('content-type') || ''  
-).split(';')[0].trim().toLowerCase();  
+    if (
+      contentType !== 'video/mp4' &&
+      contentType !== 'application/octet-stream'
+    ) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(
+        `Unsupported media type: ${contentType || 'unknown'}.`
+      );
+    }
 
-if (  
-  contentType !== 'video/mp4' &&  
-  contentType !== 'application/octet-stream'  
-) {  
-  await response.body?.cancel().catch(() => {});  
-  throw new Error(  
-    `Unsupported media type: ${contentType || 'unknown'}.`  
-  );  
-}  
+    const videoBuffer = await readTikTokResponse(
+      response,
+      maxBytes
+    );
 
-const videoBuffer = await readTikTokResponse(  
-  response,  
-  maxBytes  
-);  
+    if (
+      videoBuffer.length < 12 ||
+      videoBuffer.toString('ascii', 4, 8) !== 'ftyp'
+    ) {
+      throw new Error('The response is not a valid MP4 file.');
+    }
 
-if (  
-  videoBuffer.length < 12 ||  
-  videoBuffer.toString('ascii', 4, 8) !== 'ftyp'  
-) {  
-  throw new Error('The response is not a valid MP4 file.');  
-}  
+    console.log(
+      `[TikTok] Downloaded ${(videoBuffer.length / 1048576).toFixed(2)} MiB`
+    );
 
-console.log(  
-  `[TikTok] Downloaded ${(videoBuffer.length / 1048576).toFixed(2)} MiB`  
-);  
+    await message.reply({
+      files: [
+        {
+          attachment: videoBuffer,
+          name: 'tiktok.mp4',
+        },
+      ],
 
-await message.reply({  
-  files: [  
-    {  
-      attachment: videoBuffer,  
-      name: 'tiktok.mp4',  
-    },  
-  ],  
+      allowedMentions: {
+        repliedUser: false,
+        parse: [],
+      },
+    });
 
-  allowedMentions: {  
-    repliedUser: false,  
-    parse: [],  
-  },  
-});  
+    console.log('[TikTok] Video uploaded successfully.');
 
-console.log('[TikTok] Video uploaded successfully.');
+  } catch (error) {
+    console.error('[TikTok] Conversion failed:', error);
 
-} catch (error) {
-console.error('[TikTok] Conversion failed:', error);
+    let errorMessage;
 
-let errorMessage;  
+    if (
+      error.name === 'AbortError' ||
+      error.name === 'TimeoutError'
+    ) {
+      errorMessage =
+        'TikTok download timed out. Please try again later.';
+    } else if (error.code === 'TIKTOK_TOO_LARGE') {
+      errorMessage =
+        'This TikTok is too large for Vanessa to upload directly.';
+    } else {
+      errorMessage =
+        'Vanessa could not retrieve this TikTok video. It may be private, unavailable, or unsupported.';
+    }
 
-if (  
-  error.name === 'AbortError' ||  
-  error.name === 'TimeoutError'  
-) {  
-  errorMessage =  
-    'TikTok download timed out. Please try again later.';  
-} else if (error.code === 'TIKTOK_TOO_LARGE') {  
-  errorMessage =  
-    'This TikTok is too large for Vanessa to upload directly.';  
-} else {  
-  errorMessage =  
-    'Vanessa could not retrieve this TikTok video. It may be private, unavailable, or unsupported.';  
-}  
+    await message.channel.send({
+      content: errorMessage,
+      allowedMentions: {
+        parse: [],
+      },
+    }).catch(sendError => {
+      console.error(
+        '[TikTok] Failed to send error message:',
+        sendError
+      );
+    });
 
-await message.channel.send({  
-  content: errorMessage,  
-  allowedMentions: {  
-    parse: [],  
-  },  
-}).catch(sendError => {  
-  console.error(  
-    '[TikTok] Failed to send error message:',  
-    sendError  
-  );  
-});
-
-} finally {
-clearTimeout(timeout);
-tiktokDownloadsInProgress.delete(lockKey);
-}
+  } finally {
+    clearTimeout(timeout);
+    tiktokDownloadsInProgress.delete(lockKey);
+  }
 }
 
 // ============================================================
@@ -481,78 +656,84 @@ tiktokDownloadsInProgress.delete(lockKey);
 // ============================================================
 
 async function deleteBoosterRoleForUser(guild, userId, reason) {
-const database = client.boosterRolesDB;
+  const database = client.boosterRolesDB;
 
-const record = database.prepare(  SELECT role_id   FROM booster_roles   WHERE guild_id = ? AND user_id = ?  ).get(guild.id, userId);
+  const record = database.prepare(`
+    SELECT role_id
+    FROM booster_roles
+    WHERE guild_id = ? AND user_id = ?
+  `).get(guild.id, userId);
 
-if (!record) return false;
+  if (!record) return false;
 
-let role = guild.roles.cache.get(record.role_id);
+  let role = guild.roles.cache.get(record.role_id);
 
-if (!role) {
-try {
-role = await guild.roles.fetch(record.role_id);
-} catch (error) {
-if (
-Number(error.code) === 10011 ||
-Number(error.status) === 404
-) {
-database.prepare(  DELETE FROM booster_roles   WHERE guild_id = ? AND user_id = ?  ).run(guild.id, userId);
+  if (!role) {
+    try {
+      role = await guild.roles.fetch(record.role_id);
+    } catch (error) {
+      if (
+        Number(error.code) === 10011 ||
+        Number(error.status) === 404
+      ) {
+        database.prepare(`
+          DELETE FROM booster_roles
+          WHERE guild_id = ? AND user_id = ?
+        `).run(guild.id, userId);
 
-return true;  
-  }  
+        return true;
+      }
 
-  console.error(  
-    '[Booster Roles] Could not fetch role during cleanup:',  
-    error  
-  );  
+      console.error(
+        '[Booster Roles] Could not fetch role during cleanup:',
+        error
+      );
 
-  return false;  
-}
+      return false;
+    }
+  }
 
-}
+  if (!role) {
+    database.prepare(`
+      DELETE FROM booster_roles
+      WHERE guild_id = ? AND user_id = ?
+    `).run(guild.id, userId);
 
-if (!role) {
-database.prepare(  DELETE FROM booster_roles   WHERE guild_id = ? AND user_id = ?  ).run(guild.id, userId);
+    return true;
+  }
 
-return true;
+  if (!role.editable) {
+    console.error(
+      `[Booster Roles] Cannot delete ${role.id} in ${guild.name}; check role hierarchy and Manage Roles permission.`
+    );
 
-}
+    return false;
+  }
 
-if (!role.editable) {
-console.error(
-[Booster Roles] Cannot delete ${role.id} in ${guild.name}; check role hierarchy and Manage Roles permission.
-);
+  try {
+    await role.delete(
+      reason || 'User is no longer boosting this server'
+    );
 
-return false;
+    database.prepare(`
+      DELETE FROM booster_roles
+      WHERE guild_id = ? AND user_id = ?
+    `).run(guild.id, userId);
 
-}
+    console.log(
+      `[Booster Roles] Deleted role for user ${userId} in ${guild.name}`
+    );
 
-try {
-await role.delete(
-reason || 'User is no longer boosting this server'
-);
+    return true;
 
-database.prepare(`  
-  DELETE FROM booster_roles  
-  WHERE guild_id = ? AND user_id = ?  
-`).run(guild.id, userId);  
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Failed to delete booster role:',
+      error
+    );
 
-console.log(  
-  `[Booster Roles] Deleted role for user ${userId} in ${guild.name}`  
-);  
-
-return true;
-
-} catch (error) {
-console.error(
-'[Booster Roles] Failed to delete booster role:',
-error
-);
-
-return false;
-
-}
+    return false;
+  }
 }
 
 // ============================================================
@@ -560,307 +741,308 @@ return false;
 // ============================================================
 
 async function initializeBoosterRoleTracking() {
-const database = client.boosterRolesDB;
+  const database = client.boosterRolesDB;
 
-for (const guild of client.guilds.cache.values()) {
-let members;
+  for (const guild of client.guilds.cache.values()) {
+    let members;
 
-try {  
-  members = await guild.members.fetch();  
-} catch (error) {  
-  console.error(  
-    `[Booster Roles] Could not fetch members in ${guild.name}. Startup reconciliation skipped for this server:`,  
-    error  
-  );  
+    try {
+      members = await guild.members.fetch();
+    } catch (error) {
+      console.error(
+        `[Booster Roles] Could not fetch members in ${guild.name}. Startup reconciliation skipped for this server:`,
+        error
+      );
 
-  continue;  
-}  
+      continue;
+    }
 
-const activeBoosters = members.filter(  
-  member => Boolean(member.premiumSince)  
-);  
+    const activeBoosters = members.filter(
+      member => Boolean(member.premiumSince)
+    );
 
-console.log(  
-  `[Booster Roles] Detected ${activeBoosters.size} active boosters in ${guild.name}`  
-);  
+    console.log(
+      `[Booster Roles] Detected ${activeBoosters.size} active boosters in ${guild.name}`
+    );
 
-const records = database.prepare(`  
-  SELECT user_id, role_id  
-  FROM booster_roles  
-  WHERE guild_id = ?  
-`).all(guild.id);  
+    const records = database.prepare(`
+      SELECT user_id, role_id
+      FROM booster_roles
+      WHERE guild_id = ?
+    `).all(guild.id);
 
-for (const record of records) {  
-  const member = members.get(record.user_id);  
+    for (const record of records) {
+      const member = members.get(record.user_id);
 
-  if (!member || !member.premiumSince) {  
-    await deleteBoosterRoleForUser(  
-      guild,  
-      record.user_id,  
-      'Removing booster role because the member no longer boosts the server'  
-    );  
+      if (!member || !member.premiumSince) {
+        await deleteBoosterRoleForUser(
+          guild,
+          record.user_id,
+          'Removing booster role because the member no longer boosts the server'
+        );
 
-    continue;  
-  }  
+        continue;
+      }
 
-  if (!guild.roles.cache.has(record.role_id)) {  
-    database.prepare(`  
-      DELETE FROM booster_roles  
-      WHERE guild_id = ? AND user_id = ?  
-    `).run(guild.id, record.user_id);  
+      if (!guild.roles.cache.has(record.role_id)) {
+        database.prepare(`
+          DELETE FROM booster_roles
+          WHERE guild_id = ? AND user_id = ?
+        `).run(guild.id, record.user_id);
 
-    console.log(  
-      `[Booster Roles] Removed stale role record for ${record.user_id}`  
-    );  
-  }  
-}
-
-}
+        console.log(
+          `[Booster Roles] Removed stale role record for ${record.user_id}`
+        );
+      }
+    }
+  }
 }
 
 // ===== READY EVENT =====
 client.once('ready', async () => {
-console.log(✅ Logged in as ${client.user.tag});
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
-client.user.setPresence({
-activities: [
-{
-name: ':3',
-type: ActivityType.Playing,
-},
-],
-status: 'dnd',
-});
+  client.user.setPresence({
+    activities: [
+      {
+        name: ':3',
+        type: ActivityType.Playing,
+      },
+    ],
+    status: 'dnd',
+  });
 
-console.log('[Status] Set to: .gg/hanging');
+  console.log('[Status] Set to: .gg/hanging');
 
-// ==========================================================
-// NICKNAME BAN + REACTION BAN INITIALIZATION
-// ==========================================================
+  // ==========================================================
+  // NICKNAME BAN + REACTION BAN INITIALIZATION
+  // ==========================================================
 
-for (const commandName of ['nickban', 'reactionban']) {
-const restrictionCommand = client.commands?.get(commandName);
+  for (const commandName of ['nickban', 'reactionban']) {
+    const restrictionCommand = client.commands?.get(commandName);
 
-if (typeof restrictionCommand?.init !== 'function') {  
-  console.error(  
-    `[Restrictions] ${commandName} is missing init(client).`  
-  );  
-  continue;  
-}  
+    if (typeof restrictionCommand?.init !== 'function') {
+      console.error(
+        `[Restrictions] ${commandName} is missing init(client).`
+      );
+      continue;
+    }
 
-try {  
-  await restrictionCommand.init(client);  
+    try {
+      await restrictionCommand.init(client);
 
-  console.log(  
-    `[Restrictions] ${commandName} initialized successfully.`  
-  );  
-} catch (error) {  
-  console.error(  
-    `[Restrictions] Failed to initialize ${commandName}:`,  
-    error  
-  );  
-}
+      console.log(
+        `[Restrictions] ${commandName} initialized successfully.`
+      );
+    } catch (error) {
+      console.error(
+        `[Restrictions] Failed to initialize ${commandName}:`,
+        error
+      );
+    }
+  }
 
-}
+  economy.init(client);
+  shopSystem.init(client);
 
-economy.init(client);
-shopSystem.init(client);
+  // ===== CLAN SYSTEM INITIALIZATION =====
+  clanService.init(client);
+  console.log('[Clan] Clan system initialized');
 
-// ===== CLAN SYSTEM INITIALIZATION =====
-clanService.init(client);
-console.log('[Clan] Clan system initialized');
+  // ==========================================================
+  // STAFF APPLICATION SYSTEM
+  // ==========================================================
 
-// ==========================================================
-// STAFF APPLICATION SYSTEM
-// ==========================================================
+  const staffAppCommand = client.commands?.get('staffapp');
 
-const staffAppCommand = client.commands?.get('staffapp');
+  if (typeof staffAppCommand?.init === 'function') {
+    try {
+      await staffAppCommand.init(client);
+    } catch (error) {
+      console.error(
+        '[StaffApp] Startup initialization failed:',
+        error
+      );
+    }
+  } else {
+    console.warn(
+      '[StaffApp] Command or init(client) function not found. ' +
+      'Check commands/mod/staffapp.js and its exports.'
+    );
+  }
 
-if (typeof staffAppCommand?.init === 'function') {
-try {
-await staffAppCommand.init(client);
-} catch (error) {
-console.error(
-'[StaffApp] Startup initialization failed:',
-error
-);
-}
-} else {
-console.warn(
-'[StaffApp] Command or init(client) function not found. ' +
-'Check commands/mod/staffapp.js and its exports.'
-);
-}
+  // ==========================================================
+  // RESTORE PERSISTENT GAME SESSIONS
+  // ==========================================================
 
-// ==========================================================
-// RESTORE PERSISTENT GAME SESSIONS
-// ==========================================================
+  for (const commandName of ['betpool', 'horserace']) {
+    const gameCommand = client.commands?.get(commandName);
 
-for (const commandName of ['betpool', 'horserace']) {
-const gameCommand = client.commands?.get(commandName);
+    if (typeof gameCommand?.init !== 'function') {
+      console.warn(
+        `[Games] ${commandName} init hook not found.`
+      );
+      continue;
+    }
 
-if (typeof gameCommand?.init !== 'function') {  
-  console.warn(  
-    `[Games] ${commandName} init hook not found.`  
-  );  
-  continue;  
-}  
+    try {
+      await gameCommand.init(client);
+    } catch (error) {
+      console.error(
+        `[Games] Failed to restore ${commandName}:`,
+        error
+      );
+    }
+  }
 
-try {  
-  await gameCommand.init(client);  
-} catch (error) {  
-  console.error(  
-    `[Games] Failed to restore ${commandName}:`,  
-    error  
-  );  
-}
+  await messageTracker.init(client);
 
-}
+  birthdayService(client);
+  welcomeHandler(client);
+  afkModule.restoreAfk(client);
 
-await messageTracker.init(client);
+  // Reconcile booster roles.
+  try {
+    await initializeBoosterRoleTracking();
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Startup reconciliation failed:',
+      error
+    );
+  }
 
-birthdayService(client);
-welcomeHandler(client);
-afkModule.restoreAfk(client);
+  // ==========================================================
+  // LOAD AUTOMOD BLACKLIST CACHE
+  // ==========================================================
 
-// Reconcile booster roles.
-try {
-await initializeBoosterRoleTracking();
-} catch (error) {
-console.error(
-'[Booster Roles] Startup reconciliation failed:',
-error
-);
-}
+  try {
+    const guilds = automodDB.prepare(`
+      SELECT DISTINCT guild_id FROM blacklist_hard
+      UNION
+      SELECT DISTINCT guild_id FROM blacklist_soft
+    `).all();
 
-// ==========================================================
-// LOAD AUTOMOD BLACKLIST CACHE
-// ==========================================================
+    for (const { guild_id } of guilds) {
+      const hard = automodDB
+        .prepare(
+          'SELECT word FROM blacklist_hard WHERE guild_id = ?'
+        )
+        .all(guild_id)
+        .map(row => row.word);
 
-try {
-const guilds = automodDB.prepare(  SELECT DISTINCT guild_id FROM blacklist_hard   UNION   SELECT DISTINCT guild_id FROM blacklist_soft  ).all();
+      const soft = automodDB
+        .prepare(
+          'SELECT word FROM blacklist_soft WHERE guild_id = ?'
+        )
+        .all(guild_id)
+        .map(row => row.word);
 
-for (const { guild_id } of guilds) {  
-  const hard = automodDB  
-    .prepare(  
-      'SELECT word FROM blacklist_hard WHERE guild_id = ?'  
-    )  
-    .all(guild_id)  
-    .map(row => row.word);  
+      client.blacklistCache.set(guild_id, {
+        hard,
+        soft,
+      });
+    }
 
-  const soft = automodDB  
-    .prepare(  
-      'SELECT word FROM blacklist_soft WHERE guild_id = ?'  
-    )  
-    .all(guild_id)  
-    .map(row => row.word);  
+    console.log(
+      `[Blacklist] Loaded for ${client.blacklistCache.size} guilds`
+    );
 
-  client.blacklistCache.set(guild_id, {  
-    hard,  
-    soft,  
-  });  
-}  
+  } catch (error) {
+    console.error('[Blacklist] Cache failed:', error);
+  }
 
-console.log(  
-  `[Blacklist] Loaded for ${client.blacklistCache.size} guilds`  
-);
+  // ==========================================================
+  // AUTOMOD INITIALIZATION
+  // ==========================================================
 
-} catch (error) {
-console.error('[Blacklist] Cache failed:', error);
-}
+  try {
+    const automod = require('./handlers/automodHandler');
 
-// ==========================================================
-// AUTOMOD INITIALIZATION
-// ==========================================================
+    if (automod?.initAutomod) {
+      automod.initAutomod(client);
+    }
 
-try {
-const automod = require('./handlers/automodHandler');
+  } catch (error) {
+    console.error('Automod init failed:', error);
+  }
 
-if (automod?.initAutomod) {  
-  automod.initAutomod(client);  
-}
+  // ==========================================================
+  // RESTORE GIVEAWAYS
+  // ==========================================================
 
-} catch (error) {
-console.error('Automod init failed:', error);
-}
+  try {
+    const startGiveaway = require('./commands/startgiveaway');
 
-// ==========================================================
-// RESTORE GIVEAWAYS
-// ==========================================================
+    const all = giveawayDB
+      .prepare('SELECT * FROM giveaways')
+      .all();
 
-try {
-const startGiveaway = require('./commands/startgiveaway');
+    for (const giveaway of all) {
+      const delay = giveaway.end_timestamp - Date.now();
 
-const all = giveawayDB  
-  .prepare('SELECT * FROM giveaways')  
-  .all();  
+      if (delay <= 0) {
+        if (startGiveaway?.endGiveaway) {
+          startGiveaway.endGiveaway(
+            client,
+            giveaway.message_id
+          );
+        }
 
-for (const giveaway of all) {  
-  const delay = giveaway.end_timestamp - Date.now();  
+      } else {
+        setTimeout(() => {
+          if (startGiveaway?.endGiveaway) {
+            startGiveaway.endGiveaway(
+              client,
+              giveaway.message_id
+            );
+          }
+        }, delay);
+      }
+    }
 
-  if (delay <= 0) {  
-    if (startGiveaway?.endGiveaway) {  
-      startGiveaway.endGiveaway(  
-        client,  
-        giveaway.message_id  
-      );  
-    }  
+  } catch (error) {
+    if (error.code === 'MODULE_NOT_FOUND') {
+      console.log(
+        '[Giveaway] startgiveaway command not found - skipping restore'
+      );
+    } else {
+      console.error('[Giveaway] Restore failed:', error);
+    }
+  }
 
-  } else {  
-    setTimeout(() => {  
-      if (startGiveaway?.endGiveaway) {  
-        startGiveaway.endGiveaway(  
-          client,  
-          giveaway.message_id  
-        );  
-      }  
-    }, delay);  
-  }  
-}
-
-} catch (error) {
-if (error.code === 'MODULE_NOT_FOUND') {
-console.log(
-'[Giveaway] startgiveaway command not found - skipping restore'
-);
-} else {
-console.error('[Giveaway] Restore failed:', error);
-}
-}
-
-console.log('🚀 Bot fully operational');
+  console.log('🚀 Bot fully operational');
 });
 
 // ===== MESSAGE CREATE =====
 client.on('messageCreate', async message => {
-if (message.author.bot) return;
+  if (message.author.bot) return;
 
-// Run TikTok conversion independently.
-handleTikTokPreview(message).catch(error => {
-console.error('[TikTok] Unexpected error:', error);
-});
+  // Run TikTok conversion independently.
+  handleTikTokPreview(message).catch(error => {
+    console.error('[TikTok] Unexpected error:', error);
+  });
 
-// Existing handlers remain unchanged.
-await afkModule.handleMessage(client, message);
-await handleMessage(client, message);
-await messageTracker.handleMessage(client, message);
+  // Existing handlers remain unchanged.
+  await afkModule.handleMessage(client, message);
+  await handleMessage(client, message);
+  await messageTracker.handleMessage(client, message);
 
-try {
-if (client.automod?.checkMessage) {
-await client.automod.checkMessage(message);
-}
-} catch (error) {
-console.error('Automod error:', error);
-}
+  try {
+    if (client.automod?.checkMessage) {
+      await client.automod.checkMessage(message);
+    }
+  } catch (error) {
+    console.error('Automod error:', error);
+  }
 
-try {
-const watchwordCommand = require('./commands/misc/watchword');
+  try {
+    const watchwordCommand = require('./commands/misc/watchword');
 
-if (watchwordCommand?.checkWatchwords) {  
-  await watchwordCommand.checkWatchwords(client, message);  
-}
+    if (watchwordCommand?.checkWatchwords) {
+      await watchwordCommand.checkWatchwords(client, message);
+    }
 
-} catch (error) {}
+  } catch (error) {}
 });
 
 // ============================================================
@@ -868,35 +1050,35 @@ if (watchwordCommand?.checkWatchwords) {
 // ============================================================
 
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
-try {
-const previouslyBoosting = Boolean(oldMember.premiumSince);
-const currentlyBoosting = Boolean(newMember.premiumSince);
+  try {
+    const previouslyBoosting = Boolean(oldMember.premiumSince);
+    const currentlyBoosting = Boolean(newMember.premiumSince);
 
-if (!previouslyBoosting && currentlyBoosting) {  
-  console.log(  
-    `[Booster Roles] ${newMember.user.tag} started boosting ${newMember.guild.name}`  
-  );  
-  return;  
-}  
+    if (!previouslyBoosting && currentlyBoosting) {
+      console.log(
+        `[Booster Roles] ${newMember.user.tag} started boosting ${newMember.guild.name}`
+      );
+      return;
+    }
 
-if (previouslyBoosting && !currentlyBoosting) {  
-  console.log(  
-    `[Booster Roles] ${newMember.user.tag} stopped boosting ${newMember.guild.name}`  
-  );  
+    if (previouslyBoosting && !currentlyBoosting) {
+      console.log(
+        `[Booster Roles] ${newMember.user.tag} stopped boosting ${newMember.guild.name}`
+      );
 
-  await deleteBoosterRoleForUser(  
-    newMember.guild,  
-    newMember.id,  
-    'Deleting the member’s personal booster role after their boost ended'  
-  );  
-}
+      await deleteBoosterRoleForUser(
+        newMember.guild,
+        newMember.id,
+        'Deleting the member’s personal booster role after their boost ended'
+      );
+    }
 
-} catch (error) {
-console.error(
-'[Booster Roles] Member update tracking failed:',
-error
-);
-}
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Member update tracking failed:',
+      error
+    );
+  }
 });
 
 // ============================================================
@@ -904,44 +1086,46 @@ error
 // ============================================================
 
 client.on('roleDelete', role => {
-try {
-client.boosterRolesDB.prepare(  DELETE FROM booster_roles   WHERE guild_id = ? AND role_id = ?  ).run(role.guild.id, role.id);
+  try {
+    client.boosterRolesDB.prepare(`
+      DELETE FROM booster_roles
+      WHERE guild_id = ? AND role_id = ?
+    `).run(role.guild.id, role.id);
 
-} catch (error) {
-console.error(
-'[Booster Roles] Failed to clean deleted role record:',
-error
-);
-}
+  } catch (error) {
+    console.error(
+      '[Booster Roles] Failed to clean deleted role record:',
+      error
+    );
+  }
 });
 
 // ===== 1V1 BUTTON INTERACTIONS =====
 client.on('interactionCreate', async interaction => {
-if (!interaction.isButton()) return;
+  if (!interaction.isButton()) return;
 
-if (
-interaction.customId.startsWith('1v1_accept_') ||
-interaction.customId.startsWith('1v1_deny_')
-) {
-try {
-const {
-handleButtonInteraction,
-} = require('./commands/misc/1v1');
+  if (
+    interaction.customId.startsWith('1v1_accept_') ||
+    interaction.customId.startsWith('1v1_deny_')
+  ) {
+    try {
+      const {
+        handleButtonInteraction,
+      } = require('./commands/misc/1v1');
 
-await handleButtonInteraction(interaction);  
+      await handleButtonInteraction(interaction);
 
-} catch (error) {  
-  console.error('[1v1 Button]', error);  
+    } catch (error) {
+      console.error('[1v1 Button]', error);
 
-  if (!interaction.replied && !interaction.deferred) {  
-    interaction.reply({  
-      content: 'Something went wrong.',  
-      ephemeral: true,  
-    }).catch(() => {});  
-  }  
-}
-
-}
+      if (!interaction.replied && !interaction.deferred) {
+        interaction.reply({
+          content: 'Something went wrong.',
+          ephemeral: true,
+        }).catch(() => {});
+      }
+    }
+  }
 });
 
 // ============================================================
@@ -950,29 +1134,28 @@ await handleButtonInteraction(interaction);
 // ============================================================
 
 client.on('interactionCreate', async interaction => {
-if (!interaction.isButton()) return;
+  if (!interaction.isButton()) return;
 
-if (
-!String(interaction.customId || '').startsWith('claninvite:')
-) return;
+  if (
+    !String(interaction.customId || '').startsWith('claninvite:')
+  ) return;
 
-try {
-await clanCommand.handleInteraction(client, interaction);
+  try {
+    await clanCommand.handleInteraction(client, interaction);
 
-} catch (error) {
-console.error(
-'[Clan] Invitation button error:',
-error
-);
+  } catch (error) {
+    console.error(
+      '[Clan] Invitation button error:',
+      error
+    );
 
-if (!interaction.replied && !interaction.deferred) {  
-  await interaction.reply({  
-    content: 'The clan invitation could not be processed.',  
-    ephemeral: true,  
-  }).catch(() => {});  
-}
-
-}
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'The clan invitation could not be processed.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
+  }
 });
 
 // ============================================================
@@ -980,216 +1163,215 @@ if (!interaction.replied && !interaction.deferred) {
 // ============================================================
 
 client.on('interactionCreate', async interaction => {
-const customId = interaction.customId;
+  const customId = interaction.customId;
 
-if (
-typeof customId !== 'string' ||
-!customId.startsWith('staffapp:')
-) return;
+  if (
+    typeof customId !== 'string' ||
+    !customId.startsWith('staffapp:')
+  ) return;
 
-const staffAppCommand = client.commands?.get('staffapp');
+  const staffAppCommand = client.commands?.get('staffapp');
 
-if (
-typeof staffAppCommand?.handleInteraction !== 'function'
-) {
-if (!interaction.replied && !interaction.deferred) {
-await interaction.reply({
-content: 'The staff application system is unavailable.',
-ephemeral: true,
-}).catch(() => {});
-}
+  if (
+    typeof staffAppCommand?.handleInteraction !== 'function'
+  ) {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'The staff application system is unavailable.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
 
-return;
+    return;
+  }
 
-}
+  try {
+    await staffAppCommand.handleInteraction(client, interaction);
 
-try {
-await staffAppCommand.handleInteraction(client, interaction);
+  } catch (error) {
+    console.error(
+      '[StaffApp] Unhandled interaction error:',
+      error
+    );
 
-} catch (error) {
-console.error(
-'[StaffApp] Unhandled interaction error:',
-error
-);
-
-if (!interaction.replied && !interaction.deferred) {  
-  await interaction.reply({  
-    content: 'Something went wrong with the staff application.',  
-    ephemeral: true,  
-  }).catch(() => {});  
-}
-
-}
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'Something went wrong with the staff application.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
+  }
 });
 
 // ===== MESSAGE DELETE / SNIPE =====
 client.on('messageDelete', async message => {
-if (!message.guild || message.author?.bot) return;
+  if (!message.guild || message.author?.bot) return;
 
-const channelId = message.channel.id;
+  const channelId = message.channel.id;
 
-if (!client.snipes.has(channelId)) {
-client.snipes.set(channelId, []);
-}
+  if (!client.snipes.has(channelId)) {
+    client.snipes.set(channelId, []);
+  }
 
-let source = message;
+  let source = message;
 
-if (message.partial) {
-const fetched = await message.fetch().catch(() => null);
-if (fetched) source = fetched;
-}
+  if (message.partial) {
+    const fetched = await message.fetch().catch(() => null);
+    if (fetched) source = fetched;
+  }
 
-const media = [];
+  const media = [];
 
-for (const attachment of source.attachments?.values?.() || []) {
-media.push({
-type: 'attachment',
-url: attachment.url,
-proxyURL: attachment.proxyURL,
-contentType: attachment.contentType || null,
-name: attachment.name || null,
-});
-}
+  for (const attachment of source.attachments?.values?.() || []) {
+    media.push({
+      type: 'attachment',
+      url: attachment.url,
+      proxyURL: attachment.proxyURL,
+      contentType: attachment.contentType || null,
+      name: attachment.name || null,
+    });
+  }
 
-for (const embed of source.embeds || []) {
-const imageUrl =
-embed.image?.url ||
-embed.thumbnail?.url ||
-embed.url;
+  for (const embed of source.embeds || []) {
+    const imageUrl =
+      embed.image?.url ||
+      embed.thumbnail?.url ||
+      embed.url;
 
-if (imageUrl) {  
-  media.push({  
-    type: 'embed',  
-    url: imageUrl,  
-    proxyURL: imageUrl,  
-    contentType: embed.type === 'gifv' ? 'image/gif' : null,  
-    name: embed.title ||  
-      embed.provider?.name ||  
-      'embedded media',  
-  });  
-}
+    if (imageUrl) {
+      media.push({
+        type: 'embed',
+        url: imageUrl,
+        proxyURL: imageUrl,
+        contentType: embed.type === 'gifv' ? 'image/gif' : null,
+        name: embed.title ||
+          embed.provider?.name ||
+          'embedded media',
+      });
+    }
+  }
 
-}
+  const stickers = [
+    ...(source.stickers?.values?.() || []),
+  ].map(sticker => ({
+    name: sticker.name || 'sticker',
+  }));
 
-const stickers = [
-...(source.stickers?.values?.() || []),
-].map(sticker => ({
-name: sticker.name || 'sticker',
-}));
+  const arr = client.snipes.get(channelId);
 
-const arr = client.snipes.get(channelId);
+  arr.unshift({
+    content: source.content || '',
+    author: source.author || message.author,
 
-arr.unshift({
-content: source.content || '',
-author: source.author || message.author,
+    attachments: [
+      ...(source.attachments?.values?.() || []),
+    ].map(attachment => attachment.url),
 
-attachments: [  
-  ...(source.attachments?.values?.() || []),  
-].map(attachment => attachment.url),  
+    media,
+    stickers,
 
-media,  
-stickers,  
+    embeds: (source.embeds || []).map(embed => ({
+      type: embed.type || null,
+      url: embed.url || null,
+      title: embed.title || null,
 
-embeds: (source.embeds || []).map(embed => ({  
-  type: embed.type || null,  
-  url: embed.url || null,  
-  title: embed.title || null,  
+      image: embed.image
+        ? { url: embed.image.url }
+        : null,
 
-  image: embed.image  
-    ? { url: embed.image.url }  
-    : null,  
+      thumbnail: embed.thumbnail
+        ? { url: embed.thumbnail.url }
+        : null,
 
-  thumbnail: embed.thumbnail  
-    ? { url: embed.thumbnail.url }  
-    : null,  
+      provider: embed.provider
+        ? { name: embed.provider.name || null }
+        : null,
+    })),
 
-  provider: embed.provider  
-    ? { name: embed.provider.name || null }  
-    : null,  
-})),  
+    createdAt:
+      source.createdAt ||
+      message.createdAt ||
+      new Date(),
+  });
 
-createdAt:  
-  source.createdAt ||  
-  message.createdAt ||  
-  new Date(),
-
-});
-
-if (arr.length > 15) arr.pop();
+  if (arr.length > 15) arr.pop();
 });
 
 // ===== MESSAGE UPDATE / EDIT SNIPE =====
 client.on('messageUpdate', (oldMsg, newMsg) => {
-if (
-!oldMsg.guild ||
-oldMsg.author?.bot ||
-oldMsg.content === newMsg.content
-) return;
+  if (
+    !oldMsg.guild ||
+    oldMsg.author?.bot ||
+    oldMsg.content === newMsg.content
+  ) return;
 
-const channelId = oldMsg.channel.id;
+  const channelId = oldMsg.channel.id;
 
-if (!client.edits.has(channelId)) {
-client.edits.set(channelId, []);
-}
+  if (!client.edits.has(channelId)) {
+    client.edits.set(channelId, []);
+  }
 
-const arr = client.edits.get(channelId);
+  const arr = client.edits.get(channelId);
 
-arr.unshift({
-author: oldMsg.author,
-oldContent: oldMsg.content || '',
-newContent: newMsg.content || '',
-createdAt: newMsg.editedAt || new Date(),
-});
+  arr.unshift({
+    author: oldMsg.author,
+    oldContent: oldMsg.content || '',
+    newContent: newMsg.content || '',
+    createdAt: newMsg.editedAt || new Date(),
+  });
 
-if (arr.length > 15) arr.pop();
+  if (arr.length > 15) arr.pop();
 });
 
 // ===== REACTION SNIPE =====
 // Ignore reactions from members who are reaction-banned.
 client.on('messageReactionAdd', (reaction, user) => {
-if (user.bot) return;
+  if (user.bot) return;
 
-const guildId =
-reaction.message.guildId ||
-reaction.message.guild?.id;
+  const guildId =
+    reaction.message.guildId ||
+    reaction.message.guild?.id;
 
-if (
-guildId &&
-client.__reactionBanSystemReady &&
-client.automodDB
-) {
-try {
-const restricted = client.automodDB.prepare(  SELECT 1   FROM reaction_bans   WHERE guild_id = ? AND user_id = ?  ).get(guildId, user.id);
+  if (
+    guildId &&
+    client.__reactionBanSystemReady &&
+    client.automodDB
+  ) {
+    try {
+      const restricted = client.automodDB.prepare(`
+        SELECT 1
+        FROM reaction_bans
+        WHERE guild_id = ? AND user_id = ?
+      `).get(guildId, user.id);
 
-if (restricted) return;  
+      if (restricted) return;
 
-} catch (error) {  
-  console.error(  
-    '[Reaction Snipe] Failed to check reaction restriction:',  
-    error  
-  );  
+    } catch (error) {
+      console.error(
+        '[Reaction Snipe] Failed to check reaction restriction:',
+        error
+      );
 
-  // Fail closed if restriction status cannot be verified.  
-  return;  
-}
+      // Fail closed if restriction status cannot be verified.
+      return;
+    }
+  }
 
-}
+  const channelId = reaction.message.channel.id;
 
-const channelId = reaction.message.channel.id;
+  if (!client.reactionSnipes.has(channelId)) {
+    client.reactionSnipes.set(channelId, []);
+  }
 
-if (!client.reactionSnipes.has(channelId)) {
-client.reactionSnipes.set(channelId, []);
-}
+  const arr = client.reactionSnipes.get(channelId);
 
-const arr = client.reactionSnipes.get(channelId);
+  arr.unshift({
+    emoji: reaction.emoji.toString(),
+    user,
+    createdAt: new Date(),
+  });
 
-arr.unshift({
-emoji: reaction.emoji.toString(),
-user,
-createdAt: new Date(),
-});
-
-if (arr.length > 15) arr.pop();
+  if (arr.length > 15) arr.pop();
 });
 
 // ===== LOAD COMMANDS =====
@@ -1197,49 +1379,49 @@ loadCommands(client);
 
 // ===== SHUTDOWN =====
 function closeDatabases() {
-console.log('[Shutdown] Closing databases...');
+  console.log('[Shutdown] Closing databases...');
 
-try {
-if (prefixlessDB?.open) prefixlessDB.close();
-if (quarantineDB?.open) quarantineDB.close();
-if (giveawayDB?.open) giveawayDB.close();
-if (prefixDB?.open) prefixDB.close();
-if (fameDB?.open) fameDB.close();
-if (watchwordDB?.open) watchwordDB.close();
-if (automodDB?.open) automodDB.close();
-if (battleDB?.open) battleDB.close();
-if (spyDB?.open) spyDB.close();
-if (boosterRolesDB?.open) boosterRolesDB.close();
+  try {
+    if (prefixlessDB?.open) prefixlessDB.close();
+    if (quarantineDB?.open) quarantineDB.close();
+    if (giveawayDB?.open) giveawayDB.close();
+    if (prefixDB?.open) prefixDB.close();
+    if (fameDB?.open) fameDB.close();
+    if (watchwordDB?.open) watchwordDB.close();
+    if (automodDB?.open) automodDB.close();
+    if (battleDB?.open) battleDB.close();
+    if (spyDB?.open) spyDB.close();
+    if (boosterRolesDB?.open) boosterRolesDB.close();
 
-if (client.vcDB?.open) client.vcDB.close();  
-if (client.msgTrackerDB?.open) client.msgTrackerDB.close();  
+    if (client.vcDB?.open) client.vcDB.close();
+    if (client.msgTrackerDB?.open) client.msgTrackerDB.close();
 
-// Clan shutdown cleanup.  
-try {  
-  clanService.close(client);  
-} catch (error) {  
-  console.error(  
-    '[Clan] Shutdown cleanup failed:',  
-    error  
-  );  
-}  
+    // Clan shutdown cleanup.
+    try {
+      clanService.close(client);
+    } catch (error) {
+      console.error(
+        '[Clan] Shutdown cleanup failed:',
+        error
+      );
+    }
 
-if (client.economyDB?.open) client.economyDB.close();  
-if (client.shopDB?.open) client.shopDB.close();  
+    if (client.economyDB?.open) client.economyDB.close();
+    if (client.shopDB?.open) client.shopDB.close();
 
-// STAFF APPLICATION DATABASE  
-if (client.staffAppDB?.open) client.staffAppDB.close();  
+    // STAFF APPLICATION DATABASE
+    if (client.staffAppDB?.open) client.staffAppDB.close();
 
-console.log('[Shutdown] Databases closed successfully');
+    console.log('[Shutdown] Databases closed successfully');
 
-} catch (error) {
-console.error(
-'[Shutdown] Error closing databases:',
-error
-);
-}
+  } catch (error) {
+    console.error(
+      '[Shutdown] Error closing databases:',
+      error
+    );
+  }
 
-process.exit(0);
+  process.exit(0);
 }
 
 process.on('SIGINT', closeDatabases);
