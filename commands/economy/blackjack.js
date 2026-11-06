@@ -9,6 +9,7 @@ const {
   useCooldown,
   boostProfit,
 } = require('../../handlers/gamblingHelpers');
+const clanService = require('../../handlers/clanService');
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
@@ -147,6 +148,16 @@ function renderEmbed(session, revealDealer = false, status = 'Your move') {
   });
 }
 
+async function trackClanResult(session, outcome) {
+  try {
+    const result = outcome === 'win' ? true : outcome === 'loss' ? false : null;
+    await clanService.trackGame(session.messageRef, 'blackjack', result);
+  } catch (error) {
+    // Quest tracking must never interfere with a settled Blackjack game.
+    console.error('[Blackjack] Clan quest tracking failed:', error);
+  }
+}
+
 async function finalizeGame(session, messageLike = null, reason = 'stand') {
   if (session.ended) return;
   session.ended = true;
@@ -225,6 +236,9 @@ async function finalizeGame(session, messageLike = null, reason = 'stand') {
   } else if (session.message?.edit) {
     await session.message.edit(payload).catch(() => {});
   }
+
+  // Record exactly one completed hand: win, loss, or push.
+  await trackClanResult(session, outcome);
 }
 
 module.exports = {
