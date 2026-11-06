@@ -1,15 +1,14 @@
 const {
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
+EmbedBuilder,
+ActionRowBuilder,
+ButtonBuilder,
+ButtonStyle,
 } = require('discord.js');
 const {
-  formatDuration,
-  useCooldown,
-  boostProfit,
+formatDuration,
+useCooldown,
+boostProfit,
 } = require('../../handlers/gamblingHelpers');
-const clanService = require('../../handlers/clanService');
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
@@ -19,411 +18,401 @@ const COOLDOWN_MS = 10_000;
 const activeGames = new Map();
 
 function gameKey(guildId, userId) {
-  return `${guildId}:${userId}`;
+return ${guildId}:${userId};
 }
 
 function buildEmbed(message, data = {}) {
-  if (typeof message?.createEmbed === 'function') {
-    const embed = message.createEmbed({
-      title: data.title,
-      description: data.description,
-      thumbnail: data.thumbnail,
-      footer: data.footer,
-    });
+if (typeof message?.createEmbed === 'function') {
+const embed = message.createEmbed({
+title: data.title,
+description: data.description,
+thumbnail: data.thumbnail,
+footer: data.footer,
+});
 
-    if (data.thumbnail) embed.setThumbnail(data.thumbnail);
-    if (data.footer) {
-      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-      else embed.setFooter(data.footer);
-    }
+if (data.thumbnail) embed.setThumbnail(data.thumbnail);  
+if (data.footer) {  
+  if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });  
+  else embed.setFooter(data.footer);  
+}  
 
-    return embed;
-  }
+return embed;
 
-  const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
-  if (data.title) embed.setTitle(data.title);
-  if (data.description) embed.setDescription(data.description);
-  if (data.thumbnail) embed.setThumbnail(data.thumbnail);
-  if (data.footer) {
-    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-    else embed.setFooter(data.footer);
-  }
-  return embed;
+}
+
+const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
+if (data.title) embed.setTitle(data.title);
+if (data.description) embed.setDescription(data.description);
+if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+if (data.footer) {
+if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
+else embed.setFooter(data.footer);
+}
+return embed;
 }
 
 function money(client, amount) {
-  return client?.economy?.formatCurrency
-    ? client.economy.formatCurrency(amount)
-    : `${Number(amount || 0).toLocaleString('en-US')} Crowns`;
+return client?.economy?.formatCurrency
+? client.economy.formatCurrency(amount)
+: ${Number(amount || 0).toLocaleString('en-US')} Crowns;
 }
 
 function createDeck() {
-  const suits = ['♠', '♥', '♦', '♣'];
-  const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-  const deck = [];
+const suits = ['♠', '♥', '♦', '♣'];
+const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+const deck = [];
 
-  for (const suit of suits) {
-    for (const rank of ranks) {
-      deck.push({ rank, suit });
-    }
-  }
+for (const suit of suits) {
+for (const rank of ranks) {
+deck.push({ rank, suit });
+}
+}
 
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
+for (let i = deck.length - 1; i > 0; i--) {
+const j = Math.floor(Math.random() * (i + 1));
+[deck[i], deck[j]] = [deck[j], deck[i]];
+}
 
-  return deck;
+return deck;
 }
 
 function drawCard(deck) {
-  return deck.pop();
+return deck.pop();
 }
 
 function cardString(card) {
-  return `${card.rank}${card.suit}`;
+return ${card.rank}${card.suit};
 }
 
 function handValue(hand) {
-  let total = 0;
-  let aces = 0;
+let total = 0;
+let aces = 0;
 
-  for (const card of hand) {
-    if (card.rank === 'A') {
-      total += 11;
-      aces += 1;
-    } else if (['K', 'Q', 'J'].includes(card.rank)) {
-      total += 10;
-    } else {
-      total += parseInt(card.rank, 10);
-    }
-  }
+for (const card of hand) {
+if (card.rank === 'A') {
+total += 11;
+aces += 1;
+} else if (['K', 'Q', 'J'].includes(card.rank)) {
+total += 10;
+} else {
+total += parseInt(card.rank, 10);
+}
+}
 
-  while (total > 21 && aces > 0) {
-    total -= 10;
-    aces -= 1;
-  }
+while (total > 21 && aces > 0) {
+total -= 10;
+aces -= 1;
+}
 
-  return total;
+return total;
 }
 
 function isNaturalBlackjack(hand) {
-  return hand.length === 2 && handValue(hand) === 21;
+return hand.length === 2 && handValue(hand) === 21;
 }
 
 function activeRow() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary),
-  );
+return new ActionRowBuilder().addComponents(
+new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary),
+new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary),
+);
 }
 
 function disabledRow() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary).setDisabled(true),
-    new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary).setDisabled(true),
-  );
+return new ActionRowBuilder().addComponents(
+new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary).setDisabled(true),
+new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary).setDisabled(true),
+);
 }
 
 function renderEmbed(session, revealDealer = false, status = 'Your move') {
-  const playerHand = session.playerHand.map(cardString).join('  ');
-  const dealerHand = revealDealer
-    ? session.dealerHand.map(cardString).join('  ')
-    : `${cardString(session.dealerHand[0])}  Hidden`;
+const playerHand = session.playerHand.map(cardString).join('  ');
+const dealerHand = revealDealer
+? session.dealerHand.map(cardString).join('  ')
+: ${cardString(session.dealerHand[0])}  Hidden;
 
-  const playerTotal = handValue(session.playerHand);
-  const dealerTotal = revealDealer ? handValue(session.dealerHand) : handValue([session.dealerHand[0]]);
+const playerTotal = handValue(session.playerHand);
+const dealerTotal = revealDealer ? handValue(session.dealerHand) : handValue([session.dealerHand[0]]);
 
-  return buildEmbed(session.messageRef || session.message || session.clientMessage, {
-    title: '🃏 Blackjack',
-    description:
-      `**Bet:** ${money(session.client, session.bet)}\n\n` +
-      `**Your Hand:**\n${playerHand || '—'}\n` +
-      `**Total:** ${playerTotal}\n\n` +
-      `**Dealer Hand:**\n${dealerHand || '—'}\n` +
-      `**Total:** ${revealDealer ? dealerTotal : 'Hidden'}\n\n` +
-      `**Status:** ${status}`,
-    thumbnail: session.user.displayAvatarURL({ size: 256 }),
-    footer: `Requested by ${session.user.username}`,
-  });
-}
-
-async function trackClanResult(session, outcome) {
-  try {
-    const result = outcome === 'win' ? true : outcome === 'loss' ? false : null;
-    await clanService.trackGame(session.messageRef, 'blackjack', result);
-  } catch (error) {
-    // Quest tracking must never interfere with a settled Blackjack game.
-    console.error('[Blackjack] Clan quest tracking failed:', error);
-  }
+return buildEmbed(session.messageRef || session.message || session.clientMessage, {
+title: '🃏 Blackjack',
+description:
+**Bet:** ${money(session.client, session.bet)}\n\n +
+**Your Hand:**\n${playerHand || '—'}\n +
+**Total:** ${playerTotal}\n\n +
+**Dealer Hand:**\n${dealerHand || '—'}\n +
+**Total:** ${revealDealer ? dealerTotal : 'Hidden'}\n\n +
+**Status:** ${status},
+thumbnail: session.user.displayAvatarURL({ size: 256 }),
+footer: Requested by ${session.user.username},
+});
 }
 
 async function finalizeGame(session, messageLike = null, reason = 'stand') {
-  if (session.ended) return;
-  session.ended = true;
-  activeGames.delete(session.key);
+if (session.ended) return;
+session.ended = true;
+activeGames.delete(session.key);
 
-  let outcome = 'push';
-  let status = 'Tie';
-  let payout = 0;
+let outcome = 'push';
+let status = 'Tie';
+let payout = 0;
 
-  const playerTotal = handValue(session.playerHand);
+const playerTotal = handValue(session.playerHand);
 
-  if (playerTotal > 21) {
-    outcome = 'loss';
-    status = 'Bust';
-  } else {
-    while (handValue(session.dealerHand) < 17) {
-      session.dealerHand.push(drawCard(session.deck));
-    }
+if (playerTotal > 21) {
+outcome = 'loss';
+status = 'Bust';
+} else {
+while (handValue(session.dealerHand) < 17) {
+session.dealerHand.push(drawCard(session.deck));
+}
 
-    const dealerTotal = handValue(session.dealerHand);
+const dealerTotal = handValue(session.dealerHand);  
 
-    if (dealerTotal > 21 || playerTotal > dealerTotal) {
-      outcome = 'win';
-      status = reason === 'natural' ? 'Blackjack' : 'Win';
+if (dealerTotal > 21 || playerTotal > dealerTotal) {  
+  outcome = 'win';  
+  status = reason === 'natural' ? 'Blackjack' : 'Win';  
 
-      const baseProfit = reason === 'natural' ? Math.round(session.bet * 1.5) : session.bet;
-      const boostedProfit = boostProfit(session.client, session.guild.id, session.user.id, baseProfit);
-      payout = session.bet + boostedProfit;
+  const baseProfit = reason === 'natural' ? Math.round(session.bet * 1.5) : session.bet;  
+  const boostedProfit = boostProfit(session.client, session.guild.id, session.user.id, baseProfit);  
+  payout = session.bet + boostedProfit;  
 
-      session.client.economy.addCrowns(session.guild.id, session.user.id, payout, {
-        type: 'blackjack_win',
-        reason: reason === 'natural' ? 'Natural blackjack' : 'Blackjack win',
-        actorId: session.user.id,
-      });
-    } else if (playerTotal < dealerTotal) {
-      outcome = 'loss';
-      status = 'Lose';
-    } else {
-      outcome = 'push';
-      status = 'Push';
-      payout = session.bet;
+  session.client.economy.addCrowns(session.guild.id, session.user.id, payout, {  
+    type: 'blackjack_win',  
+    reason: reason === 'natural' ? 'Natural blackjack' : 'Blackjack win',  
+    actorId: session.user.id,  
+  });  
+} else if (playerTotal < dealerTotal) {  
+  outcome = 'loss';  
+  status = 'Lose';  
+} else {  
+  outcome = 'push';  
+  status = 'Push';  
+  payout = session.bet;  
 
-      session.client.economy.addCrowns(session.guild.id, session.user.id, payout, {
-        type: 'blackjack_push',
-        reason: 'Blackjack push refund',
-        actorId: session.user.id,
-      });
-    }
-  }
+  session.client.economy.addCrowns(session.guild.id, session.user.id, payout, {  
+    type: 'blackjack_push',  
+    reason: 'Blackjack push refund',  
+    actorId: session.user.id,  
+  });  
+}
 
-  const finalPlayerTotal = handValue(session.playerHand);
-  const finalDealerTotal = handValue(session.dealerHand);
+}
 
-  const resultText =
-    outcome === 'win'
-      ? `### ✅ You Won!\nYou earned **${money(session.client, payout - session.bet)}**.`
-      : outcome === 'push'
-        ? `### 🤝 Push!\nYour bet has been refunded.`
-        : `### ❌ You Lost!\nYou lost **${money(session.client, session.bet)}**.`;
+const finalPlayerTotal = handValue(session.playerHand);
+const finalDealerTotal = handValue(session.dealerHand);
 
-  const embed = buildEmbed(session.messageRef || messageLike || session.message, {
-    title: '🃏 Blackjack',
-    description:
-      `**Bet:** ${money(session.client, session.bet)}\n\n` +
-      `**Your Hand:**\n${session.playerHand.map(cardString).join('  ')} (**${finalPlayerTotal}**)\n\n` +
-      `**Dealer Hand:**\n${session.dealerHand.map(cardString).join('  ')} (**${finalDealerTotal}**)\n\n` +
-      `${resultText}`,
-    thumbnail: session.user.displayAvatarURL({ size: 256 }),
-    footer: `Requested by ${session.user.username}`,
-  });
+const resultText =
+outcome === 'win'
+? ### ✅ You Won!\nYou earned **${money(session.client, payout - session.bet)}**.
+: outcome === 'push'
+? ### 🤝 Push!\nYour bet has been refunded.
+: ### ❌ You Lost!\nYou lost **${money(session.client, session.bet)}**.;
 
-  const payload = { embeds: [embed], components: [disabledRow()] };
+const embed = buildEmbed(session.messageRef || messageLike || session.message, {
+title: '🃏 Blackjack',
+description:
+**Bet:** ${money(session.client, session.bet)}\n\n +
+**Your Hand:**\n${session.playerHand.map(cardString).join('  ')} (**${finalPlayerTotal}**)\n\n +
+**Dealer Hand:**\n${session.dealerHand.map(cardString).join('  ')} (**${finalDealerTotal}**)\n\n +
+${resultText},
+thumbnail: session.user.displayAvatarURL({ size: 256 }),
+footer: Requested by ${session.user.username},
+});
 
-  if (messageLike?.message?.edit) {
-    await messageLike.message.edit(payload).catch(() => {});
-  } else if (session.message?.edit) {
-    await session.message.edit(payload).catch(() => {});
-  }
+const payload = { embeds: [embed], components: [disabledRow()] };
 
-  // Record exactly one completed hand: win, loss, or push.
-  await trackClanResult(session, outcome);
+if (messageLike?.message?.edit) {
+await messageLike.message.edit(payload).catch(() => {});
+} else if (session.message?.edit) {
+await session.message.edit(payload).catch(() => {});
+}
 }
 
 module.exports = {
-  name: 'blackjack',
-  aliases: ['bj', '21'],
-  description: 'Play blackjack against the dealer.',
-  category: 'economy',
-  usage: '$blackjack <amount>',
+name: 'blackjack',
+aliases: ['bj', '21'],
+description: 'Play blackjack against the dealer.',
+category: 'economy',
+usage: '$blackjack <amount>',
 
-  async execute(client, message, args) {
-    if (!message.guild) return;
+async execute(client, message, args) {
+if (!message.guild) return;
 
-    if (!client.economy) {
-      return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Economy Unavailable',
-            description: 'The economy system is not ready.',
-          }),
-        ],
-      });
-    }
+if (!client.economy) {  
+  return message.reply({  
+    embeds: [  
+      buildEmbed(message, {  
+        title: 'Economy Unavailable',  
+        description: 'The economy system is not ready.',  
+      }),  
+    ],  
+  });  
+}  
 
-    const key = gameKey(message.guild.id, message.author.id);
+const key = gameKey(message.guild.id, message.author.id);  
 
-    // Only blocks the SAME player from starting a second hand.
-    if (activeGames.has(key)) {
-      return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Blackjack',
-            description: 'You already have a blackjack game running. Finish it first.',
-          }),
-        ],
-      });
-    }
+// Only blocks the SAME player from starting a second hand.  
+if (activeGames.has(key)) {  
+  return message.reply({  
+    embeds: [  
+      buildEmbed(message, {  
+        title: 'Blackjack',  
+        description: 'You already have a blackjack game running. Finish it first.',  
+      }),  
+    ],  
+  });  
+}  
 
-    const bet = parseInt(args[0], 10);
-    if (!Number.isInteger(bet) || bet <= 0) {
-      return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Blackjack',
-            description: 'Use: `$blackjack <amount>`',
-          }),
-        ],
-      });
-    }
+const bet = parseInt(args[0], 10);  
+if (!Number.isInteger(bet) || bet <= 0) {  
+  return message.reply({  
+    embeds: [  
+      buildEmbed(message, {  
+        title: 'Blackjack',  
+        description: 'Use: `$blackjack <amount>`',  
+      }),  
+    ],  
+  });  
+}  
 
-    if (bet > MAX_BET) {
-      return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Blackjack',
-            description: `Maximum bet is **${money(client, MAX_BET)}**.`,
-          }),
-        ],
-      });
-    }
+if (bet > MAX_BET) {  
+  return message.reply({  
+    embeds: [  
+      buildEmbed(message, {  
+        title: 'Blackjack',  
+        description: `Maximum bet is **${money(client, MAX_BET)}**.`,  
+      }),  
+    ],  
+  });  
+}  
 
-    const balance = client.economy.getBalance(message.guild.id, message.author.id);
-    if (balance < bet) {
-      return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Blackjack',
-            description: `You only have **${money(client, balance)}**.`,
-          }),
-        ],
-      });
-    }
+const balance = client.economy.getBalance(message.guild.id, message.author.id);  
+if (balance < bet) {  
+  return message.reply({  
+    embeds: [  
+      buildEmbed(message, {  
+        title: 'Blackjack',  
+        description: `You only have **${money(client, balance)}**.`,  
+      }),  
+    ],  
+  });  
+}  
 
-    const remaining = useCooldown(message.guild.id, message.author.id, 'blackjack', COOLDOWN_MS);
-    if (remaining > 0) {
-      return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Blackjack',
-            description: `You are on cooldown for **${formatDuration(remaining)}**.`,
-          }),
-        ],
-      });
-    }
+const remaining = useCooldown(message.guild.id, message.author.id, 'blackjack', COOLDOWN_MS);  
+if (remaining > 0) {  
+  return message.reply({  
+    embeds: [  
+      buildEmbed(message, {  
+        title: 'Blackjack',  
+        description: `You are on cooldown for **${formatDuration(remaining)}**.`,  
+      }),  
+    ],  
+  });  
+}  
 
-    const removed = client.economy.removeCrowns(message.guild.id, message.author.id, bet, {
-      type: 'blackjack_bet',
-      reason: 'Blackjack bet',
-      actorId: message.author.id,
-    });
+const removed = client.economy.removeCrowns(message.guild.id, message.author.id, bet, {  
+  type: 'blackjack_bet',  
+  reason: 'Blackjack bet',  
+  actorId: message.author.id,  
+});  
 
-    if (!removed) {
-      return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Blackjack',
-            description: 'You do not have enough Crowns.',
-          }),
-        ],
-      });
-    }
+if (!removed) {  
+  return message.reply({  
+    embeds: [  
+      buildEmbed(message, {  
+        title: 'Blackjack',  
+        description: 'You do not have enough Crowns.',  
+      }),  
+    ],  
+  });  
+}  
 
-    const deck = createDeck();
-    const session = {
-      key,
-      client,
-      guild: message.guild,
-      channel: message.channel,
-      message: null,
-      user: message.author,
-      bet,
-      deck,
-      playerHand: [drawCard(deck), drawCard(deck)],
-      dealerHand: [drawCard(deck), drawCard(deck)],
-      ended: false,
-      messageRef: message,
-    };
+const deck = createDeck();  
+const session = {  
+  key,  
+  client,  
+  guild: message.guild,  
+  channel: message.channel,  
+  message: null,  
+  user: message.author,  
+  bet,  
+  deck,  
+  playerHand: [drawCard(deck), drawCard(deck)],  
+  dealerHand: [drawCard(deck), drawCard(deck)],  
+  ended: false,  
+  messageRef: message,  
+};  
 
-    activeGames.set(key, session);
+activeGames.set(key, session);  
 
-    try {
-      session.message = await message.reply({
-        embeds: [renderEmbed(session, false, 'Your move')],
-        components: [activeRow()],
-      });
-    } catch (error) {
-      // Could not even show the game: give the bet back and free the slot.
-      console.error('[Blackjack] Could not send game message:', error?.message || error);
-      activeGames.delete(key);
+try {  
+  session.message = await message.reply({  
+    embeds: [renderEmbed(session, false, 'Your move')],  
+    components: [activeRow()],  
+  });  
+} catch (error) {  
+  // Could not even show the game: give the bet back and free the slot.  
+  console.error('[Blackjack] Could not send game message:', error?.message || error);  
+  activeGames.delete(key);  
 
-      client.economy.addCrowns(message.guild.id, message.author.id, bet, {
-        type: 'blackjack_refund',
-        reason: 'Blackjack failed to start',
-        actorId: message.author.id,
-      });
+  client.economy.addCrowns(message.guild.id, message.author.id, bet, {  
+    type: 'blackjack_refund',  
+    reason: 'Blackjack failed to start',  
+    actorId: message.author.id,  
+  });  
 
-      return;
-    }
+  return;  
+}  
 
-    if (isNaturalBlackjack(session.playerHand) || isNaturalBlackjack(session.dealerHand)) {
-      const reason = isNaturalBlackjack(session.playerHand) ? 'natural' : 'stand';
-      await finalizeGame(session, session.message, reason);
-      return;
-    }
+if (isNaturalBlackjack(session.playerHand) || isNaturalBlackjack(session.dealerHand)) {  
+  const reason = isNaturalBlackjack(session.playerHand) ? 'natural' : 'stand';  
+  await finalizeGame(session, session.message, reason);  
+  return;  
+}  
 
-    const collector = session.message.createMessageComponentCollector({
-      time: 120_000,
-      filter: i => ['bj_hit', 'bj_stand'].includes(i.customId),
-    });
+const collector = session.message.createMessageComponentCollector({  
+  time: 120_000,  
+  filter: i => ['bj_hit', 'bj_stand'].includes(i.customId),  
+});  
 
-    collector.on('collect', async interaction => {
-      if (interaction.user.id !== message.author.id) {
-        return interaction.reply({
-          content: 'This is not your blackjack hand.',
-          ephemeral: true,
-        }).catch(() => {});
-      }
+collector.on('collect', async interaction => {  
+  if (interaction.user.id !== message.author.id) {  
+    return interaction.reply({  
+      content: 'This is not your blackjack hand.',  
+      ephemeral: true,  
+    }).catch(() => {});  
+  }  
 
-      await interaction.deferUpdate().catch(() => {});
+  await interaction.deferUpdate().catch(() => {});  
 
-      if (session.ended) return;
+  if (session.ended) return;  
 
-      if (interaction.customId === 'bj_hit') {
-        session.playerHand.push(drawCard(session.deck));
-        const total = handValue(session.playerHand);
+  if (interaction.customId === 'bj_hit') {  
+    session.playerHand.push(drawCard(session.deck));  
+    const total = handValue(session.playerHand);  
 
-        if (total >= 21) {
-          await finalizeGame(session, session.message, total === 21 ? 'stand' : 'bust');
-          return;
-        }
+    if (total >= 21) {  
+      await finalizeGame(session, session.message, total === 21 ? 'stand' : 'bust');  
+      return;  
+    }  
 
-        await session.message.edit({
-          embeds: [renderEmbed(session, false, 'Your move')],
-          components: [activeRow()],
-        }).catch(() => {});
-      }
+    await session.message.edit({  
+      embeds: [renderEmbed(session, false, 'Your move')],  
+      components: [activeRow()],  
+    }).catch(() => {});  
+  }  
 
-      if (interaction.customId === 'bj_stand') {
-        await finalizeGame(session, session.message, 'stand');
-      }
-    });
+  if (interaction.customId === 'bj_stand') {  
+    await finalizeGame(session, session.message, 'stand');  
+  }  
+});  
 
-    collector.on('end', async () => {
-      if (!session.ended) {
-        await finalizeGame(session, session.message, 'stand');
-      }
-    });
-  },
+collector.on('end', async () => {  
+  if (!session.ended) {  
+    await finalizeGame(session, session.message, 'stand');  
+  }  
+});
+
+},
 };
