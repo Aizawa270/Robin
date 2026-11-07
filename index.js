@@ -1,5 +1,3 @@
-// index.js
-
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -1041,7 +1039,6 @@ client.on('messageCreate', async message => {
     if (watchwordCommand?.checkWatchwords) {
       await watchwordCommand.checkWatchwords(client, message);
     }
-
   } catch (error) {}
 });
 
