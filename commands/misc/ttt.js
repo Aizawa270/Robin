@@ -5,15 +5,20 @@ const {
     ComponentType,
 } = require('discord.js');
 
+const { randomUUID } = require('node:crypto');
 const { createEmbed } = require('../../handlers/universalHelper');
 
-// Tracks active games in memory.
-const activeGames = new Map();
+// --------------------------------------------------
+// CONFIGURATION
+// --------------------------------------------------
 
 const GAME_TIMEOUT = 180_000; // 3 minutes
 
+// Tracks players currently participating in games.
+const activeGames = new Map();
+
 // --------------------------------------------------
-// UNIVERSAL HELPER EMBED
+// UNIVERSAL HELPER
 // --------------------------------------------------
 
 function createGameEmbed(client, message, options = {}) {
@@ -34,17 +39,15 @@ function getServerFooter(guild, extra = 'Tic Tac Toe') {
 class TicTacToeGame {
     constructor(client, commandMessage, player1, player2) {
         this.client = client;
-
-        // The original command message provides the guild
-        // context required by UniversalHelper.
         this.commandMessage = commandMessage;
 
-        // Both players are GuildMember objects.
         this.player1 = player1;
         this.player2 = player2;
 
-        // Player 1 always starts as X.
         this.currentTurn = player1;
+
+        // Unique ID prevents button ID collisions between games.
+        this.gameId = randomUUID().slice(0, 8);
 
         this.board = Array.from(
             { length: 3 },
@@ -57,14 +60,17 @@ class TicTacToeGame {
 
         this.message = null;
         this.collector = null;
+        this.processing = false;
     }
 
-    // Return the symbol belonging to a player.
+    // ------------------------------------------------
+    // PLAYER SYMBOLS
+    // ------------------------------------------------
+
     markFor(player) {
         return player.id === this.player1.id ? '❌' : '⭕';
     }
 
-    // Return the player who owns a symbol.
     playerForMark(mark) {
         return mark === '❌' ? this.player1 : this.player2;
     }
@@ -84,7 +90,9 @@ class TicTacToeGame {
 
                 actionRow.addComponents(
                     new ButtonBuilder()
-                        .setCustomId(`ttt_${row}_${col}`)
+                        .setCustomId(
+                            `ttt_${this.gameId}_${row}_${col}`
+                        )
                         .setStyle(
                             mark === '❌'
                                 ? ButtonStyle.Danger
@@ -120,7 +128,7 @@ class TicTacToeGame {
     checkWinner() {
         const board = this.board;
 
-        // Check all rows.
+        // Horizontal lines.
         for (const row of board) {
             if (
                 row[0] &&
@@ -132,7 +140,7 @@ class TicTacToeGame {
             }
         }
 
-        // Check all columns.
+        // Vertical lines.
         for (let col = 0; col < 3; col++) {
             if (
                 board[0][col] &&
@@ -144,7 +152,7 @@ class TicTacToeGame {
             }
         }
 
-        // Top-left to bottom-right diagonal.
+        // Diagonal: top-left to bottom-right.
         if (
             board[0][0] &&
             board[0][0] === board[1][1] &&
@@ -154,7 +162,7 @@ class TicTacToeGame {
             return true;
         }
 
-        // Top-right to bottom-left diagonal.
+        // Diagonal: top-right to bottom-left.
         if (
             board[0][2] &&
             board[0][2] === board[1][1] &&
@@ -172,11 +180,11 @@ class TicTacToeGame {
     // ------------------------------------------------
 
     checkDraw() {
-        const boardFull = this.board.every(
+        const full = this.board.every(
             row => row.every(cell => cell !== null)
         );
 
-        if (boardFull && !this.winner) {
+        if (full && !this.winner) {
             this.draw = true;
             return true;
         }
@@ -185,14 +193,11 @@ class TicTacToeGame {
     }
 
     // ------------------------------------------------
-    // GAME EMBED
-    // Uses UniversalHelper for the configured colour.
+    // EMBED BUILDER
     // ------------------------------------------------
 
     buildEmbed() {
-        const guild =
-            this.commandMessage?.guild ||
-            this.message?.guild;
+        const guild = this.commandMessage.guild;
 
         const fields = [
             {
@@ -215,7 +220,7 @@ class TicTacToeGame {
         let description;
 
         if (this.winner) {
-            description = `🎉 **${this.winner.displayName} wins!**`;
+            description = `**${this.winner.displayName} wins!**`;
 
             fields.push({
                 name: 'RESULT',
@@ -223,7 +228,7 @@ class TicTacToeGame {
                 inline: false,
             });
         } else if (this.draw) {
-            description = '🤝 **The game ended in a draw!**';
+            description = '**The game ended in a draw!**';
 
             fields.push({
                 name: 'RESULT',
@@ -261,6 +266,18 @@ class TicTacToeGame {
     }
 
     // ------------------------------------------------
+    // CLEANUP
+    // ------------------------------------------------
+
+    cleanup() {
+        for (const [userId, game] of activeGames.entries()) {
+            if (game === this) {
+                activeGames.delete(userId);
+            }
+        }
+    }
+
+    // ------------------------------------------------
     // HANDLE BUTTON CLICKS
     // ------------------------------------------------
 
@@ -272,7 +289,14 @@ class TicTacToeGame {
             });
         }
 
-        // Only the two players may interact with the board.
+        if (this.processing) {
+            return interaction.reply({
+                content: 'A move is already being processed. Try again!',
+                ephemeral: true,
+            });
+        }
+
+        // Only the two players may interact.
         const isPlayer =
             interaction.user.id === this.player1.id ||
             interaction.user.id === this.player2.id;
@@ -284,7 +308,7 @@ class TicTacToeGame {
             });
         }
 
-        // Only the player whose turn it is can move.
+        // Only the current player can move.
         if (interaction.user.id !== this.currentTurn.id) {
             return interaction.reply({
                 content:
@@ -294,7 +318,7 @@ class TicTacToeGame {
         }
 
         const match = interaction.customId.match(
-            /^ttt_([0-2])_([0-2])$/
+            new RegExp(`^ttt_${this.gameId}_([0-2])_([0-2])$`)
         );
 
         if (!match) {
@@ -307,7 +331,6 @@ class TicTacToeGame {
         const row = Number(match[1]);
         const col = Number(match[2]);
 
-        // Check whether the square is already occupied.
         if (this.board[row][col] !== null) {
             return interaction.reply({
                 content: 'That square is already taken!',
@@ -315,62 +338,67 @@ class TicTacToeGame {
             });
         }
 
-        // Place the player's mark.
-        this.board[row][col] = this.markFor(this.currentTurn);
+        this.processing = true;
 
-        // Check for a winner.
-        if (this.checkWinner()) {
-            this.finished = true;
+        try {
+            // Place the current player's mark.
+            this.board[row][col] = this.markFor(this.currentTurn);
+
+            // Check for a winner.
+            if (this.checkWinner()) {
+                this.finished = true;
+
+                await interaction.update({
+                    embeds: [this.buildEmbed()],
+                    components: this.createButtons(true),
+                });
+
+                this.collector?.stop('finished');
+
+                await interaction.followUp({
+                    content:
+                        `Congratulations ${this.winner}! ` +
+                        'You won the Tic Tac Toe game!',
+                }).catch(() => {});
+
+                return;
+            }
+
+            // Check for a draw.
+            if (this.checkDraw()) {
+                this.finished = true;
+
+                await interaction.update({
+                    embeds: [this.buildEmbed()],
+                    components: this.createButtons(true),
+                });
+
+                this.collector?.stop('finished');
+
+                await interaction.followUp({
+                    content: 'The Tic Tac Toe game ended in a draw!',
+                }).catch(() => {});
+
+                return;
+            }
+
+            // Switch turns.
+            this.currentTurn =
+                this.currentTurn.id === this.player1.id
+                    ? this.player2
+                    : this.player1;
 
             await interaction.update({
                 embeds: [this.buildEmbed()],
-                components: this.createButtons(true),
+                components: this.createButtons(),
             });
-
-            this.collector.stop('finished');
-
-            await interaction.followUp({
-                content:
-                    `🎉 Congratulations ${this.winner}! ` +
-                    'You won the Tic Tac Toe game!',
-            }).catch(() => {});
-
-            return;
+        } finally {
+            this.processing = false;
         }
-
-        // Check for a draw.
-        if (this.checkDraw()) {
-            this.finished = true;
-
-            await interaction.update({
-                embeds: [this.buildEmbed()],
-                components: this.createButtons(true),
-            });
-
-            this.collector.stop('finished');
-
-            await interaction.followUp({
-                content: '🤝 The Tic Tac Toe game ended in a draw!',
-            }).catch(() => {});
-
-            return;
-        }
-
-        // Switch turns.
-        this.currentTurn =
-            this.currentTurn.id === this.player1.id
-                ? this.player2
-                : this.player1;
-
-        // Update the board and current turn.
-        await interaction.update({
-            embeds: [this.buildEmbed()],
-            components: this.createButtons(),
-        });
     }
 
     // ------------------------------------------------
-    // GAME TIMEOUT
+    // TIMEOUT
     // ------------------------------------------------
 
     async onTimeout() {
@@ -378,19 +406,18 @@ class TicTacToeGame {
 
         this.finished = true;
 
-        const guild =
-            this.commandMessage?.guild ||
-            this.message?.guild;
-
         const embed = createGameEmbed(
             this.client,
             this.commandMessage,
             {
                 title: '✦ TIC TAC TOE | GAME OVER ✦',
                 description:
-                    '⌛ The game ended because nobody made a move in time.',
+                    'The game ended because nobody made a move in time.',
                 footer: {
-                    text: getServerFooter(guild, 'Game Timed Out'),
+                    text: getServerFooter(
+                        this.commandMessage.guild,
+                        'Game Timed Out'
+                    ),
                 },
             }
         );
@@ -402,7 +429,7 @@ class TicTacToeGame {
     }
 
     // ------------------------------------------------
-    // START GAME COLLECTOR
+    // COLLECTOR
     // ------------------------------------------------
 
     start(message) {
@@ -419,7 +446,6 @@ class TicTacToeGame {
             } catch (error) {
                 console.error('[TicTacToe] Button error:', error);
 
-                // Avoid leaving an interaction unanswered.
                 if (!interaction.replied && !interaction.deferred) {
                     await interaction.reply({
                         content: 'Something went wrong processing that move.',
@@ -434,9 +460,7 @@ class TicTacToeGame {
                 await this.onTimeout();
             }
 
-            // Allow both players to start another game.
-            activeGames.delete(this.player1.id);
-            activeGames.delete(this.player2.id);
+            this.cleanup();
         });
     }
 }
@@ -446,6 +470,8 @@ class TicTacToeGame {
 // --------------------------------------------------
 
 async function showTicTacToeHelp(client, message) {
+    const prefix = client.getPrefix?.(message.guild?.id) || '$';
+
     const embed = createGameEmbed(client, message, {
         title: '✦ TIC TAC TOE GUIDE ✦',
         description:
@@ -453,7 +479,7 @@ async function showTicTacToeHelp(client, message) {
         fields: [
             {
                 name: '🎮 Start a Game',
-                value: '`$ttt @opponent`',
+                value: `\`${prefix}ttt @opponent\``,
                 inline: false,
             },
             {
@@ -479,9 +505,9 @@ async function showTicTacToeHelp(client, message) {
             {
                 name: '⌨️ Commands',
                 value:
-                    '`$ttt @user` — Start a game\n' +
-                    '`$ttt help` — Show this guide\n' +
-                    '`$ttthelp` — Show this guide',
+                    `\`${prefix}ttt @user\` — Start a game\n` +
+                    `\`${prefix}ttt help\` — Show this guide\n` +
+                    `\`${prefix}ttthelp\` — Show this guide`,
                 inline: false,
             },
         ],
@@ -490,9 +516,7 @@ async function showTicTacToeHelp(client, message) {
         },
     });
 
-    return message.reply({
-        embeds: [embed],
-    });
+    return message.reply({ embeds: [embed] });
 }
 
 // --------------------------------------------------
@@ -509,7 +533,7 @@ module.exports = {
     async execute(client, message, args) {
         if (!message.guild || !message.member) return;
 
-        // Determine which command was invoked.
+        // Identify whether the user invoked the help alias.
         const firstToken =
             message.content.trim().split(/\s+/)[0] || '';
 
@@ -518,12 +542,10 @@ module.exports = {
                 ? client.getPrefix(message.guild.id)
                 : '$';
 
-        const invokedCommand =
-            typeof prefix === 'string' && firstToken.startsWith(prefix)
-                ? firstToken.slice(prefix.length).toLowerCase()
-                : firstToken.replace(/^[^a-z0-9]+/i, '').toLowerCase();
+        const invokedCommand = firstToken.startsWith(prefix)
+            ? firstToken.slice(prefix.length).toLowerCase()
+            : firstToken.toLowerCase().replace(/^[^a-z0-9]+/i, '');
 
-        // Support "$ttt help" and the "$ttthelp" alias.
         if (
             invokedCommand === 'ttthelp' ||
             args[0]?.toLowerCase() === 'help'
@@ -531,7 +553,7 @@ module.exports = {
             return showTicTacToeHelp(client, message);
         }
 
-        // Resolve the opponent from a Discord mention.
+        // Resolve the opponent.
         const opponent = message.mentions.members.first();
 
         if (!opponent) {
@@ -539,56 +561,50 @@ module.exports = {
                 title: '❌ Missing Opponent',
                 description:
                     'Mention someone to challenge them!\n\n' +
-                    '**Example:** `$ttt @opponent`\n' +
-                    'Use `$ttt help` to see the game rules.',
+                    `**Example:** \`${prefix}ttt @opponent\`\n` +
+                    `Use \`${prefix}ttt help\` to see the game rules.`,
             });
 
-            return message.reply({
-                embeds: [embed],
-            });
+            return message.reply({ embeds: [embed] });
         }
 
+        // Prevent self-challenges.
         if (opponent.id === message.author.id) {
-            return message.reply({
-                embeds: [
-                    createGameEmbed(client, message, {
-                        title: '❌ Invalid Opponent',
-                        description: 'You cannot challenge yourself!',
-                    }),
-                ],
+            const embed = createGameEmbed(client, message, {
+                title: '❌ Invalid Opponent',
+                description: 'You cannot challenge yourself!',
             });
+
+            return message.reply({ embeds: [embed] });
         }
 
+        // Prevent bot challenges.
         if (opponent.user.bot) {
-            return message.reply({
-                embeds: [
-                    createGameEmbed(client, message, {
-                        title: '❌ Invalid Opponent',
-                        description:
-                            'You cannot challenge a bot. Pick a human opponent!',
-                    }),
-                ],
+            const embed = createGameEmbed(client, message, {
+                title: '❌ Invalid Opponent',
+                description:
+                    'You cannot challenge a bot. Pick a human opponent!',
             });
+
+            return message.reply({ embeds: [embed] });
         }
 
-        // Prevent either player from joining multiple games at once.
+        // Prevent players from joining multiple games.
         if (
             activeGames.has(message.author.id) ||
             activeGames.has(opponent.id)
         ) {
-            return message.reply({
-                embeds: [
-                    createGameEmbed(client, message, {
-                        title: '⚠️ Game Already Active',
-                        description:
-                            'You or your opponent is already playing another ' +
-                            'Tic Tac Toe game. Finish that game first!',
-                    }),
-                ],
+            const embed = createGameEmbed(client, message, {
+                title: '⚠️ Game Already Active',
+                description:
+                    'You or your opponent is already playing another game. ' +
+                    'Finish that game first!',
             });
+
+            return message.reply({ embeds: [embed] });
         }
 
-        // Create the game and give it the UniversalHelper context.
+        // Create game.
         const game = new TicTacToeGame(
             client,
             message,
@@ -596,7 +612,7 @@ module.exports = {
             opponent
         );
 
-        // Send the initial board.
+        // Send the initial game board.
         const gameMessage = await message.channel.send({
             content:
                 `🎮 ${message.author} challenged ${opponent} to Tic Tac Toe!`,
@@ -604,11 +620,11 @@ module.exports = {
             components: game.createButtons(),
         });
 
-        // Register the players as busy.
+        // Register players.
         activeGames.set(message.author.id, game);
         activeGames.set(opponent.id, game);
 
-        // Start listening for button interactions.
+        // Start the button collector.
         game.start(gameMessage);
     },
 };
