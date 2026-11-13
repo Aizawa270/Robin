@@ -11,8 +11,7 @@ const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
 const ANIMATION_DELAY_MS = 500;
 
-// Discord limits message edits (about 5 per 5 seconds per channel), so keep
-// the animation short and skip it when the channel is already busy.
+// Keep the animation short to avoid Discord channel edit limits.
 const ANIMATION_FRAMES = 2;
 
 // Unicode dice faces used during the rolling animation.
@@ -29,6 +28,20 @@ const ONE_MATCH_CHANCE = 53;
 const TWO_MATCH_CHANCE = 12;
 
 const DICE_NUMBERS = [1, 2, 3, 4, 5, 6];
+
+// Connects completed games to the existing clan quest tracker.
+// true = win, false = loss, null = push/draw.
+async function trackClanGame(client, message, game, result) {
+  try {
+    const tracker = client?.clanSystem?.trackGame;
+
+    if (typeof tracker === 'function') {
+      await tracker(message, game, result);
+    }
+  } catch (error) {
+    console.error(`[${game}] Clan quest tracking failed:`, error);
+  }
+}
 
 function randomDiceFace() {
   return DICE_FACES[randomInt(0, DICE_FACES.length)];
@@ -88,7 +101,7 @@ function money(client, amount) {
 }
 
 /**
- * Generates two DIFFERENT dice numbers using weighted match probabilities.
+ * Generates two different dice numbers using weighted match probabilities.
  *
  * 0 matches: 35%
  * 1 match:   53%
@@ -101,9 +114,7 @@ function rollDiceForPicks(pick1, pick2) {
 
   if (outcomeRoll < NO_MATCH_CHANCE) {
     targetMatches = 0;
-  } else if (
-    outcomeRoll < NO_MATCH_CHANCE + ONE_MATCH_CHANCE
-  ) {
+  } else if (outcomeRoll < NO_MATCH_CHANCE + ONE_MATCH_CHANCE) {
     targetMatches = 1;
   } else {
     targetMatches = 2;
@@ -198,7 +209,7 @@ function buildRollingEmbed(message, pick1, pick2, amount, client) {
   });
 }
 
-// Edit that never throws. Returns true when it worked.
+// Edit helper that never throws. Returns true when successful.
 async function tryEdit(sentMessage, payload) {
   try {
     await sentMessage.edit(payload);
@@ -272,8 +283,7 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: '🎲 Dice',
-            description:
-              `The maximum bet is **${money(client, MAX_BET)}**.`,
+            description: `The maximum bet is **${money(client, MAX_BET)}**.`,
           }),
         ],
       });
@@ -307,8 +317,7 @@ module.exports = {
         embeds: [
           buildEmbed(message, {
             title: '🎲 Dice',
-            description:
-              `You are on cooldown for **${formatDuration(remaining)}**.`,
+            description: `You are on cooldown for **${formatDuration(remaining)}**.`,
           }),
         ],
       });
@@ -337,10 +346,7 @@ module.exports = {
       });
     }
 
-    // ------------------------------------------------------------
-    // Decide the result and pay out BEFORE any Discord messages.
-    // If anything fails here, the bet is refunded.
-    // ------------------------------------------------------------
+    // Decide and settle the result before sending Discord messages.
     let settled = false;
     let rollA;
     let rollB;
@@ -357,17 +363,16 @@ module.exports = {
 
       const baseProfit = calculateBaseProfit(amount, matchCount);
 
-      boostedProfit =
-        baseProfit > 0
-          ? Math.max(
-              0,
-              Math.floor(
-                Number(
-                  boostProfit(client, guildId, userId, baseProfit)
-                ) || 0
-              )
+      boostedProfit = baseProfit > 0
+        ? Math.max(
+            0,
+            Math.floor(
+              Number(
+                boostProfit(client, guildId, userId, baseProfit)
+              ) || 0
             )
-          : 0;
+          )
+        : 0;
 
       if (matchCount > 0) {
         client.economy.addCrowns(
@@ -384,17 +389,21 @@ module.exports = {
 
       settled = true;
       newBalance = client.economy.getBalance(guildId, userId);
-
     } catch (error) {
       console.error('[Dice] Error while settling bet:', error);
 
       if (!settled) {
         try {
-          client.economy.addCrowns(guildId, userId, amount, {
-            type: 'dice_refund',
-            reason: 'Dice error refund',
-            actorId: userId,
-          });
+          client.economy.addCrowns(
+            guildId,
+            userId,
+            amount,
+            {
+              type: 'dice_refund',
+              reason: 'Dice error refund',
+              actorId: userId,
+            }
+          );
         } catch (refundError) {
           console.error('[Dice] Refund failed:', refundError);
         }
@@ -405,13 +414,20 @@ module.exports = {
       }).catch(() => {});
     }
 
+    // A match is a win; zero matches is a loss.
+    await trackClanGame(
+      client,
+      message,
+      'dice',
+      matchCount > 0
+    );
+
     let resultText;
 
     if (matchCount === 0) {
       resultText =
         '### No Match!\n' +
-        'You matched **0** numbers and lost **' +
-        `${money(client, amount)}**.`;
+        `You matched **0** numbers and lost **${money(client, amount)}**.`;
     } else if (boostedProfit === 0) {
       resultText =
         '### Matched!\n' +
@@ -439,9 +455,7 @@ module.exports = {
       footer: `Requested by ${message.author.username}`,
     });
 
-    // ------------------------------------------------------------
-    // Show the animation and result. Nothing below can lose money.
-    // ------------------------------------------------------------
+    // Show the animation and result. The bet is already settled.
     const channelId = message.channel.id;
     const activeInChannel = busyChannels.get(channelId) || 0;
 
@@ -457,12 +471,16 @@ module.exports = {
           ],
         });
       } catch (error) {
-        console.error('[Dice] Could not send rolling message:', error?.message || error);
+        console.error(
+          '[Dice] Could not send rolling message:',
+          error?.message || error
+        );
       }
 
       if (!sentMessage) {
-        // Original message gone or reply failed: post the result directly.
-        await message.channel.send({ embeds: [finalEmbed] }).catch(() => {});
+        await message.channel.send({
+          embeds: [finalEmbed],
+        }).catch(() => {});
         return;
       }
 
@@ -486,12 +504,15 @@ module.exports = {
       });
 
       if (!revealed) {
-        // The edit failed: send the result as a fresh message instead.
-        await message.channel.send({ embeds: [finalEmbed] }).catch(error => {
-          console.error('[Dice] Could not send result:', error?.message || error);
+        await message.channel.send({
+          embeds: [finalEmbed],
+        }).catch(error => {
+          console.error(
+            '[Dice] Could not send result:',
+            error?.message || error
+          );
         });
       }
-
     } finally {
       const left = (busyChannels.get(channelId) || 1) - 1;
 
