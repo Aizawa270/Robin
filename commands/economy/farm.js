@@ -1,3 +1,4 @@
+
 const {
   EmbedBuilder,
   ActionRowBuilder,
@@ -7,6 +8,7 @@ const {
 } = require('discord.js');
 
 const farm = require('../../handlers/farmService');
+const clan = require('../../handlers/clanService');
 const { emoji, seedEmoji, EMOJIS } = require('../../handlers/farmEmojis');
 
 const { FarmError, CFG } = farm;
@@ -24,6 +26,25 @@ const lastUse = new Map();
 
 const money = amount => farm.money(amount);
 const num = n => Number(n || 0).toLocaleString('en-US');
+
+// ============================================================
+// CLAN QUEST INTEGRATION
+// ============================================================
+
+// Records successful farm activity for clan daily quests.
+// harvested=true also increments the clan's harvest metric.
+//
+// Tracking errors never interrupt farm gameplay.
+
+async function trackClanFarmActivity(message, harvested = false) {
+  if (!message?.guild) return;
+
+  try {
+    await clan.trackFarm(message, harvested);
+  } catch (error) {
+    console.error('[Farm] Clan quest tracking failed:', error);
+  }
+}
 
 function dur(ms) {
   ms = Math.max(0, Number(ms) || 0);
@@ -307,8 +328,8 @@ function errorEmbed(ctx, text) {
 
 // ---------- Item info ----------
 
-// Turns a custom emoji string like <:wheat:123> or <a:wheat:123> into an image URL
-// so it can be used as the embed thumbnail. Returns null when no emoji is set.
+// Turns a custom emoji string like <:wheat:123> or <a:wheat:123> into an image URL.
+// Returns null when no emoji is set.
 function emojiUrl(key) {
   const m = /^<(a?):\w+:(\d+)>$/.exec(String(EMOJIS[key] || '').trim());
   if (!m) return null;
@@ -890,15 +911,27 @@ async function startSession(ctx, view, extra = {}) {
       } else if (id === 'fm:next') {
         state.page += 1;
       } else if (id === 'fm:harvest') {
-        state.result = harvestEmbed(ctx, farm.harvest(ctx.gid, ctx.uid));
+        const result = farm.harvest(ctx.gid, ctx.uid);
+
+        await trackClanFarmActivity(ctx.message, true);
+
+        state.result = harvestEmbed(ctx, result);
         state.view = 'result';
       } else if (id === 'fm:sellall') {
         state.view = 'sellconfirm';
       } else if (id === 'fm:sellyes') {
-        state.result = sellAllEmbed(ctx, farm.sellAll(ctx.gid, ctx.uid));
+        const result = farm.sellAll(ctx.gid, ctx.uid);
+
+        await trackClanFarmActivity(ctx.message, false);
+
+        state.result = sellAllEmbed(ctx, result);
         state.view = 'result';
       } else if (id === 'fm:upyes') {
-        state.result = upgradeDoneEmbed(ctx, farm.upgrade(ctx.gid, ctx.uid));
+        const result = farm.upgrade(ctx.gid, ctx.uid);
+
+        await trackClanFarmActivity(ctx.message, false);
+
+        state.result = upgradeDoneEmbed(ctx, result);
         state.view = 'result';
       } else if (id === 'fm:cancel' || id === 'fm:back') {
         state.view = 'dash';
@@ -1020,6 +1053,9 @@ async function route(ctx, sub, rest) {
       const crop = farm.resolveCrop(query);
       if (!crop) throw new FarmError(`I do not know a crop called "${query}". See \`$farm shop\`.`);
       const result = farm.plant(ctx.gid, ctx.uid, crop.id, toAmount(amount, 1));
+
+      await trackClanFarmActivity(message, false);
+
       return message.reply({ embeds: [plantEmbed(ctx, result)] });
     }
 
@@ -1033,6 +1069,9 @@ async function route(ctx, sub, rest) {
         plotNo = Number(arg);
       }
       const result = farm.harvest(ctx.gid, ctx.uid, plotNo);
+
+      await trackClanFarmActivity(message, true);
+
       return message.reply({ embeds: [harvestEmbed(ctx, result)] });
     }
 
@@ -1042,6 +1081,9 @@ async function route(ctx, sub, rest) {
       if (!rest.length) throw new FarmError('Use `$farm fertilize <plot> [basic|advanced|premium]`.');
       const type = rest[1] ? String(rest[1]).toLowerCase().replace('fertilizer', '') : null;
       const result = farm.fertilize(ctx.gid, ctx.uid, rest[0], type || null);
+
+      await trackClanFarmActivity(message, false);
+
       return message.reply({ embeds: [fertilizeEmbed(ctx, result)] });
     }
 
@@ -1052,6 +1094,9 @@ async function route(ctx, sub, rest) {
       const item = farm.resolveShopItem(query);
       if (!item) throw new FarmError(`I could not find "${query}" in the shop.`);
       const result = farm.buy(ctx.gid, ctx.uid, item, toAmount(amount === 'all' || amount === 'max' ? null : amount, 1));
+
+      await trackClanFarmActivity(message, false);
+
       return message.reply({ embeds: [buyEmbed(ctx, result)] });
     }
 
@@ -1067,12 +1112,18 @@ async function route(ctx, sub, rest) {
       const crop = farm.resolveCrop(query);
       if (!crop) throw new FarmError(`I do not know a crop called "${query}".`);
       const result = farm.sell(ctx.gid, ctx.uid, crop.id, toAmount(amount === 'max' ? 'all' : amount, 'all'));
+
+      await trackClanFarmActivity(message, false);
+
       return message.reply({ embeds: [sellEmbed(ctx, result)] });
     }
 
     case 'deliver': {
       if (!rest.length) throw new FarmError('Use `$farm deliver <contract number>`. See `$farm quests`.');
       const result = farm.deliver(ctx.gid, ctx.uid, rest[0]);
+
+      await trackClanFarmActivity(message, false);
+
       return message.reply({ embeds: [deliverEmbed(ctx, result)] });
     }
 
