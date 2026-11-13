@@ -1,3 +1,4 @@
+
 // ============================================================
 // FARM EMOJIS
 // Paste your custom emojis between the quotes, like your Crowns emoji:
@@ -34,17 +35,17 @@ const EMOJIS = {
   dragonfruit: '<:dragonfruit:1565032091916312666>',
 
   // ---- Optional separate seed icons ----
-  seed_wheat: '<:wheet_seed:1565072850849767475>',
+  seed_wheat: '<:wheet_seed:1567939400078200832>',
   seed_carrot: '<:carrots_seed:1565072364717215825>',
   seed_potato: '<:potato_seed:1565072695283032125>',
   seed_lettuce: '<:lettuce_seed:1565072589200826449>',
-  seed_tomato: '<:tomato_seed:1565072790271434852>',
+  seed_tomato: '<:tomato_seed:1567939276749152279>',
   seed_corn: '<:Corn_seed:1565072400792686754>',
-  seed_strawberry: '<:Strawberry_seed:1565072757673304216>',
+  seed_strawberry: '<:Strawberry_seed:1567939334726754364>',
   seed_onion: '<:Onion_seed:1565072651867656333>',
   seed_grapes: '<:Grapes_seed:1565072553226018907>',
-  seed_watermelon: '<:watermelon_seed:1565072824232575006>',
-  seed_pumpkin: '<:Pumpkin_seed:1565072724597145763>',
+  seed_watermelon: '<:watermelon_seed:1567939360974708927>',
+  seed_pumpkin: '<:Pumpkin_seed:1567939314405613728>',
   seed_blueberry: '<:blueberry_seed:1565072319418732826>',
   seed_golden_wheat: '<:Golden_wheat_seed:1565072516404478023>',
   seed_moonberry: '<:Moonberry_seed:1565072622482620619>',
@@ -65,12 +66,12 @@ const EMOJIS = {
   hoe_golden: '<:hoe_golden:1565044898913329253>',
 
   // ---- Decorations ----
-  decor_fence: '<:Fence:1565075546273226954>',
-  decor_scarecrow: '<:scarecrow:1565076511654940794>',
-  decor_windmill: '<:windmill:1565076567288315954>',
-  decor_fountain: '<:fountain:1565076611261268018>',
-  decor_farmhouse: '<:farmhouse:1565076672083136625>',
-  decor_greenhouse: '<:greenhouse:1565076714411925655>',
+  decor_fence: '<:fence:1567939925930807386>',
+  decor_scarecrow: '<:scarecrow:1567939959988686948>',
+  decor_windmill: '<:windmill:1567940049113456752>',
+  decor_fountain: '<:fountain:1567940131443310733>',
+  decor_farmhouse: '<:farmhouse:1567940183566057543>',
+  decor_greenhouse: '<:greenhouse:1567940251245224036>',
 };
 
 // Returns "<emoji> " (with a trailing space) or '' when none is set.
