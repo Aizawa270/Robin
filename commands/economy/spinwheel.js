@@ -17,26 +17,23 @@ const {
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
 
-// Two images in your assets folder (both 504x495):
-//  - spinwheel.png         the wheel with the pointer removed (this one spins)
-//  - spinwheel-pointer.png only the red pointer (this one stays fixed on top)
+// Wheel assets.
 const WHEEL_IMAGE_PATH = path.join(__dirname, '../../assets/spinwheel.png');
 const POINTER_IMAGE_PATH = path.join(__dirname, '../../assets/spinwheel-pointer.png');
 
-// GIF settings. Bigger size / more frames = smoother but bigger file (Discord limit 8MB).
+// GIF settings.
 const GIF_SIZE = 320;
 const GIF_FRAMES = 90;
-const GIF_FRAME_DELAY_MS = 40; // 25 fps
+const GIF_FRAME_DELAY_MS = 40;
 const FULL_TURNS = 3;
 const SPIN_MS = GIF_FRAMES * GIF_FRAME_DELAY_MS;
-const LOAD_BUFFER_MS = 1200; // time for Discord to upload/load the GIF before revealing
+const LOAD_BUFFER_MS = 1200;
 
-// Exact centre of the wheel inside the image, as a fraction of width/height.
+// Exact centre of the wheel inside the image.
 const CENTER_X = 0.4994;
 const CENTER_Y = 0.5079;
 
-// 9 equal segments, clockwise starting just RIGHT of the pointer.
-// LOST 4/9, x1 2/9, x2 2/9, x3 1/9  -> expected return is exactly 100% before boosts.
+// 9 equal segments, clockwise starting just right of the pointer.
 const SEGMENTS = [
   { label: 'x2', multiplier: 2 },
   { label: 'Lost', multiplier: 0 },
@@ -53,7 +50,22 @@ const SEGMENT_ANGLE = (Math.PI * 2) / SEGMENTS.length;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const activeSpins = new Set();
+
 const spinKey = (guildId, userId) => `${guildId}:${userId}`;
+
+// Connects completed games to the existing clan quest tracker.
+// true = win, false = loss, null = push/draw.
+async function trackClanGame(client, message, game, result) {
+  try {
+    const tracker = client?.clanSystem?.trackGame;
+
+    if (typeof tracker === 'function') {
+      await tracker(message, game, result);
+    }
+  } catch (error) {
+    console.error(`[${game}] Clan quest tracking failed:`, error);
+  }
+}
 
 // ============================================
 // EMBEDS
@@ -70,15 +82,26 @@ function buildEmbed(message, data = {}) {
       footer: `Requested by ${message.author.username}`,
     });
   } else {
-    embed = new EmbedBuilder().setColor(data.color || '#A3092A').setTimestamp();
+    embed = new EmbedBuilder()
+      .setColor(data.color || '#A3092A')
+      .setTimestamp();
+
     if (data.title) embed.setTitle(data.title);
     if (data.description) embed.setDescription(data.description);
+
     embed.setThumbnail(message.author.displayAvatarURL({ size: 256 }));
-    embed.setFooter({ text: `Requested by ${message.author.username}` });
+    embed.setFooter({
+      text: `Requested by ${message.author.username}`,
+    });
   }
 
-  if (data.image && typeof embed.setImage === 'function') embed.setImage(data.image);
-  if (data.color && typeof embed.setColor === 'function') embed.setColor(data.color);
+  if (data.image && typeof embed.setImage === 'function') {
+    embed.setImage(data.image);
+  }
+
+  if (data.color && typeof embed.setColor === 'function') {
+    embed.setColor(data.color);
+  }
 
   return embed;
 }
@@ -99,7 +122,7 @@ function createWheelEmbed(message, title, description, imageName) {
 }
 
 // ============================================
-// WHEEL RENDERING (rotates YOUR image)
+// WHEEL RENDERING
 // ============================================
 
 let assetsPromise = null;
@@ -109,14 +132,22 @@ async function loadAssets() {
     assetsPromise = (async () => {
       const wheel = await loadImage(WHEEL_IMAGE_PATH);
       const pointer = await loadImage(POINTER_IMAGE_PATH);
-      return { wheel, pointer, w: wheel.width, h: wheel.height };
+
+      return {
+        wheel,
+        pointer,
+        w: wheel.width,
+        h: wheel.height,
+      };
     })();
   }
+
   return assetsPromise;
 }
 
 function renderFrame(assets, rotation, size = GIF_SIZE) {
   const { wheel, pointer, w, h } = assets;
+
   const canvas = createCanvas(size, size);
   const ctx = canvas.getContext('2d');
 
@@ -129,11 +160,20 @@ function renderFrame(assets, rotation, size = GIF_SIZE) {
   ctx.fillStyle = '#1e1f22';
   ctx.fillRect(0, 0, size, size);
 
-  // Spinning wheel (no pointer in this image).
+  // Spinning wheel.
   ctx.save();
-  ctx.translate(ox + drawW * CENTER_X, oy + drawH * CENTER_Y);
+  ctx.translate(
+    ox + drawW * CENTER_X,
+    oy + drawH * CENTER_Y
+  );
   ctx.rotate(rotation);
-  ctx.drawImage(wheel, -drawW * CENTER_X, -drawH * CENTER_Y, drawW, drawH);
+  ctx.drawImage(
+    wheel,
+    -drawW * CENTER_X,
+    -drawH * CENTER_Y,
+    drawW,
+    drawH
+  );
   ctx.restore();
 
   // Fixed pointer on top.
@@ -144,11 +184,14 @@ function renderFrame(assets, rotation, size = GIF_SIZE) {
 
 const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
 
-// Rotation (clockwise) that puts the centre of `index` under the pointer,
-// with a little random offset so it doesn't always land dead centre.
+// Rotation that puts the selected segment under the pointer.
 function getTargetRotation(index) {
-  const jitter = randomInt(-35, 36) / 100; // +-35% of a segment
-  return Math.PI * 2 * FULL_TURNS - (index + 0.5 + jitter) * SEGMENT_ANGLE;
+  const jitter = randomInt(-35, 36) / 100;
+
+  return (
+    Math.PI * 2 * FULL_TURNS -
+    (index + 0.5 + jitter) * SEGMENT_ANGLE
+  );
 }
 
 function buildSpinGif(assets, targetRotation) {
@@ -156,8 +199,15 @@ function buildSpinGif(assets, targetRotation) {
 
   for (let f = 0; f < GIF_FRAMES; f++) {
     const t = f / (GIF_FRAMES - 1);
-    const canvas = renderFrame(assets, targetRotation * easeOutCubic(t));
-    const { data } = canvas.getContext('2d').getImageData(0, 0, GIF_SIZE, GIF_SIZE);
+
+    const canvas = renderFrame(
+      assets,
+      targetRotation * easeOutCubic(t)
+    );
+
+    const { data } = canvas
+      .getContext('2d')
+      .getImageData(0, 0, GIF_SIZE, GIF_SIZE);
 
     const palette = quantize(data, 128);
     const index = applyPalette(data, palette);
@@ -165,11 +215,12 @@ function buildSpinGif(assets, targetRotation) {
     gif.writeFrame(index, GIF_SIZE, GIF_SIZE, {
       palette,
       delay: GIF_FRAME_DELAY_MS,
-      repeat: -1, // play once, hold the last frame
+      repeat: -1,
     });
   }
 
   gif.finish();
+
   return Buffer.from(gif.bytes());
 }
 
@@ -179,7 +230,7 @@ function buildSpinGif(assets, targetRotation) {
 
 module.exports = {
   name: 'spinwheel',
-  aliases: ['wheel'],
+  aliases: ['wheel', 'sw'],
   description: 'Bet Crowns on the red-and-black spinwheel.',
   category: 'economy',
   usage: '$spinwheel <amount>',
@@ -194,7 +245,12 @@ module.exports = {
       typeof client.economy.addCrowns !== 'function'
     ) {
       return message.reply({
-        embeds: [buildEmbed(message, { title: '⚠️ Economy Unavailable', description: 'The economy system is not ready.' })],
+        embeds: [
+          buildEmbed(message, {
+            title: '⚠️ Economy Unavailable',
+            description: 'The economy system is not ready.',
+          }),
+        ],
       });
     }
 
@@ -217,13 +273,23 @@ module.exports = {
 
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       return message.reply({
-        embeds: [buildEmbed(message, { title: '🎡 Invalid Bet', description: 'Your bet must be a positive whole number.' })],
+        embeds: [
+          buildEmbed(message, {
+            title: '🎡 Invalid Bet',
+            description: 'Your bet must be a positive whole number.',
+          }),
+        ],
       });
     }
 
     if (amount > MAX_BET) {
       return message.reply({
-        embeds: [buildEmbed(message, { title: '🎡 Bet Too High', description: `The maximum bet is **${money(client, MAX_BET)}**.` })],
+        embeds: [
+          buildEmbed(message, {
+            title: '🎡 Bet Too High',
+            description: `The maximum bet is **${money(client, MAX_BET)}**.`,
+          }),
+        ],
       });
     }
 
@@ -233,7 +299,12 @@ module.exports = {
 
     if (activeSpins.has(key)) {
       return message.reply({
-        embeds: [buildEmbed(message, { title: '🎡 Already Spinning', description: 'Wait for your current spin to finish.' })],
+        embeds: [
+          buildEmbed(message, {
+            title: '🎡 Already Spinning',
+            description: 'Wait for your current spin to finish.',
+          }),
+        ],
       });
     }
 
@@ -252,7 +323,12 @@ module.exports = {
       });
     }
 
-    const remaining = useCooldown(guildId, userId, 'spinwheel', COOLDOWN_MS);
+    const remaining = useCooldown(
+      guildId,
+      userId,
+      'spinwheel',
+      COOLDOWN_MS
+    );
 
     if (remaining > 0) {
       return message.reply({
@@ -268,13 +344,19 @@ module.exports = {
     activeSpins.add(key);
 
     try {
+      // Load the assets before collecting the bet.
       const assets = await loadAssets();
 
-      const removed = client.economy.removeCrowns(guildId, userId, amount, {
-        type: 'spinwheel_bet',
-        reason: 'Spinwheel wager',
-        actorId: userId,
-      });
+      const removed = client.economy.removeCrowns(
+        guildId,
+        userId,
+        amount,
+        {
+          type: 'spinwheel_bet',
+          reason: 'Spinwheel wager',
+          actorId: userId,
+        }
+      );
 
       if (!removed) {
         return message.reply({
@@ -298,26 +380,58 @@ module.exports = {
 
       if (selected.multiplier > 0) {
         baseProfit = amount * (selected.multiplier - 1);
+
         boostedProfit = Math.max(
           0,
-          Math.floor(Number(boostProfit(client, guildId, userId, baseProfit)) || 0)
+          Math.floor(
+            Number(
+              boostProfit(client, guildId, userId, baseProfit)
+            ) || 0
+          )
         );
+
         payout = amount + boostedProfit;
 
-        client.economy.addCrowns(guildId, userId, payout, {
-          type: 'spinwheel_win',
-          reason: `Spinwheel ${selected.label} winnings`,
-          actorId: userId,
-        });
+        client.economy.addCrowns(
+          guildId,
+          userId,
+          payout,
+          {
+            type: 'spinwheel_win',
+            reason: `Spinwheel ${selected.label} winnings`,
+            actorId: userId,
+          }
+        );
       }
 
       const balanceAfter = client.economy.getBalance(guildId, userId);
 
-      // Render the GIF (one-off, ~1s) and the matching final still.
-      const gifBuffer = buildSpinGif(assets, targetRotation);
-      const finalBuffer = renderFrame(assets, targetRotation).toBuffer('image/png');
+      // x2/x3 = win, Lost = loss, x1 = push (stake returned).
+      const clanResult = selected.multiplier === 0
+        ? false
+        : selected.multiplier === 1
+          ? null
+          : true;
 
-      // One message with a real spinning GIF.
+      // Track once after the spin result and wallet settlement.
+      // Tracking occurs before GIF rendering, so display failures
+      // won't prevent this completed game from counting.
+      await trackClanGame(
+        client,
+        message,
+        'spinwheel',
+        clanResult
+      );
+
+      // Render the GIF and matching final still.
+      const gifBuffer = buildSpinGif(assets, targetRotation);
+
+      const finalBuffer = renderFrame(
+        assets,
+        targetRotation
+      ).toBuffer('image/png');
+
+      // Send one message with the spinning GIF.
       const sentMessage = await message.reply({
         embeds: [
           createWheelEmbed(
@@ -327,7 +441,11 @@ module.exports = {
             'spinwheel.gif'
           ),
         ],
-        files: [new AttachmentBuilder(gifBuffer, { name: 'spinwheel.gif' })],
+        files: [
+          new AttachmentBuilder(gifBuffer, {
+            name: 'spinwheel.gif',
+          }),
+        ],
       });
 
       await sleep(SPIN_MS + LOAD_BUFFER_MS);
@@ -350,11 +468,22 @@ module.exports = {
           `**Balance:** ${money(client, balanceAfter)}`;
       }
 
-      // Swap in the still of the final frame (identical to the GIF's last frame).
+      // Replace the GIF with the still of the final frame.
       await sentMessage.edit({
-        embeds: [createWheelEmbed(message, '🎡 Spinwheel • Result', description, 'result.png')],
+        embeds: [
+          createWheelEmbed(
+            message,
+            '🎡 Spinwheel • Result',
+            description,
+            'result.png'
+          ),
+        ],
         attachments: [],
-        files: [new AttachmentBuilder(finalBuffer, { name: 'result.png' })],
+        files: [
+          new AttachmentBuilder(finalBuffer, {
+            name: 'result.png',
+          }),
+        ],
       });
     } catch (error) {
       console.error('[Spinwheel] Error:', error);
@@ -369,7 +498,10 @@ module.exports = {
           ],
         });
       } catch (replyError) {
-        console.error('[Spinwheel] Failed to send error message:', replyError);
+        console.error(
+          '[Spinwheel] Failed to send error message:',
+          replyError
+        );
       }
     } finally {
       activeSpins.delete(key);
