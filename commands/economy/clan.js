@@ -1,6 +1,8 @@
 
 'use strict';
 
+const path = require('path');
+
 const {
   EmbedBuilder,
   ActionRowBuilder,
@@ -28,8 +30,11 @@ function prefixFor(client, guildId) {
   }
 }
 
-// Empty descriptions are deliberately omitted.
-// This prevents the unwanted blank space above clan info fields.
+// ------------------------------------------------------------
+// General embeds for normal clan commands.
+// Clan info deliberately uses its own direct EmbedBuilder below.
+// ------------------------------------------------------------
+
 function baseEmbed(message, title, description) {
   const embed = new EmbedBuilder()
     .setColor(RED)
@@ -47,7 +52,10 @@ function baseEmbed(message, title, description) {
   };
 
   const avatar = message.author?.displayAvatarURL?.();
-  if (avatar) footer.iconURL = avatar;
+
+  if (avatar) {
+    footer.iconURL = avatar;
+  }
 
   embed.setFooter(footer);
 
@@ -94,6 +102,7 @@ function progressBar(percent, size = 16) {
 
 function parseUserId(message, raw) {
   const mentioned = message.mentions?.users?.first?.();
+
   if (mentioned) return mentioned.id;
 
   const text = String(raw || '').trim();
@@ -107,19 +116,10 @@ function parseUserId(message, raw) {
 
 async function resolveTarget(message, raw) {
   const id = parseUserId(message, raw);
+
   if (!id) return null;
 
   return message.guild.members.fetch(id).catch(() => null);
-}
-
-async function userLabel(guild, userId) {
-  const member =
-    guild.members.cache.get(String(userId)) ||
-    await guild.members.fetch(String(userId)).catch(() => null);
-
-  return member
-    ? `${member.displayName} (<@${userId}>)`
-    : `<@${userId}>`;
 }
 
 function getClanMembers(clanId) {
@@ -131,15 +131,20 @@ function getClanMembers(clanId) {
   `).all(Number(clanId));
 }
 
-// Returns a logo suitable for an embed author icon.
-// Custom emoji use their CDN URL, so Vanessa does not need
-// to be in the server that owns the emoji.
-async function clanLogo(clanRow) {
+// ------------------------------------------------------------
+// Clan logo
+//
+// Uploaded logo: attachment URL used as thumbnail.
+// Custom emoji: Discord CDN URL used as thumbnail.
+// Unicode emoji: no image URL, so no emoji text is added
+// to the clan name.
+// ------------------------------------------------------------
+
+function clanLogo(clanRow) {
   if (clanRow.logo_file) {
     const filePath = clan.mediaPath(clanRow.logo_file);
 
     if (filePath) {
-      const path = require('path');
       const fileName = path.basename(filePath);
 
       const file = new AttachmentBuilder(filePath, {
@@ -148,8 +153,7 @@ async function clanLogo(clanRow) {
 
       return {
         file,
-        iconURL: `attachment://${fileName}`,
-        emoji: '',
+        thumbnailURL: `attachment://${fileName}`,
       };
     }
   }
@@ -160,49 +164,99 @@ async function clanLogo(clanRow) {
     if (parsed?.url) {
       return {
         file: null,
-        iconURL: parsed.url,
-        emoji: '',
+        thumbnailURL: parsed.url,
       };
     }
-
-    return {
-      file: null,
-      iconURL: null,
-      emoji: clanRow.logo_emoji,
-    };
   }
 
   return {
     file: null,
-    iconURL: null,
-    emoji: '',
+    thumbnailURL: null,
   };
 }
 
+// ------------------------------------------------------------
+// Clan info embed colour
+//
+// This does NOT use baseEmbed(), message.createEmbed(),
+// universalHelper, or the patched message.reply() method.
+//
+// It reads the saved colour directly from economy.sqlite
+// and converts it to a numeric Discord Embed colour.
+// ------------------------------------------------------------
+
+function getClanEmbedColor(clanId, guildId) {
+  const row = economy.db.prepare(`
+    SELECT embed_color
+    FROM clans
+    WHERE id = ? AND guild_id = ?
+    LIMIT 1
+  `).get(
+    Number(clanId),
+    String(guildId)
+  );
+
+  const saved = String(row?.embed_color || '').trim();
+
+  if (/^#?[0-9a-fA-F]{6}$/.test(saved)) {
+    const normalized = saved.replace(/^#/, '');
+    return Number.parseInt(normalized, 16);
+  }
+
+  // Convert the default colour to the same numeric format.
+  const fallback = String(RED).trim();
+
+  if (/^#?[0-9a-fA-F]{6}$/.test(fallback)) {
+    return Number.parseInt(
+      fallback.replace(/^#/, ''),
+      16
+    );
+  }
+
+  return 0x5b0000;
+}
+
+// ------------------------------------------------------------
+// Clan info
+// ------------------------------------------------------------
+
 async function sendClanInfo(message, clanRow) {
-  const data = clan.describeClan(clanRow);
-  const logo = await clanLogo(data.clan);
+  // Always fetch the latest saved clan data.
+  // This prevents an old clan object from showing an old hex.
+  const latestClan = economy.db.prepare(`
+    SELECT *
+    FROM clans
+    WHERE id = ? AND guild_id = ?
+    LIMIT 1
+  `).get(
+    Number(clanRow.id),
+    String(message.guild.id)
+  );
 
-  const embed = baseEmbed(message, '', '');
+  if (!latestClan) {
+    return replyEmbed(
+      message,
+      'Clan Information',
+      'That clan no longer exists.'
+    );
+  }
 
-  // Use the clan's saved hex colour for the clan info embed only.
-  const savedColor = String(data.clan.embed_color || '').trim();
-  const embedColor = /^#[0-9a-fA-F]{6}$/.test(savedColor)
-    ? savedColor
-    : RED;
+  const data = clan.describeClan(latestClan);
+  const logo = clanLogo(data.clan);
 
-  embed.setColor(embedColor);
+  // Create a completely independent embed.
+  // Do not use baseEmbed() or message.createEmbed() here.
+  const embed = new EmbedBuilder()
+    .setColor(getClanEmbedColor(data.clan.id, message.guild.id))
+    .setTitle(data.clan.name)
+    .setTimestamp();
 
-  // Custom emoji and uploaded logos are displayed as the author icon.
-  // Unicode emoji can be placed directly in the title.
-  if (logo.iconURL) {
-    embed.setAuthor({
-      name: data.clan.name,
-      iconURL: logo.iconURL,
-    });
-  } else {
-    embed.setTitle(
-      `${logo.emoji ? `${logo.emoji} ` : ''}${data.clan.name}`
+  // Top-right clan logo thumbnail.
+  if (logo.thumbnailURL) {
+    embed.setThumbnail(logo.thumbnailURL);
+  } else if (message.guild?.iconURL()) {
+    embed.setThumbnail(
+      message.guild.iconURL({ size: 256 })
     );
   }
 
@@ -216,8 +270,8 @@ async function sendClanInfo(message, clanRow) {
 
   const byRank = rank =>
     members
-      .filter(m => Number(m.rank_no) === rank)
-      .map(m => `<@${m.user_id}>`);
+      .filter(member => Number(member.rank_no) === rank)
+      .map(member => `<@${member.user_id}>`);
 
   const roster = byRank(clan.RANK.MEMBER);
 
@@ -227,8 +281,8 @@ async function sendClanInfo(message, clanRow) {
 
   const donorText = data.donors.length
     ? data.donors
-        .map((d, i) =>
-          `**${i + 1}.** <@${d.user_id}> — **${money(d.total_deposited)}**`
+        .map((donor, index) =>
+          `**${index + 1}.** <@${donor.user_id}> — **${money(donor.total_deposited)}**`
         )
         .join('\n')
     : 'No donors yet.';
@@ -240,7 +294,9 @@ async function sendClanInfo(message, clanRow) {
   embed.addFields(
     {
       name: `${ICON('vault')} Vault`,
-      value: `**${money(data.clan.vault)}** (${shortMoney(data.clan.vault)})`,
+      value:
+        `**${money(data.clan.vault)}** ` +
+        `(${shortMoney(data.clan.vault)})`,
       inline: false,
     },
     {
@@ -279,7 +335,7 @@ async function sendClanInfo(message, clanRow) {
         ? '**MAX LEVEL**'
         : `**${pct}%**  ${progressBar(pct)}\n${xp.toLocaleString('en-US')} / ${needed.toLocaleString('en-US')} XP`,
       inline: false,
-    },
+    }
   );
 
   if (data.clan.booster_until > Date.now()) {
@@ -293,11 +349,12 @@ async function sendClanInfo(message, clanRow) {
     });
   }
 
+  // Banner remains the large image at the bottom.
+  // It is separate from the top-right clan logo thumbnail.
   if (data.clan.banner_file) {
     const bannerPath = clan.mediaPath(data.clan.banner_file);
 
     if (bannerPath) {
-      const path = require('path');
       const bannerName = path.basename(bannerPath);
 
       files.push(
@@ -310,9 +367,29 @@ async function sendClanInfo(message, clanRow) {
     }
   }
 
-  return message.reply({
+  // Keep the familiar footer without invoking the universal helper.
+  const footer = {
+    text:
+      `${message.guild.name} • ` +
+      `Requested by ${message.author.username}`,
+  };
+
+  const requesterAvatar = message.author.displayAvatarURL?.();
+
+  if (requesterAvatar) {
+    footer.iconURL = requesterAvatar;
+  }
+
+  embed.setFooter(footer);
+
+  // Send directly through the channel to bypass patched message.reply.
+  return message.channel.send({
     embeds: [embed],
     files,
+    reply: {
+      messageReference: message.id,
+      failIfNotExists: false,
+    },
   });
 }
 
@@ -354,7 +431,6 @@ async function sendProfile(message) {
     description
   );
 
-  // The user's avatar appears on the right side.
   embed.setThumbnail(avatar);
 
   return message.reply({
@@ -404,10 +480,10 @@ async function confirmClanDeletion(message, gid, uid, clanRow) {
   });
 
   collector.on('collect', async interaction => {
-    // Only the clan owner who started the command can confirm.
     if (interaction.user.id !== uid) {
       await interaction.reply({
-        content: 'Only the clan owner who started this command can use these buttons.',
+        content:
+          'Only the clan owner who started this command can use these buttons.',
         ephemeral: true,
       }).catch(() => {});
 
@@ -432,7 +508,6 @@ async function confirmClanDeletion(message, gid, uid, clanRow) {
 
     if (interaction.customId === 'clandelete:confirm') {
       try {
-        // The service checks ownership again before deleting.
         const deleted = clan.deleteClan(gid, uid);
 
         const success = baseEmbed(
@@ -497,8 +572,10 @@ async function sendQuestBoard(message) {
     const label = clan.questText(q);
 
     return (
-      `${mark} **${label}**  [${q.progress.toLocaleString('en-US')}/${q.target.toLocaleString('en-US')}]\n` +
-      `└ ${q.tier} • ${money(q.reward_coins)} • ${q.reward_xp} XP • ${progressBar(percent, 10)}`
+      `${mark} **${label}**  ` +
+      `[${q.progress.toLocaleString('en-US')}/${q.target.toLocaleString('en-US')}]\n` +
+      `└ ${q.tier} • ${money(q.reward_coins)} • ` +
+      `${q.reward_xp} XP • ${progressBar(percent, 10)}`
     );
   });
 
@@ -509,7 +586,9 @@ async function sendQuestBoard(message) {
     `${lines.join('\n\n')}\n\n` +
     `${ICON('trophy')} **Complete all four quests for ${board.bonusXp.toLocaleString('en-US')} bonus XP!**` +
     (board.bonusClaimed ? '\n✅ Daily bonus already claimed.' : '') +
-    (board.boost ? `\n\nActive XP bonus: **+${Math.round(board.boost * 100)}%**` : '')
+    (board.boost
+      ? `\n\nActive XP bonus: **+${Math.round(board.boost * 100)}%**`
+      : '')
   );
 
   return message.reply({
@@ -586,13 +665,15 @@ async function sendUpgradeView(message) {
 
   const xpLines = view.booster.tiers
     .map(t =>
-      `**XP Booster ${t.tier}** — ${money(t.cost)} • +${Math.round(t.bonus * 100)}% quest XP • ${t.xp} XP`
+      `**XP Booster ${t.tier}** — ${money(t.cost)} • ` +
+      `+${Math.round(t.bonus * 100)}% quest XP • ${t.xp} XP`
     )
     .join('\n');
 
   const capLines = CFG.CAPACITY
     .map((t, i) =>
-      `**Capacity ${i + 1}** — ${money(t.cost)} • ${t.capacity} members • ${t.xp} XP`
+      `**Capacity ${i + 1}** — ${money(t.cost)} • ` +
+      `${t.capacity} members • ${t.xp} XP`
     )
     .join('\n');
 
@@ -608,7 +689,9 @@ async function sendUpgradeView(message) {
     `${active}\n\n` +
     `**XP Boosters**\n${xpLines}\n\n` +
     `**Member Capacity**\n${capLines}\n\n` +
-    `Buy with \`${prefixFor(message.client, message.guild.id)}clan upgrade xp <tier>\` or \`${prefixFor(message.client, message.guild.id)}clan upgrade capacity\`. Only Co-owner+ can purchase upgrades.`
+    `Buy with \`${prefixFor(message.client, message.guild.id)}clan upgrade xp <tier>\` ` +
+    `or \`${prefixFor(message.client, message.guild.id)}clan upgrade capacity\`. ` +
+    `Only Co-owner+ can purchase upgrades.`
   );
 
   return message.reply({
@@ -675,7 +758,8 @@ async function handleInteraction(client, interaction) {
       };
 
       await interaction.reply({
-        content: messages[result.code] || 'This invitation is no longer available.',
+        content: messages[result.code] ||
+          'This invitation is no longer available.',
         ephemeral: true,
       });
 
@@ -723,7 +807,7 @@ async function handleInteraction(client, interaction) {
 }
 
 // ------------------------------------------------------------
-// Command
+// Main command
 // ------------------------------------------------------------
 
 module.exports = {
@@ -802,7 +886,8 @@ module.exports = {
         return replyEmbed(
           message,
           'Clan Created',
-          `**${created.name}** has been created. You are its Owner. Use \`${prefix}clan info\` to view your clan.`
+          `**${created.name}** has been created. You are its Owner. ` +
+          `Use \`${prefix}clan info\` to view your clan.`
         );
       }
 
@@ -857,7 +942,8 @@ module.exports = {
           return replyEmbed(
             message,
             'Rename Clan',
-            `Use \`${prefix}clan rename <new name>\`. Cost: ${money(CFG.RENAME_COST)}.`
+            `Use \`${prefix}clan rename <new name>\`. ` +
+            `Cost: ${money(CFG.RENAME_COST)}.`
           );
         }
 
@@ -866,7 +952,8 @@ module.exports = {
         return replyEmbed(
           message,
           'Clan Renamed',
-          `**${result.oldName}** is now **${result.clan.name}**.\nCost: ${money(result.cost)}.`
+          `**${result.oldName}** is now **${result.clan.name}**.\n` +
+          `Cost: ${money(result.cost)}.`
         );
       }
 
@@ -879,7 +966,7 @@ module.exports = {
       }
 
       // ------------------------------------------------------
-      // Delete — owner only, with confirmation
+      // Delete — owner only
       // ------------------------------------------------------
 
       if (sub === 'delete') {
@@ -897,7 +984,9 @@ module.exports = {
           found.member.rank_no !== clan.RANK.OWNER ||
           String(found.clan.owner_id) !== uid
         ) {
-          throw new clan.ClanError('Only the clan Owner can delete the clan.');
+          throw new clan.ClanError(
+            'Only the clan Owner can delete the clan.'
+          );
         }
 
         return confirmClanDeletion(
@@ -909,7 +998,7 @@ module.exports = {
       }
 
       // ------------------------------------------------------
-      // Set clan embed colour — owner and co-owner
+      // Set hex colour — owner and co-owner
       // ------------------------------------------------------
 
       if (sub === 'sethex') {
@@ -919,7 +1008,8 @@ module.exports = {
           return replyEmbed(
             message,
             'Clan Embed Colour',
-            `Use \`${prefix}clan sethex #RRGGBB\`.\nExample: \`${prefix}clan sethex #5865F2\``
+            `Use \`${prefix}clan sethex #RRGGBB\`.\n` +
+            `Example: \`${prefix}clan sethex #5865F2\``
           );
         }
 
@@ -943,7 +1033,8 @@ module.exports = {
           return replyEmbed(
             message,
             'Invite Failed',
-            `Mention a server member or provide their ID.\nUse: \`${prefix}clan invite <@user>\`.`
+            `Mention a server member or provide their ID.\n` +
+            `Use: \`${prefix}clan invite <@user>\`.`
           );
         }
 
@@ -1084,7 +1175,7 @@ module.exports = {
 
         const spec = rankActions[sub];
 
-        const result = clan.changeRank(
+        clan.changeRank(
           gid,
           uid,
           target.id,
@@ -1160,7 +1251,8 @@ module.exports = {
           }
 
           const lines = history.rows.map(row =>
-            `• <@${row.user_id}> — **${money(row.amount)}** • <t:${Math.floor(row.ts / 1000)}:R>`
+            `• <@${row.user_id}> — **${money(row.amount)}** • ` +
+            `<t:${Math.floor(row.ts / 1000)}:R>`
           );
 
           const e = baseEmbed(
@@ -1228,7 +1320,9 @@ module.exports = {
           return replyEmbed(
             message,
             'Clan Upgrade',
-            `Use \`${prefix}clan upgrade\`, \`${prefix}clan upgrade xp <tier>\` or \`${prefix}clan upgrade capacity\`.`
+            `Use \`${prefix}clan upgrade\`, ` +
+            `\`${prefix}clan upgrade xp <tier>\` or ` +
+            `\`${prefix}clan upgrade capacity\`.`
           );
         }
 
@@ -1241,7 +1335,8 @@ module.exports = {
         return replyEmbed(
           message,
           'Upgrade Purchased',
-          `${detail}\nCost: ${money(result.cost)}\nClan XP gained: ${result.xp.toLocaleString('en-US')}.`
+          `${detail}\nCost: ${money(result.cost)}\n` +
+          `Clan XP gained: ${result.xp.toLocaleString('en-US')}.`
         );
       }
 
@@ -1312,7 +1407,8 @@ module.exports = {
           return replyEmbed(
             message,
             'Clan Banner',
-            `Attach a PNG, JPG, WEBP or GIF image.\nUse: \`${prefix}clan banner\` with an attachment.`
+            `Attach a PNG, JPG, WEBP or GIF image.\n` +
+            `Use: \`${prefix}clan banner\` with an attachment.`
           );
         }
 
