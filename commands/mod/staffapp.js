@@ -1,3 +1,4 @@
+
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
@@ -14,6 +15,7 @@ const {
   TextInputStyle,
   ChannelType,
   PermissionFlagsBits,
+  OverwriteType,
 } = require('discord.js');
 
 // ============================================================
@@ -716,12 +718,19 @@ async function buildApplicationOverwrites(
 
 async function removeApplicantAccess(channel, userId) {
   try {
-    // An explicit deny also prevents access through a reviewer role.
-    await channel.permissionOverwrites.edit(userId, {
-      ViewChannel: false,
-      ReadMessageHistory: false,
-      SendMessages: false,
-    });
+    // Explicitly identify the overwrite as a member.
+    // This avoids relying on the client's user cache during startup recovery.
+    await channel.permissionOverwrites.edit(
+      userId,
+      {
+        ViewChannel: false,
+        ReadMessageHistory: false,
+        SendMessages: false,
+      },
+      {
+        type: OverwriteType.Member,
+      }
+    );
   } catch (error) {
     console.error(
       '[StaffApp] Could not remove applicant channel access:',
