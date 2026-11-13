@@ -1,3 +1,4 @@
+
 const { randomInt } = require('node:crypto');
 const { createEmbed, resolveMember } = require('../../handlers/universalHelper');
 
@@ -94,8 +95,7 @@ module.exports = {
             description:
                 `${target} rolled **${pct}%** on the Gay Meter.\n\n` +
                 `\`${bar}\`\n\n` +
-                `${line}\n\n` +
-                '*Completely random. Just a joke, not a statement about anyone\'s actual identity.*',
+                `${line}`,
 
             thumbnail: target.displayAvatarURL({ size: 256 }),
 
