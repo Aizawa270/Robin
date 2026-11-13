@@ -1,4 +1,6 @@
+
 const { EmbedBuilder } = require('discord.js');
+
 const {
   formatDuration,
   useCooldown,
@@ -8,6 +10,17 @@ const {
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
 const ANIMATION_DELAY_MS = 300;
+
+async function trackClanGame(client, message, game, result) {
+  try {
+    const tracker = client?.clanSystem?.trackGame;
+    if (typeof tracker === 'function') {
+      await tracker(message, game, result);
+    }
+  } catch (error) {
+    console.error(`[${game}] Clan quest tracking failed:`, error);
+  }
+}
 
 function buildEmbed(message, data = {}) {
   if (typeof message.createEmbed === 'function') {
@@ -19,22 +32,34 @@ function buildEmbed(message, data = {}) {
     });
 
     if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+
     if (data.footer) {
-      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-      else embed.setFooter(data.footer);
+      if (typeof data.footer === 'string') {
+        embed.setFooter({ text: data.footer });
+      } else {
+        embed.setFooter(data.footer);
+      }
     }
 
     return embed;
   }
 
-  const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
+  const embed = new EmbedBuilder()
+    .setColor('#5b0000')
+    .setTimestamp();
+
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
   if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+
   if (data.footer) {
-    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-    else embed.setFooter(data.footer);
+    if (typeof data.footer === 'string') {
+      embed.setFooter({ text: data.footer });
+    } else {
+      embed.setFooter(data.footer);
+    }
   }
+
   return embed;
 }
 
@@ -46,8 +71,10 @@ function money(client, amount) {
 
 function parseChoice(raw) {
   const value = String(raw || '').toLowerCase();
+
   if (['h', 'head', 'heads'].includes(value)) return 'heads';
   if (['t', 'tail', 'tails'].includes(value)) return 'tails';
+
   return null;
 }
 
@@ -157,7 +184,7 @@ module.exports = {
       });
     }
 
-    // Determine the actual result before the animation begins.
+    // Determine and settle the actual result before the animation.
     const flip = Math.random() < 0.495 ? 'heads' : 'tails';
     const won = choice === flip;
 
@@ -165,6 +192,7 @@ module.exports = {
 
     if (won) {
       const baseProfit = amount;
+
       const boostedProfit = boostProfit(
         client,
         message.guild.id,
@@ -191,15 +219,16 @@ module.exports = {
       message.author.id
     );
 
-    // Keep the original final result text unchanged.
+    // Track once after the result and wallet settlement are complete.
+    await trackClanGame(client, message, 'coinflip', won);
+
     const resultText = won
       ? `You got it! It was **${flip}**.\n**${money(client, winnings - amount)}** earned.`
       : `Wrong guess, it was **${flip}**.\nYou lost **${money(client, amount)}**.`;
 
-    // These frames create the coin-flipping effect without adding emojis.
     const animationFrames = ['◉', '◐', '○', '◑', '◉'];
 
-    // Send the embed ONCE. Every animation frame edits this same message.
+    // Send one message and edit it for each animation frame.
     const sentMessage = await message.reply({
       embeds: [
         buildEmbed(message, {
@@ -215,7 +244,6 @@ module.exports = {
       ],
     });
 
-    // Animate by editing the existing embed message.
     for (let i = 1; i < animationFrames.length; i++) {
       await delay(ANIMATION_DELAY_MS);
 
@@ -235,7 +263,7 @@ module.exports = {
       });
     }
 
-    // Animation finished: edit that SAME message to reveal the result.
+    // Reveal the result in the same message.
     const finalEmbed = buildEmbed(message, {
       title: '🎲 Coin Flip',
       description:
