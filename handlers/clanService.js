@@ -46,7 +46,7 @@ const RANK_NAMES = {
 };
 
 // ------------------------------------------------------------
-// Schema. CREATE IF NOT EXISTS and guarded ALTERs preserve data.
+// Schema
 // ------------------------------------------------------------
 
 db.exec(`
@@ -168,16 +168,6 @@ CREATE TABLE IF NOT EXISTS clan_donors (
 );
 `);
 
-// Preserve donor totals for any clan data that was already created before
-// the historical donor table was introduced.
-db.prepare(`
-  INSERT OR IGNORE INTO clan_donors
-    (clan_id, user_id, total_deposited)
-  SELECT clan_id, user_id, total_deposited
-  FROM clan_members
-  WHERE total_deposited > 0
-`).run();
-
 function addColumn(table, columnSql) {
   try {
     db.prepare(`ALTER TABLE ${table} ADD COLUMN ${columnSql}`).run();
@@ -187,7 +177,7 @@ function addColumn(table, columnSql) {
   }
 }
 
-// Existing and new optional clan columns.
+// Optional columns. Existing database data is preserved.
 addColumn('clans', 'logo_emoji TEXT');
 addColumn('clans', 'embed_color TEXT');
 
@@ -209,6 +199,15 @@ if (boosterColumnAdded) {
     WHERE xp_tier > 0
   `).run(Date.now() + CFG.XP_BOOSTER_DURATION_MS);
 }
+
+// Preserve historical donor totals.
+db.prepare(`
+  INSERT OR IGNORE INTO clan_donors
+    (clan_id, user_id, total_deposited)
+  SELECT clan_id, user_id, total_deposited
+  FROM clan_members
+  WHERE total_deposited > 0
+`).run();
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const MEDIA_DIR = path.join(DATA_DIR, 'clan_media');
@@ -343,7 +342,6 @@ const S = {
     WHERE id = ?
   `),
 
-  // NEW: custom clan info embed colour.
   setEmbedColor: db.prepare(`
     UPDATE clans
     SET embed_color = ?
@@ -378,13 +376,6 @@ const S = {
     SET vault = vault - ?
     WHERE id = ?
       AND vault >= ?
-  `),
-
-  setBooster: db.prepare(`
-    UPDATE clans
-    SET booster_tier = ?,
-        booster_until = ?
-    WHERE id = ?
   `),
 
   bumpCapTier: db.prepare(`
@@ -680,27 +671,54 @@ const S = {
   delDonors: db.prepare(
     'DELETE FROM clan_donors WHERE clan_id = ?'
   ),
+
+  // ----------------------------------------------------------
+  // Atomic wallet deposit statements.
+  // The balance check and debit happen in the SAME SQL update.
+  // ----------------------------------------------------------
+
+  debitWallet: db.prepare(`
+    UPDATE economy_users
+    SET balance = balance - ?,
+        lifetime_spent = lifetime_spent + ?
+    WHERE guild_id = ?
+      AND user_id = ?
+      AND balance >= ?
+  `),
+
+  insertWalletTransaction: db.prepare(`
+    INSERT INTO economy_transactions (
+      guild_id,
+      user_id,
+      actor_id,
+      type,
+      amount,
+      reason,
+      timestamp
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
 };
 
 // ------------------------------------------------------------
 // Clan lookups
 // ------------------------------------------------------------
 
-function clanCapacity(clan) {
-  const tier = Number(clan.capacity_tier || 0);
+function clanCapacity(clanRow) {
+  const tier = Number(clanRow.capacity_tier || 0);
 
   return tier > 0
     ? CFG.CAPACITY[tier - 1]?.capacity || CFG.BASE_CAPACITY
     : CFG.BASE_CAPACITY;
 }
 
-function xpBoost(clan, now = Date.now()) {
-  if (Number(clan.booster_until || 0) <= now) {
+function xpBoost(clanRow, now = Date.now()) {
+  if (Number(clanRow.booster_until || 0) <= now) {
     return 0;
   }
 
   return CFG.XP_BOOSTER[
-    Number(clan.booster_tier || 0) - 1
+    Number(clanRow.booster_tier || 0) - 1
   ]?.bonus || 0;
 }
 
@@ -1882,20 +1900,36 @@ function setPrivate(gid, name, value) {
 // Vault
 // ------------------------------------------------------------
 
+// This transaction uses IMMEDIATE mode so SQLite obtains its
+// write lock BEFORE reading the wallet. That prevents overlapping
+// economy operations from racing between the balance check and
+// the debit.
+//
+// The wallet debit, economy history, vault, member contribution,
+// donor total, deposit history and quest progress are committed
+// together. If any step fails, the entire deposit rolls back.
+
 const depositTx = db.transaction((gid, uid, amountRaw, now) => {
   const { clan: clanRow } = requireMembership(gid, uid);
 
-  const wallet = economy.getBalance(gid, uid);
+  const wallet = Number(economy.getBalance(gid, uid) || 0);
 
-  const amount = String(amountRaw).toLowerCase() === 'all'
-    ? wallet
-    : Math.floor(
-        Number(String(amountRaw).replace(/,/g, ''))
-      );
+  const raw = String(amountRaw ?? '').trim();
+  let amount;
+
+  if (raw.toLowerCase() === 'all') {
+    amount = wallet;
+  } else {
+    if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(raw)) {
+      throw new ClanError('Enter a valid amount to deposit.');
+    }
+
+    amount = Number(raw.replace(/,/g, ''));
+  }
 
   if (!Number.isSafeInteger(amount) || amount <= 0) {
     throw new ClanError(
-      String(amountRaw).toLowerCase() === 'all'
+      raw.toLowerCase() === 'all'
         ? 'Your wallet is empty.'
         : 'Enter a valid amount to deposit.'
     );
@@ -1907,43 +1941,67 @@ const depositTx = db.transaction((gid, uid, amountRaw, now) => {
     );
   }
 
-  const removed = economy.removeCrowns(
+  // Atomically debit only when the current balance is sufficient.
+  const debit = S.debitWallet.run(
+    amount,
+    amount,
     gid,
     uid,
-    amount,
-    {
-      type: 'clan_deposit',
-      reason: `Clan vault deposit (${clanRow.name})`,
-      actorId: uid,
-      timestamp: now,
-    }
+    amount
   );
 
-  if (!removed) {
+  if (debit.changes !== 1) {
     throw new ClanError(
-      `You only have ${money(wallet)} in your wallet.`
+      'Your wallet balance changed before the deposit completed. Please check your balance and try again.'
     );
   }
 
-  S.addVault.run(
+  // Keep the regular economy transaction history accurate.
+  S.insertWalletTransaction.run(
+    gid,
+    uid,
+    uid,
+    'clan_deposit',
+    amount,
+    `Clan vault deposit (${clanRow.name})`,
+    now
+  );
+
+  // Update the clan vault.
+  const vaultUpdate = S.addVault.run(
     amount,
     now,
     clanRow.id
   );
 
-  S.memberDeposit.run(
+  if (vaultUpdate.changes !== 1) {
+    throw new ClanError(
+      'The clan vault could not be updated. Your wallet debit has been rolled back.'
+    );
+  }
+
+  // Update the member's lifetime clan contributions.
+  const contributionUpdate = S.memberDeposit.run(
     amount,
     now,
     gid,
     uid
   );
 
+  if (contributionUpdate.changes !== 1) {
+    throw new ClanError(
+      'Your clan contribution could not be recorded. The deposit has been rolled back.'
+    );
+  }
+
+  // Update the clan's top donor records.
   S.addDonor.run(
     clanRow.id,
     uid,
     amount
   );
 
+  // Store an individual deposit history entry.
   S.insDeposit.run(
     clanRow.id,
     gid,
@@ -1952,6 +2010,7 @@ const depositTx = db.transaction((gid, uid, amountRaw, now) => {
     now
   );
 
+  // Record the deposit quest metric and evaluate quests.
   const notes = {};
 
   ensureQuests(clanRow, now);
@@ -1979,11 +2038,12 @@ const depositTx = db.transaction((gid, uid, amountRaw, now) => {
 });
 
 function deposit(gid, uid, amountRaw, now = Date.now()) {
-  return depositTx(
+  // IMMEDIATE is important here: lock before reading the wallet.
+  return depositTx.immediate(
     String(gid),
     String(uid),
     amountRaw,
-    now
+    Number(now)
   );
 }
 
@@ -2491,7 +2551,6 @@ function setEmbedColor(gid, uid, rawColor) {
 
 // ------------------------------------------------------------
 // Clan deletion
-// All related clan data is removed in one database transaction.
 // ------------------------------------------------------------
 
 const deleteClanTx = db.transaction(clanId => {
@@ -2515,9 +2574,6 @@ const deleteClanTx = db.transaction(clanId => {
   return clanRow;
 });
 
-// NEW: manual deletion.
-// Only the actual owner recorded in clans.owner_id can delete.
-// Files are removed after the database transaction succeeds.
 function deleteClan(gid, uid) {
   gid = String(gid);
   uid = String(uid);
@@ -2533,7 +2589,7 @@ function deleteClan(gid, uid) {
     );
   }
 
-  const deleted = deleteClanTx(clanRow.id);
+  const deleted = deleteClanTx.immediate(clanRow.id);
 
   if (!deleted) {
     throw new ClanError(
