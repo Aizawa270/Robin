@@ -1,9 +1,11 @@
+
 const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
 } = require('discord.js');
+
 const {
   formatDuration,
   useCooldown,
@@ -13,12 +15,24 @@ const {
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
 
-// One running game per PLAYER (not per channel), so any number of
-// people can play at the same time.
+// One running game per player, across all channels.
 const activeGames = new Map();
 
 function gameKey(guildId, userId) {
   return `${guildId}:${userId}`;
+}
+
+// Records the finished game through the existing clan service.
+// true = win, false = loss, null = push/draw.
+async function trackClanGame(client, message, game, result) {
+  try {
+    const tracker = client?.clanSystem?.trackGame;
+    if (typeof tracker === 'function') {
+      await tracker(message, game, result);
+    }
+  } catch (error) {
+    console.error(`[${game}] Clan quest tracking failed:`, error);
+  }
 }
 
 function buildEmbed(message, data = {}) {
@@ -31,22 +45,34 @@ function buildEmbed(message, data = {}) {
     });
 
     if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+
     if (data.footer) {
-      if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-      else embed.setFooter(data.footer);
+      if (typeof data.footer === 'string') {
+        embed.setFooter({ text: data.footer });
+      } else {
+        embed.setFooter(data.footer);
+      }
     }
 
     return embed;
   }
 
-  const embed = new EmbedBuilder().setColor('#5b0000').setTimestamp();
+  const embed = new EmbedBuilder()
+    .setColor('#5b0000')
+    .setTimestamp();
+
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
   if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+
   if (data.footer) {
-    if (typeof data.footer === 'string') embed.setFooter({ text: data.footer });
-    else embed.setFooter(data.footer);
+    if (typeof data.footer === 'string') {
+      embed.setFooter({ text: data.footer });
+    } else {
+      embed.setFooter(data.footer);
+    }
   }
+
   return embed;
 }
 
@@ -112,15 +138,29 @@ function isNaturalBlackjack(hand) {
 
 function activeRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('bj_hit')
+      .setLabel('Hit')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('bj_stand')
+      .setLabel('Stand')
+      .setStyle(ButtonStyle.Secondary),
   );
 }
 
 function disabledRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary).setDisabled(true),
-    new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary).setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId('bj_hit')
+      .setLabel('Hit')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId('bj_stand')
+      .setLabel('Stand')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
   );
 }
 
@@ -131,7 +171,9 @@ function renderEmbed(session, revealDealer = false, status = 'Your move') {
     : `${cardString(session.dealerHand[0])}  Hidden`;
 
   const playerTotal = handValue(session.playerHand);
-  const dealerTotal = revealDealer ? handValue(session.dealerHand) : handValue([session.dealerHand[0]]);
+  const dealerTotal = revealDealer
+    ? handValue(session.dealerHand)
+    : handValue([session.dealerHand[0]]);
 
   return buildEmbed(session.messageRef || session.message || session.clientMessage, {
     title: '🃏 Blackjack',
@@ -148,7 +190,9 @@ function renderEmbed(session, revealDealer = false, status = 'Your move') {
 }
 
 async function finalizeGame(session, messageLike = null, reason = 'stand') {
+  // Prevent double settlement from button events and collector timeout.
   if (session.ended) return;
+
   session.ended = true;
   activeGames.delete(session.key);
 
@@ -172,15 +216,29 @@ async function finalizeGame(session, messageLike = null, reason = 'stand') {
       outcome = 'win';
       status = reason === 'natural' ? 'Blackjack' : 'Win';
 
-      const baseProfit = reason === 'natural' ? Math.round(session.bet * 1.5) : session.bet;
-      const boostedProfit = boostProfit(session.client, session.guild.id, session.user.id, baseProfit);
+      const baseProfit = reason === 'natural'
+        ? Math.round(session.bet * 1.5)
+        : session.bet;
+
+      const boostedProfit = boostProfit(
+        session.client,
+        session.guild.id,
+        session.user.id,
+        baseProfit
+      );
+
       payout = session.bet + boostedProfit;
 
-      session.client.economy.addCrowns(session.guild.id, session.user.id, payout, {
-        type: 'blackjack_win',
-        reason: reason === 'natural' ? 'Natural blackjack' : 'Blackjack win',
-        actorId: session.user.id,
-      });
+      session.client.economy.addCrowns(
+        session.guild.id,
+        session.user.id,
+        payout,
+        {
+          type: 'blackjack_win',
+          reason: reason === 'natural' ? 'Natural blackjack' : 'Blackjack win',
+          actorId: session.user.id,
+        }
+      );
     } else if (playerTotal < dealerTotal) {
       outcome = 'loss';
       status = 'Lose';
@@ -189,36 +247,60 @@ async function finalizeGame(session, messageLike = null, reason = 'stand') {
       status = 'Push';
       payout = session.bet;
 
-      session.client.economy.addCrowns(session.guild.id, session.user.id, payout, {
-        type: 'blackjack_push',
-        reason: 'Blackjack push refund',
-        actorId: session.user.id,
-      });
+      session.client.economy.addCrowns(
+        session.guild.id,
+        session.user.id,
+        payout,
+        {
+          type: 'blackjack_push',
+          reason: 'Blackjack push refund',
+          actorId: session.user.id,
+        }
+      );
     }
   }
+
+  // Track exactly once, after the game outcome and payout are settled.
+  const clanResult = outcome === 'win'
+    ? true
+    : outcome === 'loss'
+      ? false
+      : null;
+
+  await trackClanGame(
+    session.client,
+    session.messageRef,
+    'blackjack',
+    clanResult
+  );
 
   const finalPlayerTotal = handValue(session.playerHand);
   const finalDealerTotal = handValue(session.dealerHand);
 
-  const resultText =
-    outcome === 'win'
-      ? `### ✅ You Won!\nYou earned **${money(session.client, payout - session.bet)}**.`
-      : outcome === 'push'
-        ? `### 🤝 Push!\nYour bet has been refunded.`
-        : `### ❌ You Lost!\nYou lost **${money(session.client, session.bet)}**.`;
+  const resultText = outcome === 'win'
+    ? `### ✅ You Won!\nYou earned **${money(session.client, payout - session.bet)}**.`
+    : outcome === 'push'
+      ? '### 🤝 Push!\nYour bet has been refunded.'
+      : `### ❌ You Lost!\nYou lost **${money(session.client, session.bet)}**.`;
 
-  const embed = buildEmbed(session.messageRef || messageLike || session.message, {
-    title: '🃏 Blackjack',
-    description:
-      `**Bet:** ${money(session.client, session.bet)}\n\n` +
-      `**Your Hand:**\n${session.playerHand.map(cardString).join('  ')} (**${finalPlayerTotal}**)\n\n` +
-      `**Dealer Hand:**\n${session.dealerHand.map(cardString).join('  ')} (**${finalDealerTotal}**)\n\n` +
-      `${resultText}`,
-    thumbnail: session.user.displayAvatarURL({ size: 256 }),
-    footer: `Requested by ${session.user.username}`,
-  });
+  const embed = buildEmbed(
+    session.messageRef || messageLike || session.message,
+    {
+      title: '🃏 Blackjack',
+      description:
+        `**Bet:** ${money(session.client, session.bet)}\n\n` +
+        `**Your Hand:**\n${session.playerHand.map(cardString).join('  ')} (**${finalPlayerTotal}**)\n\n` +
+        `**Dealer Hand:**\n${session.dealerHand.map(cardString).join('  ')} (**${finalDealerTotal}**)\n\n` +
+        `${resultText}`,
+      thumbnail: session.user.displayAvatarURL({ size: 256 }),
+      footer: `Requested by ${session.user.username}`,
+    }
+  );
 
-  const payload = { embeds: [embed], components: [disabledRow()] };
+  const payload = {
+    embeds: [embed],
+    components: [disabledRow()],
+  };
 
   if (messageLike?.message?.edit) {
     await messageLike.message.edit(payload).catch(() => {});
@@ -250,7 +332,6 @@ module.exports = {
 
     const key = gameKey(message.guild.id, message.author.id);
 
-    // Only blocks the SAME player from starting a second hand.
     if (activeGames.has(key)) {
       return message.reply({
         embeds: [
@@ -263,6 +344,7 @@ module.exports = {
     }
 
     const bet = parseInt(args[0], 10);
+
     if (!Number.isInteger(bet) || bet <= 0) {
       return message.reply({
         embeds: [
@@ -285,7 +367,11 @@ module.exports = {
       });
     }
 
-    const balance = client.economy.getBalance(message.guild.id, message.author.id);
+    const balance = client.economy.getBalance(
+      message.guild.id,
+      message.author.id
+    );
+
     if (balance < bet) {
       return message.reply({
         embeds: [
@@ -297,7 +383,13 @@ module.exports = {
       });
     }
 
-    const remaining = useCooldown(message.guild.id, message.author.id, 'blackjack', COOLDOWN_MS);
+    const remaining = useCooldown(
+      message.guild.id,
+      message.author.id,
+      'blackjack',
+      COOLDOWN_MS
+    );
+
     if (remaining > 0) {
       return message.reply({
         embeds: [
@@ -309,11 +401,16 @@ module.exports = {
       });
     }
 
-    const removed = client.economy.removeCrowns(message.guild.id, message.author.id, bet, {
-      type: 'blackjack_bet',
-      reason: 'Blackjack bet',
-      actorId: message.author.id,
-    });
+    const removed = client.economy.removeCrowns(
+      message.guild.id,
+      message.author.id,
+      bet,
+      {
+        type: 'blackjack_bet',
+        reason: 'Blackjack bet',
+        actorId: message.author.id,
+      }
+    );
 
     if (!removed) {
       return message.reply({
@@ -327,6 +424,7 @@ module.exports = {
     }
 
     const deck = createDeck();
+
     const session = {
       key,
       client,
@@ -350,28 +448,42 @@ module.exports = {
         components: [activeRow()],
       });
     } catch (error) {
-      // Could not even show the game: give the bet back and free the slot.
-      console.error('[Blackjack] Could not send game message:', error?.message || error);
+      console.error(
+        '[Blackjack] Could not send game message:',
+        error?.message || error
+      );
+
       activeGames.delete(key);
 
-      client.economy.addCrowns(message.guild.id, message.author.id, bet, {
-        type: 'blackjack_refund',
-        reason: 'Blackjack failed to start',
-        actorId: message.author.id,
-      });
+      client.economy.addCrowns(
+        message.guild.id,
+        message.author.id,
+        bet,
+        {
+          type: 'blackjack_refund',
+          reason: 'Blackjack failed to start',
+          actorId: message.author.id,
+        }
+      );
 
       return;
     }
 
-    if (isNaturalBlackjack(session.playerHand) || isNaturalBlackjack(session.dealerHand)) {
-      const reason = isNaturalBlackjack(session.playerHand) ? 'natural' : 'stand';
+    if (
+      isNaturalBlackjack(session.playerHand) ||
+      isNaturalBlackjack(session.dealerHand)
+    ) {
+      const reason = isNaturalBlackjack(session.playerHand)
+        ? 'natural'
+        : 'stand';
+
       await finalizeGame(session, session.message, reason);
       return;
     }
 
     const collector = session.message.createMessageComponentCollector({
       time: 120_000,
-      filter: i => ['bj_hit', 'bj_stand'].includes(i.customId),
+      filter: interaction => ['bj_hit', 'bj_stand'].includes(interaction.customId),
     });
 
     collector.on('collect', async interaction => {
@@ -388,10 +500,15 @@ module.exports = {
 
       if (interaction.customId === 'bj_hit') {
         session.playerHand.push(drawCard(session.deck));
+
         const total = handValue(session.playerHand);
 
         if (total >= 21) {
-          await finalizeGame(session, session.message, total === 21 ? 'stand' : 'bust');
+          await finalizeGame(
+            session,
+            session.message,
+            total === 21 ? 'stand' : 'bust'
+          );
           return;
         }
 
