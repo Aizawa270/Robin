@@ -5,6 +5,12 @@ const {
   ButtonStyle,
 } = require('discord.js');
 
+const {
+  getBankBalance,
+} = require('../../handlers/economyExtras');
+
+const PER_PAGE = 10;
+
 function formatTime() {
   return new Date().toLocaleTimeString('en-US', {
     hour: 'numeric',
@@ -51,6 +57,137 @@ function buildEmbed(message, data = {}) {
   return embed;
 }
 
+// ============================================================
+// NETWORTH RANKING (wallet + personal bank)
+// ============================================================
+
+function getNetworthRanking(client, guildId) {
+  const db = client.economy?.db || client.economyDB;
+
+  const rows = db
+    .prepare(`
+      SELECT user_id, balance
+      FROM economy_users
+      WHERE guild_id = ?
+    `)
+    .all(String(guildId));
+
+  const ranking = [];
+
+  for (const row of rows) {
+    const wallet = Number(row.balance || 0);
+
+    let bank = 0;
+    try {
+      bank = Number(getBankBalance(guildId, row.user_id) || 0);
+    } catch {
+      bank = 0;
+    }
+
+    const networth = wallet + bank;
+    if (networth <= 0) continue;
+
+    ranking.push({
+      user_id: String(row.user_id),
+      wallet,
+      bank,
+      networth,
+    });
+  }
+
+  ranking.sort((a, b) =>
+    b.networth - a.networth ||
+    a.user_id.localeCompare(b.user_id)
+  );
+
+  return ranking;
+}
+
+function makeControls(page, totalPages, disableAll = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('eclb_prev')
+      .setLabel('◀')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(disableAll || page <= 1),
+    new ButtonBuilder()
+      .setCustomId('eclb_page')
+      .setLabel('Go To Page')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(disableAll),
+    new ButtonBuilder()
+      .setCustomId('eclb_next')
+      .setLabel('▶')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(disableAll || page >= totalPages)
+  );
+}
+
+async function renderPage(client, message, requestedPage) {
+  const ranking = getNetworthRanking(client, message.guild.id);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(ranking.length / PER_PAGE)
+  );
+
+  const page = Math.max(1, Math.min(totalPages, requestedPage));
+  const offset = (page - 1) * PER_PAGE;
+  const slice = ranking.slice(offset, offset + PER_PAGE);
+
+  const thumbnail = message.guild.iconURL({ size: 256 });
+
+  if (!slice.length) {
+    return {
+      page,
+      totalPages,
+      embed: buildEmbed(message, {
+        title: 'Crown Leaderboard (Page 1/1)',
+        description: 'No Crown balances found in this server yet.',
+        footer: footerText(client),
+        thumbnail,
+      }),
+    };
+  }
+
+  const lines = [];
+
+  for (let i = 0; i < slice.length; i++) {
+    const row = slice[i];
+    const rank = offset + i + 1;
+
+    const member =
+      message.guild.members.cache.get(row.user_id) ||
+      await message.guild.members.fetch(row.user_id).catch(() => null);
+
+    const name =
+      member?.displayName ||
+      member?.user?.username ||
+      row.user_id;
+
+    lines.push(`${rank}. ${name} - ${money(client, row.networth)}`);
+  }
+
+  const myIndex = ranking.findIndex(
+    row => row.user_id === message.author.id
+  );
+
+  const myRank = myIndex >= 0 ? myIndex + 1 : null;
+
+  return {
+    page,
+    totalPages,
+    embed: buildEmbed(message, {
+      title: `Crown Leaderboard (Page ${page}/${totalPages})`,
+      description:
+        `${lines.join('\n')}\n\n` +
+        `${message.author.username}'s Position: ${myRank ? `#${myRank}` : 'N/A'}`,
+      footer: footerText(client),
+      thumbnail,
+    }),
+  };
+}
+
 async function resolvePagePrompt(message, totalPages) {
   const prompt = await message.channel.send({
     embeds: [
@@ -85,7 +222,7 @@ async function resolvePagePrompt(message, totalPages) {
 module.exports = {
   name: 'eclb',
   aliases: ['ecleaderboard'],
-  description: 'Show the Crown leaderboard.',
+  description: 'Show the Crown leaderboard (networth: wallet + bank).',
   category: 'economy',
   usage: '$eclb [page]',
 
@@ -110,68 +247,14 @@ module.exports = {
       if (Number.isInteger(parsed) && parsed > 0) page = parsed;
     }
 
-    const perPage = 10;
-    const totalRows = client.economy.getEconomySummary(message.guild.id).count || 0;
-    const totalPages = Math.max(1, Math.ceil(totalRows / perPage));
-    if (page > totalPages) page = totalPages;
+    const first = await renderPage(client, message, page);
+    page = first.page;
 
-    const offset = (page - 1) * perPage;
-    const rows = client.economy.getLeaderboard(message.guild.id, perPage, offset);
-
-    if (!rows.length) {
-      return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Crown Leaderboard (Page 1/1)',
-            description: 'No Crown balances found in this server yet.',
-            footer: footerText(client),
-            thumbnail: message.guild.iconURL({ size: 256 }),
-          }),
-        ],
-      });
-    }
-
-    const lines = [];
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const rank = offset + i + 1;
-      const member =
-        message.guild.members.cache.get(row.user_id) ||
-        await message.guild.members.fetch(row.user_id).catch(() => null);
-
-      const name = member?.displayName || member?.user?.username || row.user_id;
-      lines.push(`${rank}. ${name} - ${money(client, row.balance)}`);
-    }
-
-    const myRank = client.economy.getRank(message.guild.id, message.author.id);
-
-    const embed = buildEmbed(message, {
-      title: `Crown Leaderboard (Page ${page}/${totalPages})`,
-      description: `${lines.join('\n')}\n\n${message.author.username}'s Position: ${myRank ? `#${myRank}` : 'N/A'}`,
-      footer: footerText(client),
-      thumbnail: message.guild.iconURL({ size: 256 }),
-    });
-
-    const controls = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('eclb_prev')
-        .setLabel('◀')
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(page <= 1),
-      new ButtonBuilder()
-        .setCustomId('eclb_page')
-        .setLabel('Go To Page')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('eclb_next')
-        .setLabel('▶')
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(page >= totalPages)
-    );
+    let totalPages = first.totalPages;
 
     const reply = await message.reply({
-      embeds: [embed],
-      components: [controls],
+      embeds: [first.embed],
+      components: [makeControls(page, totalPages)],
     });
 
     const collector = reply.createMessageComponentCollector({
@@ -182,87 +265,35 @@ module.exports = {
     collector.on('collect', async interaction => {
       if (interaction.customId === 'eclb_page') {
         await interaction.deferUpdate().catch(() => {});
+
         const requestedPage = await resolvePagePrompt(message, totalPages);
         if (!requestedPage) return;
-        page = Math.max(1, Math.min(totalPages, requestedPage));
+
+        page = requestedPage;
       } else if (interaction.customId === 'eclb_prev') {
         page = Math.max(1, page - 1);
         await interaction.deferUpdate().catch(() => {});
       } else if (interaction.customId === 'eclb_next') {
-        page = Math.min(totalPages, page + 1);
+        page = page + 1;
         await interaction.deferUpdate().catch(() => {});
       } else {
         return;
       }
 
-      const newOffset = (page - 1) * perPage;
-      const newRows = client.economy.getLeaderboard(message.guild.id, perPage, newOffset);
-
-      const newLines = [];
-      for (let i = 0; i < newRows.length; i++) {
-        const row = newRows[i];
-        const rank = newOffset + i + 1;
-
-        const member =
-          message.guild.members.cache.get(row.user_id) ||
-          await message.guild.members.fetch(row.user_id).catch(() => null);
-
-        const name = member?.displayName || member?.user?.username || row.user_id;
-        newLines.push(`${rank}. ${name} - ${money(client, row.balance)}`);
-      }
-
-      const newRank = client.economy.getRank(message.guild.id, message.author.id);
-
-      const updatedEmbed = buildEmbed(message, {
-        title: `Crown Leaderboard (Page ${page}/${totalPages})`,
-        description: `${newLines.join('\n')}\n\n${message.author.username}'s Position: ${newRank ? `#${newRank}` : 'N/A'}`,
-        footer: footerText(client),
-        thumbnail: message.guild.iconURL({ size: 256 }),
-      });
-
-      const updatedControls = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('eclb_prev')
-          .setLabel('◀')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(page <= 1),
-        new ButtonBuilder()
-          .setCustomId('eclb_page')
-          .setLabel('Go To Page')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId('eclb_next')
-          .setLabel('▶')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(page >= totalPages)
-      );
+      const view = await renderPage(client, message, page);
+      page = view.page;
+      totalPages = view.totalPages;
 
       await interaction.message.edit({
-        embeds: [updatedEmbed],
-        components: [updatedControls],
+        embeds: [view.embed],
+        components: [makeControls(page, totalPages)],
       }).catch(() => {});
     });
 
     collector.on('end', async () => {
-      const disabled = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('eclb_prev')
-          .setLabel('◀')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true),
-        new ButtonBuilder()
-          .setCustomId('eclb_page')
-          .setLabel('Go To Page')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true),
-        new ButtonBuilder()
-          .setCustomId('eclb_next')
-          .setLabel('▶')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true)
-      );
-
-      await reply.edit({ components: [disabled] }).catch(() => {});
+      await reply.edit({
+        components: [makeControls(page, totalPages, true)],
+      }).catch(() => {});
     });
   },
 };
