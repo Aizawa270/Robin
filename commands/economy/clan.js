@@ -10,6 +10,7 @@ const {
   ButtonStyle,
   AttachmentBuilder,
   ComponentType,
+  PermissionFlagsBits,
 } = require('discord.js');
 
 const clan = require('../../handlers/clanService');
@@ -203,7 +204,6 @@ function getClanEmbedColor(clanId, guildId) {
     return Number.parseInt(normalized, 16);
   }
 
-  // Convert the default colour to the same numeric format.
   const fallback = String(RED).trim();
 
   if (/^#?[0-9a-fA-F]{6}$/.test(fallback)) {
@@ -244,8 +244,6 @@ async function sendClanInfo(message, clanRow) {
   const data = clan.describeClan(latestClan);
   const logo = clanLogo(data.clan);
 
-  // Create a completely independent embed.
-  // Do not use baseEmbed() or message.createEmbed() here.
   const embed = new EmbedBuilder()
     .setColor(getClanEmbedColor(data.clan.id, message.guild.id))
     .setTitle(data.clan.name)
@@ -367,7 +365,6 @@ async function sendClanInfo(message, clanRow) {
     }
   }
 
-  // Keep the familiar footer without invoking the universal helper.
   const footer = {
     text:
       `${message.guild.name} • ` +
@@ -436,6 +433,677 @@ async function sendProfile(message) {
   return message.reply({
     embeds: [embed],
   });
+}
+
+// ------------------------------------------------------------
+// Clan user profile reset
+//
+// Clears only the selected member's personal clan data.
+//
+// Preserved:
+// - Membership
+// - Rank
+// - Joined date
+// - Clan vault
+// - Clan XP and level
+// - Clan upgrades
+// - Already completed shared quest rewards
+//
+// Reset:
+// - Member contribution total
+// - Member donor leaderboard entry
+// - Member deposit history
+// - Member daily activity
+// - Member quest actor records
+// ------------------------------------------------------------
+
+function clanDayKey(timestamp = Date.now()) {
+  const offset = Number(CFG.TZ_OFFSET_MS || 0);
+  const date = new Date(timestamp + offset);
+
+  return (
+    `${date.getUTCFullYear()}-` +
+    `${String(date.getUTCMonth() + 1).padStart(2, '0')}-` +
+    `${String(date.getUTCDate()).padStart(2, '0')}`
+  );
+}
+
+const resetClanUserTx = economy.db.transaction(
+  (guildId, userId, now) => {
+    const db = economy.db;
+
+    const member = db.prepare(`
+      SELECT
+        m.*,
+        c.name AS clan_name
+      FROM clan_members m
+      JOIN clans c ON c.id = m.clan_id
+      WHERE m.guild_id = ?
+        AND m.user_id = ?
+      LIMIT 1
+    `).get(guildId, userId);
+
+    if (!member) {
+      throw new clan.ClanError(
+        'That user is not currently in a clan.'
+      );
+    }
+
+    const clanId = Number(member.clan_id);
+    const oldContribution = Number(member.total_deposited || 0);
+
+    const deposits = db.prepare(`
+      DELETE FROM clan_deposits
+      WHERE clan_id = ?
+        AND guild_id = ?
+        AND user_id = ?
+    `).run(clanId, guildId, userId);
+
+    const donors = db.prepare(`
+      DELETE FROM clan_donors
+      WHERE clan_id = ?
+        AND user_id = ?
+    `).run(clanId, userId);
+
+    const activity = db.prepare(`
+      DELETE FROM clan_daily_stats
+      WHERE clan_id = ?
+        AND user_id = ?
+    `).run(clanId, userId);
+
+    const questActors = db.prepare(`
+      DELETE FROM clan_quest_actors
+      WHERE clan_id = ?
+        AND user_id = ?
+    `).run(clanId, userId);
+
+    // Keep clan_id, rank_no and joined_at exactly as they are.
+    // Reset last_deposit_at to now to prevent an immediate
+    // inactivity kick after an administrative profile reset.
+    const memberUpdate = db.prepare(`
+      UPDATE clan_members
+      SET
+        total_deposited = 0,
+        last_deposit_at = ?
+      WHERE guild_id = ?
+        AND user_id = ?
+        AND clan_id = ?
+    `).run(now, guildId, userId, clanId);
+
+    if (memberUpdate.changes !== 1) {
+      throw new Error(
+        'The member record changed while the reset was being processed.'
+      );
+    }
+
+    // Recalculate today's unfinished quests using the remaining
+    // members' activity. Completed shared rewards are not reversed.
+    const dayKey = clanDayKey(now);
+
+    const openQuests = db.prepare(`
+      SELECT *
+      FROM clan_quests
+      WHERE clan_id = ?
+        AND day_key = ?
+        AND done = 0
+    `).all(clanId, dayKey);
+
+    const getSum = db.prepare(`
+      SELECT COALESCE(SUM(value), 0) AS n
+      FROM clan_daily_stats
+      WHERE clan_id = ?
+        AND day_key = ?
+        AND metric = ?
+    `);
+
+    const getDistinct = db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM clan_daily_stats
+      WHERE clan_id = ?
+        AND day_key = ?
+        AND metric = ?
+        AND value >= ?
+    `);
+
+    const updateQuest = db.prepare(`
+      UPDATE clan_quests
+      SET progress = ?
+      WHERE clan_id = ?
+        AND day_key = ?
+        AND slot = ?
+        AND done = 0
+    `);
+
+    for (const quest of openQuests) {
+      const definition = CFG.QUEST_POOL.find(
+        item => item.id === quest.kind
+      );
+
+      if (!definition) continue;
+
+      let progress = Number(quest.progress || 0);
+
+      if (definition.type === 'sum') {
+        progress = Number(
+          getSum.get(
+            clanId,
+            dayKey,
+            definition.metric
+          ).n || 0
+        );
+      } else if (definition.type === 'distinct') {
+        progress = Number(
+          getDistinct.get(
+            clanId,
+            dayKey,
+            definition.metric,
+            definition.min || 1
+          ).n || 0
+        );
+      } else if (definition.type === 'streak') {
+        // Streaks are stored at clan/game level, not per-user.
+        // Do not erase a clan-wide streak when resetting one member.
+        continue;
+      }
+
+      progress = Math.min(
+        Number(quest.target),
+        Math.max(0, progress)
+      );
+
+      updateQuest.run(
+        progress,
+        clanId,
+        dayKey,
+        quest.slot
+      );
+    }
+
+    return {
+      clanId,
+      clanName: member.clan_name,
+      rank: Number(member.rank_no),
+      oldContribution,
+      removedDeposits: Number(deposits.changes || 0),
+      removedDonorRecords: Number(donors.changes || 0),
+      removedActivity: Number(activity.changes || 0),
+      removedQuestActors: Number(questActors.changes || 0),
+    };
+  }
+);
+
+function resetClanUserProfile(guildId, userId) {
+  return resetClanUserTx.immediate(
+    String(guildId),
+    String(userId),
+    Date.now()
+  );
+}
+
+// ------------------------------------------------------------
+// Clan user reset confirmation
+// ------------------------------------------------------------
+
+async function confirmClanUserReset(message, target) {
+  const guildId = String(message.guild.id);
+  const targetId = String(target.id);
+
+  const found = clan.getMembership(
+    guildId,
+    targetId
+  );
+
+  if (!found) {
+    return replyEmbed(
+      message,
+      'Clan User Reset',
+      `<@${targetId}> is not currently in a clan.`
+    );
+  }
+
+  const clanName = found.clan.name;
+  const contribution = Number(
+    found.member.total_deposited || 0
+  );
+
+  const rankName =
+    clan.RANK_NAMES[found.member.rank_no] || 'Member';
+
+  const confirmationEmbed = baseEmbed(
+    message,
+    'Confirm Clan Profile Reset',
+    `Are you sure you want to reset the clan profile of <@${targetId}>?\n\n` +
+    `**Clan:** ${clanName}\n` +
+    `**Current Rank:** ${rankName}\n` +
+    `**Current Contributions:** ${money(contribution)}\n\n` +
+    `**This will clear:**\n` +
+    `• Total contributions\n` +
+    `• Donor leaderboard record\n` +
+    `• Deposit history\n` +
+    `• Personal daily clan activity\n` +
+    `• Personal quest participation records\n\n` +
+    `Their clan membership and rank will remain unchanged.\n` +
+    `The clan vault, clan XP, level and completed shared rewards will not be changed.`
+  );
+
+  confirmationEmbed.setColor('#B91C1C');
+
+  const confirmId = `clanreset:confirm:${message.id}`;
+  const cancelId = `clanreset:cancel:${message.id}`;
+
+  const buttons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(confirmId)
+      .setLabel('Confirm Reset')
+      .setStyle(ButtonStyle.Danger),
+
+    new ButtonBuilder()
+      .setCustomId(cancelId)
+      .setLabel('Cancel')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  const prompt = await message.reply({
+    embeds: [confirmationEmbed],
+    components: [buttons],
+  });
+
+  const collector = prompt.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    time: 60_000,
+  });
+
+  collector.on('collect', async interaction => {
+    if (interaction.user.id !== message.author.id) {
+      await interaction.reply({
+        content:
+          'Only the administrator who started this reset can use these buttons.',
+        ephemeral: true,
+      }).catch(() => {});
+
+      return;
+    }
+
+    if (interaction.customId === cancelId) {
+      collector.stop('completed');
+
+      const cancelled = baseEmbed(
+        message,
+        'Reset Cancelled',
+        `The clan profile reset for <@${targetId}> was cancelled.`
+      );
+
+      await interaction.update({
+        embeds: [cancelled],
+        components: [],
+      }).catch(() => {});
+
+      return;
+    }
+
+    if (interaction.customId !== confirmId) return;
+
+    try {
+      const result = resetClanUserProfile(
+        guildId,
+        targetId
+      );
+
+      collector.stop('completed');
+
+      const success = baseEmbed(
+        message,
+        'Clan Profile Reset',
+        `Successfully reset the clan profile of <@${targetId}>.\n\n` +
+        `**Clan:** ${result.clanName}\n` +
+        `**Rank:** ${clan.RANK_NAMES[result.rank] || 'Member'}\n` +
+        `**Previous Contributions:** ${money(result.oldContribution)}\n` +
+        `**Deposit Records Removed:** ${result.removedDeposits.toLocaleString('en-US')}\n` +
+        `**Activity Records Removed:** ${result.removedActivity.toLocaleString('en-US')}\n\n` +
+        `Their clan profile is now reset. They are still a member of **${result.clanName}**.`
+      );
+
+      await interaction.update({
+        embeds: [success],
+        components: [],
+      }).catch(() => {});
+
+    } catch (error) {
+      console.error('[Clan] User profile reset failed:', error);
+
+      collector.stop('completed');
+
+      const failure = baseEmbed(
+        message,
+        'Reset Failed',
+        error?.message ||
+          'Something went wrong while resetting that clan profile.'
+      );
+
+      await interaction.update({
+        embeds: [failure],
+        components: [],
+      }).catch(() => {});
+    }
+  });
+
+  collector.on('end', async (_collected, reason) => {
+    if (reason === 'completed') return;
+
+    const expired = baseEmbed(
+      message,
+      'Reset Expired',
+      'The confirmation timed out. Nothing was changed.'
+    );
+
+    await prompt.edit({
+      embeds: [expired],
+      components: [],
+    }).catch(() => {});
+  });
+
+  return prompt;
+}
+
+// ------------------------------------------------------------
+// Clan leadership transfer
+//
+// The active clan Owner becomes a Co-owner.
+// The selected existing clan member becomes the new Owner.
+//
+// The transaction verifies ownership again at confirmation time.
+// ------------------------------------------------------------
+
+const transferClanLeadershipTx = economy.db.transaction(
+  (guildId, actorId, targetId) => {
+    const db = economy.db;
+
+    const currentOwner = db.prepare(`
+      SELECT
+        m.clan_id,
+        m.rank_no,
+        c.name AS clan_name,
+        c.owner_id
+      FROM clan_members m
+      JOIN clans c ON c.id = m.clan_id
+      WHERE m.guild_id = ?
+        AND m.user_id = ?
+      LIMIT 1
+    `).get(guildId, actorId);
+
+    if (
+      !currentOwner ||
+      Number(currentOwner.rank_no) !== clan.RANK.OWNER ||
+      String(currentOwner.owner_id) !== actorId
+    ) {
+      throw new clan.ClanError(
+        'You are no longer the Owner of this clan.'
+      );
+    }
+
+    if (actorId === targetId) {
+      throw new clan.ClanError(
+        'You are already the Owner of this clan.'
+      );
+    }
+
+    const clanId = Number(currentOwner.clan_id);
+
+    const target = db.prepare(`
+      SELECT user_id, rank_no
+      FROM clan_members
+      WHERE guild_id = ?
+        AND user_id = ?
+        AND clan_id = ?
+      LIMIT 1
+    `).get(guildId, targetId, clanId);
+
+    if (!target) {
+      throw new clan.ClanError(
+        'The person receiving leadership must already be a member of your clan.'
+      );
+    }
+
+    if (Number(target.rank_no) === clan.RANK.OWNER) {
+      throw new clan.ClanError(
+        'That member is already the Owner.'
+      );
+    }
+
+    const maxCoOwners = Math.max(
+      1,
+      Number(CFG.MAX_CO_OWNERS || 5)
+    );
+
+    const coOwnerCount = Number(
+      db.prepare(`
+        SELECT COUNT(*) AS n
+        FROM clan_members
+        WHERE clan_id = ?
+          AND rank_no = ?
+      `).get(clanId, clan.RANK.COOWNER)?.n || 0
+    );
+
+    // The outgoing Owner becomes a Co-owner. If the target is not
+    // already a Co-owner, make sure this will not exceed the limit.
+    if (
+      Number(target.rank_no) !== clan.RANK.COOWNER &&
+      coOwnerCount >= maxCoOwners
+    ) {
+      throw new clan.ClanError(
+        `Your clan already has the maximum of ${maxCoOwners} Co-owners. ` +
+        `Remove a Co-owner first, or transfer leadership to an existing Co-owner.`
+      );
+    }
+
+    const updateClan = db.prepare(`
+      UPDATE clans
+      SET owner_id = ?
+      WHERE id = ?
+        AND guild_id = ?
+        AND owner_id = ?
+    `).run(
+      targetId,
+      clanId,
+      guildId,
+      actorId
+    );
+
+    if (updateClan.changes !== 1) {
+      throw new clan.ClanError(
+        'The clan Owner changed before the transfer could be completed.'
+      );
+    }
+
+    const updateOldOwner = db.prepare(`
+      UPDATE clan_members
+      SET rank_no = ?
+      WHERE guild_id = ?
+        AND user_id = ?
+        AND clan_id = ?
+    `).run(
+      clan.RANK.COOWNER,
+      guildId,
+      actorId,
+      clanId
+    );
+
+    const updateNewOwner = db.prepare(`
+      UPDATE clan_members
+      SET rank_no = ?
+      WHERE guild_id = ?
+        AND user_id = ?
+        AND clan_id = ?
+    `).run(
+      clan.RANK.OWNER,
+      guildId,
+      targetId,
+      clanId
+    );
+
+    if (
+      updateOldOwner.changes !== 1 ||
+      updateNewOwner.changes !== 1
+    ) {
+      throw new Error(
+        'The clan membership records could not be updated.'
+      );
+    }
+
+    return {
+      clanId,
+      clanName: currentOwner.clan_name,
+      previousOwnerId: actorId,
+      newOwnerId: targetId,
+    };
+  }
+);
+
+function transferClanLeadership(guildId, actorId, targetId) {
+  return transferClanLeadershipTx.immediate(
+    String(guildId),
+    String(actorId),
+    String(targetId)
+  );
+}
+
+// ------------------------------------------------------------
+// Clan leadership transfer confirmation
+// ------------------------------------------------------------
+
+async function confirmClanTransfer(message, target, clanRow) {
+  const guildId = String(message.guild.id);
+  const actorId = String(message.author.id);
+  const targetId = String(target.id);
+
+  const confirmId = `clantransfer:confirm:${message.id}`;
+  const cancelId = `clantransfer:cancel:${message.id}`;
+
+  const embed = baseEmbed(
+    message,
+    'Confirm Leadership Transfer',
+    `Are you sure you want to transfer ownership of **${clanRow.name}** to <@${targetId}>?\n\n` +
+    `**New Owner:** <@${targetId}>\n` +
+    `**Your new rank:** Co-owner\n\n` +
+    `The new Owner will receive full clan leadership.\n` +
+    `You will remain in the clan as a Co-owner.\n\n` +
+    `**The clan vault, level, XP, upgrades, members and history will remain unchanged.**`
+  );
+
+  embed.setColor('#B91C1C');
+
+  const buttons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(confirmId)
+      .setLabel('Transfer Leadership')
+      .setStyle(ButtonStyle.Danger),
+
+    new ButtonBuilder()
+      .setCustomId(cancelId)
+      .setLabel('Cancel')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  const prompt = await message.reply({
+    embeds: [embed],
+    components: [buttons],
+  });
+
+  const collector = prompt.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    time: 60_000,
+  });
+
+  collector.on('collect', async interaction => {
+    if (interaction.user.id !== actorId) {
+      await interaction.reply({
+        content:
+          'Only the clan Owner who started this transfer can use these buttons.',
+        ephemeral: true,
+      }).catch(() => {});
+
+      return;
+    }
+
+    if (interaction.customId === cancelId) {
+      collector.stop('completed');
+
+      const cancelled = baseEmbed(
+        message,
+        'Transfer Cancelled',
+        `The leadership transfer for **${clanRow.name}** was cancelled.`
+      );
+
+      await interaction.update({
+        embeds: [cancelled],
+        components: [],
+      }).catch(() => {});
+
+      return;
+    }
+
+    if (interaction.customId !== confirmId) return;
+
+    try {
+      const result = transferClanLeadership(
+        guildId,
+        actorId,
+        targetId
+      );
+
+      collector.stop('completed');
+
+      const success = baseEmbed(
+        message,
+        'Clan Leadership Transferred',
+        `Leadership of **${result.clanName}** has been successfully transferred.\n\n` +
+        `**New Owner:** <@${result.newOwnerId}>\n` +
+        `**Previous Owner:** <@${result.previousOwnerId}> — now Co-owner.`
+      );
+
+      success.setColor('#16A34A');
+
+      await interaction.update({
+        embeds: [success],
+        components: [],
+      }).catch(() => {});
+
+    } catch (error) {
+      console.error('[Clan] Leadership transfer failed:', error);
+
+      collector.stop('completed');
+
+      const failure = baseEmbed(
+        message,
+        'Leadership Transfer Failed',
+        error?.name === 'ClanError'
+          ? error.message
+          : 'The leadership transfer could not be completed. Nothing was changed.'
+      );
+
+      await interaction.update({
+        embeds: [failure],
+        components: [],
+      }).catch(() => {});
+    }
+  });
+
+  collector.on('end', async (_collected, reason) => {
+    if (reason === 'completed') return;
+
+    const expired = baseEmbed(
+      message,
+      'Transfer Expired',
+      'The confirmation timed out. Leadership was not transferred.'
+    );
+
+    await prompt.edit({
+      embeds: [expired],
+      components: [],
+    }).catch(() => {});
+  });
+
+  return prompt;
 }
 
 // ------------------------------------------------------------
@@ -845,7 +1513,9 @@ module.exports = {
           `\`${prefix}clan invite <@user>\` • \`${prefix}clan kick <@user>\`\n` +
           `\`${prefix}clan setco-owner <@user>\` • \`${prefix}clan removeco-owner <@user>\`\n` +
           `\`${prefix}clan setmanager <@user>\` • \`${prefix}clan removemanager <@user>\`\n` +
-          `\`${prefix}clan setsenior <@user>\` • \`${prefix}clan removesenior <@user>\`\n\n` +
+          `\`${prefix}clan setsenior <@user>\` • \`${prefix}clan removesenior <@user>\`\n` +
+          `\`${prefix}clan resetuser <@user/ID>\` — Reset a member's clan profile (Admin only)\n` +
+          `\`${prefix}clan transfer <@user/ID>\` — Transfer clan leadership (Owner only)\n\n` +
 
           `**Vault & progression**\n` +
           `\`${prefix}clan deposit <amount|all>\` • \`${prefix}clan deposit history [page]\`\n` +
@@ -867,6 +1537,174 @@ module.exports = {
       }
 
       // ------------------------------------------------------
+      // Reset user clan profile
+      // Server Owner or Administrator only.
+      // ------------------------------------------------------
+
+      if (sub === 'resetuser') {
+        const isServerOwner =
+          String(message.guild.ownerId) === String(uid);
+
+        const isAdministrator =
+          message.member?.permissions?.has(
+            PermissionFlagsBits.Administrator
+          ) || false;
+
+        if (!isServerOwner && !isAdministrator) {
+          return replyEmbed(
+            message,
+            'Permission Denied',
+            'Only the server Owner or an Administrator can reset another user\'s clan profile.'
+          );
+        }
+
+        const target = await resolveTarget(message, args[1]);
+
+        if (!target) {
+          return replyEmbed(
+            message,
+            'Clan User Reset',
+            `Use \`${prefix}clan resetuser @user\` or \`${prefix}clan resetuser USER_ID\`.`
+          );
+        }
+
+        if (target.user.bot) {
+          return replyEmbed(
+            message,
+            'Clan User Reset',
+            'Bot accounts cannot have their clan profiles reset.'
+          );
+        }
+
+        const found = clan.getMembership(
+          gid,
+          target.id
+        );
+
+        if (!found) {
+          return replyEmbed(
+            message,
+            'Clan User Reset',
+            `<@${target.id}> is not currently in a clan.`
+          );
+        }
+
+        return confirmClanUserReset(
+          message,
+          target
+        );
+      }
+
+      // ------------------------------------------------------
+      // Transfer clan leadership
+      //
+      // IMPORTANT:
+      // Non-owners get absolutely no response from this branch.
+      // A clan must exist and the caller must be its actual Owner.
+      // ------------------------------------------------------
+
+      if (sub === 'transfer') {
+        const found = clan.getMembership(
+          gid,
+          uid
+        );
+
+        // Intentionally silent for anyone who is not the Owner.
+        if (
+          !found ||
+          Number(found.member.rank_no) !== clan.RANK.OWNER ||
+          String(found.clan.owner_id) !== String(uid)
+        ) {
+          return;
+        }
+
+        const target = await resolveTarget(
+          message,
+          args[1]
+        );
+
+        if (!target) {
+          return replyEmbed(
+            message,
+            'Clan Leadership Transfer',
+            `Use \`${prefix}clan transfer @user\` or \`${prefix}clan transfer USER_ID\`.`
+          );
+        }
+
+        if (target.user.bot) {
+          return replyEmbed(
+            message,
+            'Clan Leadership Transfer',
+            'A bot account cannot become the clan Owner.'
+          );
+        }
+
+        if (String(target.id) === String(uid)) {
+          return replyEmbed(
+            message,
+            'Clan Leadership Transfer',
+            'You are already the Owner of this clan.'
+          );
+        }
+
+        const targetMembership = clan.getMembership(
+          gid,
+          target.id
+        );
+
+        if (
+          !targetMembership ||
+          Number(targetMembership.clan.id) !== Number(found.clan.id)
+        ) {
+          return replyEmbed(
+            message,
+            'Clan Leadership Transfer',
+            'The new Owner must already be a member of your clan.'
+          );
+        }
+
+        // Check the Co-owner cap before presenting the prompt.
+        // The database transaction checks it again on confirmation.
+        const targetIsCoOwner =
+          Number(targetMembership.member.rank_no) === clan.RANK.COOWNER;
+
+        const coOwnerCount = Number(
+          economy.db.prepare(`
+            SELECT COUNT(*) AS n
+            FROM clan_members
+            WHERE clan_id = ?
+              AND rank_no = ?
+          `).get(
+            Number(found.clan.id),
+            clan.RANK.COOWNER
+          )?.n || 0
+        );
+
+        const maxCoOwners = Math.max(
+          1,
+          Number(CFG.MAX_CO_OWNERS || 5)
+        );
+
+        if (
+          !targetIsCoOwner &&
+          coOwnerCount >= maxCoOwners
+        ) {
+          return replyEmbed(
+            message,
+            'Leadership Transfer Unavailable',
+            `Your clan already has the maximum of ${maxCoOwners} Co-owners. ` +
+            `Remove a Co-owner first, or transfer leadership to an existing Co-owner.`
+          );
+        }
+
+        return confirmClanTransfer(
+          message,
+          target,
+          found.clan
+        );
+      }
+
+      // ------------------------------------------------------
       // Create
       // ------------------------------------------------------
 
@@ -881,7 +1719,11 @@ module.exports = {
           );
         }
 
-        const created = clan.createFromVoucher(gid, uid, name);
+        const created = clan.createFromVoucher(
+          gid,
+          uid,
+          name
+        );
 
         return replyEmbed(
           message,
@@ -906,9 +1748,16 @@ module.exports = {
           );
         }
 
-        const joined = clan.joinByName(gid, uid, name);
+        const joined = clan.joinByName(
+          gid,
+          uid,
+          name
+        );
 
-        await clan.announce(message.channel, joined.notes);
+        await clan.announce(
+          message.channel,
+          joined.notes
+        );
 
         return replyEmbed(
           message,
@@ -922,7 +1771,10 @@ module.exports = {
       // ------------------------------------------------------
 
       if (sub === 'leave') {
-        const left = clan.leaveClan(gid, uid);
+        const left = clan.leaveClan(
+          gid,
+          uid
+        );
 
         return replyEmbed(
           message,
@@ -947,7 +1799,11 @@ module.exports = {
           );
         }
 
-        const result = clan.renameClan(gid, uid, name);
+        const result = clan.renameClan(
+          gid,
+          uid,
+          name
+        );
 
         return replyEmbed(
           message,
@@ -970,7 +1826,10 @@ module.exports = {
       // ------------------------------------------------------
 
       if (sub === 'delete') {
-        const found = clan.getMembership(gid, uid);
+        const found = clan.getMembership(
+          gid,
+          uid
+        );
 
         if (!found) {
           return replyEmbed(
@@ -1013,7 +1872,11 @@ module.exports = {
           );
         }
 
-        const updated = clan.setEmbedColor(gid, uid, hex);
+        const updated = clan.setEmbedColor(
+          gid,
+          uid,
+          hex
+        );
 
         return replyEmbed(
           message,
@@ -1027,7 +1890,10 @@ module.exports = {
       // ------------------------------------------------------
 
       if (sub === 'invite') {
-        const target = await resolveTarget(message, args[1]);
+        const target = await resolveTarget(
+          message,
+          args[1]
+        );
 
         if (!target) {
           return replyEmbed(
@@ -1097,7 +1963,10 @@ module.exports = {
       // ------------------------------------------------------
 
       if (sub === 'kick') {
-        const target = await resolveTarget(message, args[1]);
+        const target = await resolveTarget(
+          message,
+          args[1]
+        );
 
         if (!target) {
           return replyEmbed(
@@ -1163,7 +2032,10 @@ module.exports = {
       };
 
       if (rankActions[sub]) {
-        const target = await resolveTarget(message, args[1]);
+        const target = await resolveTarget(
+          message,
+          args[1]
+        );
 
         if (!target) {
           return replyEmbed(
@@ -1209,7 +2081,10 @@ module.exports = {
           );
         }
 
-        const found = clan.requireMembership(gid, uid);
+        const found = clan.requireMembership(
+          gid,
+          uid
+        );
 
         if (found.member.rank_no !== clan.RANK.OWNER) {
           throw new clan.ClanError(
@@ -1276,7 +2151,10 @@ module.exports = {
           args[1]
         );
 
-        await clan.announce(message.channel, result.notes);
+        await clan.announce(
+          message.channel,
+          result.notes
+        );
 
         return replyEmbed(
           message,
@@ -1292,7 +2170,10 @@ module.exports = {
       // ------------------------------------------------------
 
       if (sub === 'lb' || sub === 'leaderboard') {
-        return sendLeaderboard(message, args[1]);
+        return sendLeaderboard(
+          message,
+          args[1]
+        );
       }
 
       if (sub === 'quest' || sub === 'quests') {
@@ -1326,7 +2207,10 @@ module.exports = {
           );
         }
 
-        await clan.announce(message.channel, result.notes);
+        await clan.announce(
+          message.channel,
+          result.notes
+        );
 
         const detail = result.kind === 'capacity'
           ? `Member capacity is now **${result.capacity}**.`
@@ -1361,7 +2245,10 @@ module.exports = {
           );
         }
 
-        return sendClanInfo(message, found);
+        return sendClanInfo(
+          message,
+          found
+        );
       }
 
       // ------------------------------------------------------
@@ -1437,7 +2324,10 @@ module.exports = {
       );
 
     } catch (error) {
-      return handleError(message, error);
+      return handleError(
+        message,
+        error
+      );
     }
   },
 };
