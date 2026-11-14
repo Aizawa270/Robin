@@ -18,10 +18,22 @@ function formatTime() {
   });
 }
 
-function money(client, amount) {
-  return client?.economy?.formatCurrency
-    ? client.economy.formatCurrency(amount)
-    : `${Number(amount || 0).toLocaleString('en-US')} Crowns`;
+function shortMoney(amount) {
+  const value = Number(amount || 0);
+
+  if (value >= 1e9) {
+    return `${(value / 1e9).toFixed(2).replace(/\.00$/, '')}B`;
+  }
+
+  if (value >= 1e6) {
+    return `${(value / 1e6).toFixed(2).replace(/\.00$/, '')}M`;
+  }
+
+  if (value >= 1e3) {
+    return `${(value / 1e3).toFixed(1).replace(/\.0$/, '')}K`;
+  }
+
+  return value.toLocaleString('en-US');
 }
 
 function footerText(client) {
@@ -165,7 +177,7 @@ async function renderPage(client, message, requestedPage) {
       member?.user?.username ||
       row.user_id;
 
-    lines.push(`${rank}. ${name} - ${money(client, row.networth)}`);
+    lines.push(`${rank}. ${name} - **${shortMoney(row.networth)}**`);
   }
 
   const myIndex = ranking.findIndex(
