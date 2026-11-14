@@ -36,6 +36,14 @@ function shortMoney(amount) {
   return value.toLocaleString('en-US');
 }
 
+// Currency emoji (falls back to the currency name if none is set).
+function currencyTag(client) {
+  const emoji = client?.economy?.currencyEmoji?.();
+  if (emoji) return emoji;
+
+  return client?.economy?.currencyName?.() || 'Crowns';
+}
+
 function footerText(client) {
   return `${client.user?.username || 'Bot'} | Today at ${formatTime()}`;
 }
@@ -177,7 +185,9 @@ async function renderPage(client, message, requestedPage) {
       member?.user?.username ||
       row.user_id;
 
-    lines.push(`${rank}. ${name} - **${shortMoney(row.networth)}**`);
+    lines.push(
+      `${rank}. ${name} - **${shortMoney(row.networth)}** ${currencyTag(client)}`
+    );
   }
 
   const myIndex = ranking.findIndex(
