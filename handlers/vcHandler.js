@@ -42,6 +42,98 @@ function cancelAFKTimer(
 }
 
 // ============================================================
+// QUARANTINE INTEGRATION
+//
+// Personal VCs are created after quarantine setup, so they
+// never receive the quarantine role's deny overwrite and
+// @everyone's "View Channel" allow lets quarantined members
+// see and join them. These helpers fix that.
+// ============================================================
+
+function getQuarantineRoleId(client, guild) {
+  try {
+    const row = client.quarantineDB
+      ?.prepare(
+        'SELECT role_id FROM quarantine_settings WHERE guild_id = ?'
+      )
+      .get(String(guild.id));
+
+    const roleId = row?.role_id
+      ? String(row.role_id)
+      : null;
+
+    if (roleId && guild.roles.cache.has(roleId)) {
+      return roleId;
+    }
+  } catch (error) {
+    console.error(
+      '[VC] Could not read quarantine settings:',
+      error
+    );
+  }
+
+  return null;
+}
+
+function quarantineDenyFlags() {
+  return [
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.Connect,
+    PermissionsBitField.Flags.Speak,
+    PermissionsBitField.Flags.Stream,
+    PermissionsBitField.Flags.UseVAD,
+  ];
+}
+
+// Adds the quarantine deny overwrite to an existing channel.
+async function ensureQuarantineDeny(
+  client,
+  guild,
+  channel
+) {
+  const roleId = getQuarantineRoleId(
+    client,
+    guild
+  );
+
+  if (!roleId) {
+    return;
+  }
+
+  const existing =
+    channel.permissionOverwrites.cache.get(roleId);
+
+  if (
+    existing?.deny?.has(
+      PermissionsBitField.Flags.ViewChannel
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await channel.permissionOverwrites.edit(
+      roleId,
+      {
+        ViewChannel: false,
+        Connect: false,
+        Speak: false,
+        Stream: false,
+        UseVAD: false,
+      },
+      {
+        reason: 'Hide personal VC from quarantined members',
+      }
+    );
+  } catch (error) {
+    console.error(
+      `[VC] Could not apply quarantine deny to ${channel.id}:`,
+      error
+    );
+  }
+}
+
+// ============================================================
 // AFK EXPIRY
 // ============================================================
 
@@ -294,6 +386,21 @@ async function createPersonalVC(
     },
   ];
 
+  // Hide the new VC from quarantined members.
+  // Role overwrites are applied after @everyone, so this
+  // deny beats the @everyone allow above.
+  const quarantineRoleId = getQuarantineRoleId(
+    client,
+    guild
+  );
+
+  if (quarantineRoleId) {
+    overwrites.push({
+      id: quarantineRoleId,
+      deny: quarantineDenyFlags(),
+    });
+  }
+
   const channel = await guild.channels.create({
     name: `${cleanUsername}'s VC`.slice(0, 100),
 
@@ -363,6 +470,25 @@ async function handleJoinToCreate(
   );
 
   if (!settings?.join_channel_id) {
+    return;
+  }
+
+  // Quarantined members may not create personal VCs.
+  // (Safety net in case the trigger channel was created
+  // after quarantine setup and is still visible to them.)
+  const quarantineRoleId = getQuarantineRoleId(
+    client,
+    guild
+  );
+
+  if (
+    quarantineRoleId &&
+    member.roles.cache.has(quarantineRoleId)
+  ) {
+    await member.voice
+      .disconnect('Quarantined members cannot use Join-to-Create')
+      .catch(() => {});
+
     return;
   }
 
@@ -656,6 +782,14 @@ async function reconcileVCsOnStartup(client) {
 
         continue;
       }
+
+      // Fix personal VCs created before the quarantine
+      // deny overwrite existed.
+      await ensureQuarantineDeny(
+        client,
+        guild,
+        channel
+      );
 
       if (!row.afk_enabled) {
         continue;
