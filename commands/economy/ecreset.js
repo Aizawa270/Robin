@@ -11,6 +11,12 @@ const {
   resolveTargetUser,
 } = require('../../handlers/economyHelpers');
 
+// Requiring this guarantees the economy_personal_banks table exists
+// before any reset runs.
+const {
+  getBankBalance,
+} = require('../../handlers/economyExtras');
+
 const CONFIRM_TIMEOUT_MS = 60_000;
 
 function formatNumber(number) {
@@ -86,7 +92,8 @@ function createConfirmationButtons(disabled = false) {
  * Resets one user's economy account.
  *
  * Resets:
- * - Balance
+ * - Wallet balance
+ * - Personal bank balance
  * - Lifetime earned, spent, and tax paid
  * - Reward cooldown timestamp
  * - Job assignment and work progress
@@ -129,6 +136,15 @@ function resetOneUser(db, guildId, userId) {
       AND user_id = ?
   `);
 
+  const resetPersonalBank = db.prepare(`
+    UPDATE economy_personal_banks
+    SET
+      balance = 0,
+      updated_at = ?
+    WHERE guild_id = ?
+      AND user_id = ?
+  `);
+
   const deleteBoost = db.prepare(`
     DELETE FROM economy_boosts
     WHERE guild_id = ?
@@ -140,10 +156,13 @@ function resetOneUser(db, guildId, userId) {
 
     resetUser.run(guildId, userId);
 
+    const bankResult = resetPersonalBank.run(now, guildId, userId);
+
     const boostResult = deleteBoost.run(guildId, userId);
 
     return {
       success: true,
+      bankReset: bankResult.changes > 0,
       boostsRemoved: boostResult.changes,
     };
   })();
@@ -152,7 +171,7 @@ function resetOneUser(db, guildId, userId) {
 /**
  * Resets the economy account data for everyone in this server.
  *
- * Also resets the server bank.
+ * Also resets every personal bank and the shared server bank.
  * Preserves transaction/tax/leaderboard history and job configuration.
  */
 function resetAllUsers(db, guildId) {
@@ -178,6 +197,14 @@ function resetAllUsers(db, guildId) {
     WHERE guild_id = ?
   `);
 
+  const resetPersonalBanks = db.prepare(`
+    UPDATE economy_personal_banks
+    SET
+      balance = 0,
+      updated_at = ?
+    WHERE guild_id = ?
+  `);
+
   const deleteBoosts = db.prepare(`
     DELETE FROM economy_boosts
     WHERE guild_id = ?
@@ -199,6 +226,7 @@ function resetAllUsers(db, guildId) {
 
   return db.transaction(() => {
     const userResult = resetUsers.run(guildId);
+    const personalBankResult = resetPersonalBanks.run(now, guildId);
     const boostResult = deleteBoosts.run(guildId);
 
     resetBank.run(guildId, now);
@@ -206,6 +234,7 @@ function resetAllUsers(db, guildId) {
     return {
       success: true,
       accountsReset: userResult.changes,
+      personalBanksReset: personalBankResult.changes,
       boostsRemoved: boostResult.changes,
     };
   })();
@@ -288,9 +317,11 @@ module.exports = {
     let target = null;
     let targetLabel = '';
     let oldBalance = 0;
+    let oldBank = 0;
     let targetAvatar = null;
     let accountCount = 0;
     let currentBankBalance = 0;
+    let totalPersonalBanks = 0;
 
     try {
       if (resetAll) {
@@ -307,6 +338,13 @@ module.exports = {
             FROM economy_server_banks
             WHERE guild_id = ?
           `).get(guildId)?.balance || 0;
+
+        totalPersonalBanks =
+          db.prepare(`
+            SELECT COALESCE(SUM(balance), 0) AS total
+            FROM economy_personal_banks
+            WHERE guild_id = ?
+          `).get(guildId)?.total || 0;
       } else {
         const targetRaw = args.join(' ').trim();
 
@@ -331,6 +369,8 @@ module.exports = {
         oldBalance = client.economy.getBalance
           ? client.economy.getBalance(guildId, target.id)
           : 0;
+
+        oldBank = Number(getBankBalance(guildId, target.id) || 0);
 
         const member =
           message.guild.members.cache.get(target.id) ||
@@ -362,11 +402,13 @@ module.exports = {
       ? (
           `You are about to reset the economy for **${message.guild.name}**.\n\n` +
           `**This will reset:**\n` +
-          `• Every user's balance and lifetime economy totals\n` +
+          `• Every user's wallet balance and lifetime economy totals\n` +
+          `• Every user's personal bank balance\n` +
           `• Every user's job, work progress, and work cooldowns\n` +
           `• All active economy boosts in this server\n` +
           `• The server bank and its accumulated tax total\n\n` +
           `**Current accounts:** ${formatNumber(accountCount)}\n` +
+          `**Total in personal banks:** ${money(client, totalPersonalBanks)}\n` +
           `**Current server bank:** ${money(client, currentBankBalance)}\n\n` +
           `Transaction history, tax history, leaderboard payout history, and job configuration will be preserved.\n\n` +
           '⚠️ **This action cannot be undone.**\n' +
@@ -374,8 +416,9 @@ module.exports = {
         )
       : (
           `You are about to reset the economy account for **${targetLabel}** (<@${target.id}>).\n\n` +
-          `**Current balance:** ${money(client, oldBalance)}\n\n` +
-          `This will reset the user's balance, lifetime economy totals, job assignment, work progress, and work cooldowns. Their active economy boost will also be removed.\n\n` +
+          `**Current wallet:** ${money(client, oldBalance)}\n` +
+          `**Current bank:** ${money(client, oldBank)}\n\n` +
+          `This will reset the user's wallet, personal bank, lifetime economy totals, job assignment, work progress, and work cooldowns. Their active economy boost will also be removed.\n\n` +
           `The shared server bank and other users' accounts will not be affected. Transaction and tax history will be preserved.\n\n` +
           '⚠️ **This action cannot be undone.**\n' +
           'Press **Confirm Reset** within 60 seconds to proceed.'
@@ -462,6 +505,7 @@ module.exports = {
               description:
                 `The economy for **${message.guild.name}** has been reset successfully.\n\n` +
                 `**Accounts reset:** ${formatNumber(result.accountsReset)}\n` +
+                `**Personal banks reset:** ${formatNumber(result.personalBanksReset)}\n` +
                 `**Active boosts removed:** ${formatNumber(result.boostsRemoved)}\n` +
                 `**Server bank:** ${money(client, 0)}\n\n` +
                 'Transaction, tax, and leaderboard payout history and job configuration have been preserved.',
@@ -470,8 +514,10 @@ module.exports = {
               title: '✅ User Economy Reset',
               description:
                 `The economy account for **${targetLabel}** (<@${target.id}>) has been reset successfully.\n\n` +
-                `**Previous balance:** ${money(client, oldBalance)}\n` +
-                `**New balance:** ${money(client, 0)}\n` +
+                `**Previous wallet:** ${money(client, oldBalance)}\n` +
+                `**Previous bank:** ${money(client, oldBank)}\n` +
+                `**New wallet:** ${money(client, 0)}\n` +
+                `**New bank:** ${money(client, 0)}\n` +
                 `**Active boosts removed:** ${formatNumber(result.boostsRemoved)}\n\n` +
                 'The shared server bank and other users were not affected. Transaction and tax history have been preserved.',
               thumbnail: targetAvatar,
