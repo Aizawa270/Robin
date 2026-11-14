@@ -358,6 +358,14 @@ const S = {
     WHERE id = ?
   `),
 
+  // Fix: this statement is required by buyUpgrade().
+  setBooster: db.prepare(`
+    UPDATE clans
+    SET booster_tier = ?,
+        booster_until = ?
+    WHERE id = ?
+  `),
+
   addVault: db.prepare(`
     UPDATE clans
     SET vault = vault + ?,
@@ -452,6 +460,23 @@ const S = {
     WHERE guild_id = ? AND user_id = ?
   `),
 
+  // Used when transferring clan ownership.
+  setOwner: db.prepare(`
+    UPDATE clans
+    SET owner_id = ?
+    WHERE id = ?
+  `),
+
+  // Used when resetting an individual member's clan profile.
+  resetMemberContributions: db.prepare(`
+    UPDATE clan_members
+    SET total_deposited = 0,
+        last_deposit_at = 0
+    WHERE guild_id = ?
+      AND user_id = ?
+      AND clan_id = ?
+  `),
+
   memberDeposit: db.prepare(`
     UPDATE clan_members
     SET total_deposited = total_deposited + ?,
@@ -474,6 +499,12 @@ const S = {
     ON CONFLICT(clan_id, user_id)
     DO UPDATE SET
       total_deposited = total_deposited + excluded.total_deposited
+  `),
+
+  deleteMemberDonor: db.prepare(`
+    DELETE FROM clan_donors
+    WHERE clan_id = ?
+      AND user_id = ?
   `),
 
   insDeposit: db.prepare(`
@@ -503,6 +534,13 @@ const S = {
   delDeposits: db.prepare(
     'DELETE FROM clan_deposits WHERE clan_id = ?'
   ),
+
+  deleteMemberDeposits: db.prepare(`
+    DELETE FROM clan_deposits
+    WHERE clan_id = ?
+      AND guild_id = ?
+      AND user_id = ?
+  `),
 
   getQuests: db.prepare(`
     SELECT *
@@ -548,6 +586,12 @@ const S = {
   delActors: db.prepare(
     'DELETE FROM clan_quest_actors WHERE clan_id = ?'
   ),
+
+  deleteMemberQuestActors: db.prepare(`
+    DELETE FROM clan_quest_actors
+    WHERE clan_id = ?
+      AND user_id = ?
+  `),
 
   insBonus: db.prepare(`
     INSERT OR IGNORE INTO clan_quest_bonus
@@ -612,6 +656,12 @@ const S = {
   delStats: db.prepare(
     'DELETE FROM clan_daily_stats WHERE clan_id = ?'
   ),
+
+  deleteMemberStats: db.prepare(`
+    DELETE FROM clan_daily_stats
+    WHERE clan_id = ?
+      AND user_id = ?
+  `),
 
   getStreak: db.prepare(`
     SELECT *
@@ -1879,6 +1929,253 @@ function changeRank(
   );
 }
 
+// ------------------------------------------------------------
+// Reset a member's clan profile
+//
+// - Keeps the member in the clan.
+// - Keeps the member's current rank.
+// - Clears their contribution total and donor ranking.
+// - Removes their deposit history and personal daily stats.
+// - Does not change the clan vault.
+// - Only the actual clan Owner can perform this operation.
+// ------------------------------------------------------------
+
+const resetMemberStatsTx = db.transaction((
+  gid,
+  actorId,
+  targetId,
+  now
+) => {
+  const { clan: clanRow, member: actor } = requireMembership(
+    gid,
+    actorId
+  );
+
+  if (
+    actor.rank_no !== RANK.OWNER ||
+    String(clanRow.owner_id) !== actorId
+  ) {
+    throw new ClanError(
+      'Only the clan Owner can reset a member’s clan profile.'
+    );
+  }
+
+  const target = S.getMember.get(
+    gid,
+    targetId
+  );
+
+  if (!target || Number(target.clan_id) !== Number(clanRow.id)) {
+    throw new ClanError(
+      'That user is not a member of your clan.'
+    );
+  }
+
+  if (actorId === targetId) {
+    throw new ClanError(
+      'You cannot reset your own profile with this command.'
+    );
+  }
+
+  const contributionUpdate = S.resetMemberContributions.run(
+    gid,
+    targetId,
+    clanRow.id
+  );
+
+  if (contributionUpdate.changes !== 1) {
+    throw new ClanError(
+      'The member profile could not be reset. Please try again.'
+    );
+  }
+
+  const depositsDeleted = S.deleteMemberDeposits.run(
+    clanRow.id,
+    gid,
+    targetId
+  ).changes;
+
+  S.deleteMemberDonor.run(
+    clanRow.id,
+    targetId
+  );
+
+  const statsDeleted = S.deleteMemberStats.run(
+    clanRow.id,
+    targetId
+  ).changes;
+
+  const actorsDeleted = S.deleteMemberQuestActors.run(
+    clanRow.id,
+    targetId
+  ).changes;
+
+  // Recalculate current unfinished daily quests.
+  // Completed quests and already-earned rewards are preserved.
+  const dk = dayKey(now);
+  const quests = S.getQuests.all(clanRow.id, dk);
+
+  for (const quest of quests) {
+    if (quest.done) continue;
+
+    const def = POOL.get(quest.kind);
+    if (!def) continue;
+
+    const progress = Math.min(
+      quest.target,
+      progressOf(clanRow.id, dk, def)
+    );
+
+    if (progress !== quest.progress) {
+      S.setQuestProgress.run(
+        progress,
+        clanRow.id,
+        dk,
+        quest.slot
+      );
+    }
+  }
+
+  return {
+    clan: S.getClan.get(clanRow.id),
+    member: S.getMember.get(gid, targetId),
+    targetId,
+    depositsDeleted,
+    statsDeleted,
+    actorsDeleted,
+  };
+});
+
+function resetMemberStats(gid, actorId, targetId, now = Date.now()) {
+  return resetMemberStatsTx.immediate(
+    String(gid),
+    String(actorId),
+    String(targetId),
+    Number(now)
+  );
+}
+
+// ------------------------------------------------------------
+// Transfer clan leadership
+//
+// - Target must already be in the same clan.
+// - New owner receives OWNER rank.
+// - Previous owner becomes COOWNER.
+// - clans.owner_id is updated.
+// - All changes happen in one SQLite transaction.
+// - Only the actual Owner can transfer leadership.
+// ------------------------------------------------------------
+
+const transferLeadershipTx = db.transaction((
+  gid,
+  actorId,
+  targetId
+) => {
+  const { clan: clanRow, member: actor } = requireMembership(
+    gid,
+    actorId
+  );
+
+  if (
+    actor.rank_no !== RANK.OWNER ||
+    String(clanRow.owner_id) !== actorId
+  ) {
+    throw new ClanError(
+      'Only the clan Owner can transfer leadership.'
+    );
+  }
+
+  if (actorId === targetId) {
+    throw new ClanError(
+      'You are already the clan Owner.'
+    );
+  }
+
+  const target = S.getMember.get(
+    gid,
+    targetId
+  );
+
+  if (!target || Number(target.clan_id) !== Number(clanRow.id)) {
+    throw new ClanError(
+      'That user is not a member of your clan.'
+    );
+  }
+
+  if (target.rank_no >= RANK.OWNER) {
+    throw new ClanError(
+      'That member already has the Owner rank.'
+    );
+  }
+
+  // The previous owner becomes a Co-owner.
+  // Account for the target already being a Co-owner.
+  const currentCoOwners = S.countRank.get(
+    clanRow.id,
+    RANK.COOWNER
+  ).n;
+
+  const finalCoOwners =
+    currentCoOwners -
+    (target.rank_no === RANK.COOWNER ? 1 : 0) +
+    1;
+
+  if (finalCoOwners > CFG.MAX_CO_OWNERS) {
+    throw new ClanError(
+      `The transfer would exceed the maximum of ${CFG.MAX_CO_OWNERS} Co-owners. Remove a Co-owner first.`
+    );
+  }
+
+  const promoted = S.setRank.run(
+    RANK.OWNER,
+    gid,
+    targetId
+  );
+
+  if (promoted.changes !== 1) {
+    throw new ClanError(
+      'The new owner could not be promoted. No changes were saved.'
+    );
+  }
+
+  const demoted = S.setRank.run(
+    RANK.COOWNER,
+    gid,
+    actorId
+  );
+
+  if (demoted.changes !== 1) {
+    throw new ClanError(
+      'The previous owner could not be changed to Co-owner. No changes were saved.'
+    );
+  }
+
+  const ownerUpdated = S.setOwner.run(
+    targetId,
+    clanRow.id
+  );
+
+  if (ownerUpdated.changes !== 1) {
+    throw new ClanError(
+      'The clan owner record could not be updated. No changes were saved.'
+    );
+  }
+
+  return {
+    clan: S.getClan.get(clanRow.id),
+    previousOwnerId: actorId,
+    newOwnerId: targetId,
+  };
+});
+
+function transferLeadership(gid, actorId, targetId) {
+  return transferLeadershipTx.immediate(
+    String(gid),
+    String(actorId),
+    String(targetId)
+  );
+}
+
 function setPrivate(gid, name, value) {
   const clanRow = getClanByName(gid, name);
 
@@ -2876,6 +3173,8 @@ module.exports = {
   assertCanInvite,
   kickMember,
   changeRank,
+  resetMemberStats,
+  transferLeadership,
   setPrivate,
 
   deposit,
