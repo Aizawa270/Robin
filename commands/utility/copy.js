@@ -1,6 +1,4 @@
 
-const { EmbedBuilder } = require('discord.js');
-
 module.exports = {
   name: 'copy',
   aliases: [],
@@ -17,7 +15,7 @@ module.exports = {
 
     if (!message.reference?.messageId) {
       return message.reply({
-        content: 'Reply to a user\'s message with this command to get their ID.',
+        content: 'Reply to a user\'s message with this command to get that user\'s ID.',
         allowedMentions: { repliedUser: false },
       }).catch(() => {});
     }
@@ -31,14 +29,8 @@ module.exports = {
       }).catch(() => {});
     }
 
-    const embed = new EmbedBuilder()
-      .setColor('#5865F2')
-      .setDescription(
-        `**User ID**\n\`\`\`\n${referenced.author.id}\n\`\`\``
-      );
-
     return message.reply({
-      embeds: [embed],
+      content: `\`\`\`\n${referenced.author.id}\n\`\`\``,
       allowedMentions: { repliedUser: false },
     }).catch(() => {});
   },
