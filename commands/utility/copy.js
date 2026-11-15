@@ -1,3 +1,12 @@
+
+const { EmbedBuilder } = require('discord.js');
+
+function errorEmbed(description) {
+  return new EmbedBuilder()
+    .setColor('#ef4444')
+    .setDescription(description);
+}
+
 module.exports = {
   name: 'copy',
   aliases: [],
@@ -10,17 +19,20 @@ module.exports = {
 
     const sub = String(args[0] || '').toLowerCase();
 
-    // Only "copy id" is supported for now.
     if (sub !== 'id') {
       return message.reply({
-        content: 'Usage: `copy id` (reply to a message)',
+        embeds: [
+          errorEmbed('Usage: `copy id` (reply to a message)')
+        ],
         allowedMentions: { repliedUser: false },
       }).catch(() => {});
     }
 
     if (!message.reference?.messageId) {
       return message.reply({
-        content: 'Reply to a user\'s message with this command to get their ID.',
+        embeds: [
+          errorEmbed('Reply to a user\'s message with this command to get their ID.')
+        ],
         allowedMentions: { repliedUser: false },
       }).catch(() => {});
     }
@@ -31,12 +43,14 @@ module.exports = {
 
     if (!referenced?.author) {
       return message.reply({
-        content: 'I could not find the message you replied to.',
+        embeds: [
+          errorEmbed('I could not find the message you replied to.')
+        ],
         allowedMentions: { repliedUser: false },
       }).catch(() => {});
     }
 
-    // Send only the ID so it is easy to long-press / select and copy.
+    // Send only the ID so it is easy to long-press and copy.
     return message.reply({
       content: referenced.author.id,
       allowedMentions: { repliedUser: false },
