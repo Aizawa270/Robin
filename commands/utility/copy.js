@@ -31,7 +31,9 @@ module.exports = {
     if (!message.reference?.messageId) {
       return message.reply({
         embeds: [
-          errorEmbed('Reply to a user\'s message with this command to get their ID.')
+          errorEmbed(
+            'Reply to a user\'s message with this command to get their ID.'
+          )
         ],
         allowedMentions: { repliedUser: false },
       }).catch(() => {});
@@ -50,9 +52,18 @@ module.exports = {
       }).catch(() => {});
     }
 
-    // Send only the ID so it is easy to long-press and copy.
+    const userId = referenced.author.id;
+
+    const embed = new EmbedBuilder()
+      .setColor('#3498db')
+      .setTitle('User ID')
+      .setDescription(`\`\`\`\n${userId}\n\`\`\``)
+      .setThumbnail(
+        referenced.author.displayAvatarURL({ size: 256 })
+      );
+
     return message.reply({
-      content: referenced.author.id,
+      embeds: [embed],
       allowedMentions: { repliedUser: false },
     }).catch(() => {});
   },
