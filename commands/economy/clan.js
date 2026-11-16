@@ -1,3 +1,4 @@
+
 'use strict';
 
 const path = require('path');
@@ -1379,6 +1380,9 @@ async function sendQuestBoard(message) {
     message.author.id
   );
 
+  // Use the configured custom GreenTick emoji.
+  const tick = ICON('tick') || '✅';
+
   const lines = board.quests.map(q => {
     const percent = q.target > 0
       ? Math.min(
@@ -1387,7 +1391,7 @@ async function sendQuestBoard(message) {
         )
       : 100;
 
-    const mark = q.done ? '✅' : '◆';
+    const mark = q.done ? tick : '◆';
     const label = clan.questText(q);
 
     return (
@@ -1405,12 +1409,16 @@ async function sendQuestBoard(message) {
     `Complete the daily quests with your clan!\n\n` +
     `${lines.join('\n\n')}\n\n` +
     `${ICON('trophy')} **Complete all four quests for ${board.bonusXp.toLocaleString('en-US')} bonus XP!**` +
-    (board.bonusClaimed
-      ? '\n✅ Daily bonus already claimed.'
-      : '') +
-    (board.boost
-      ? `\n\nActive XP bonus: **+${Math.round(board.boost * 100)}%**`
-      : '')
+    (
+      board.bonusClaimed
+        ? `\n${tick} Daily bonus already claimed.`
+        : ''
+    ) +
+    (
+      board.boost
+        ? `\n\nActive XP bonus: **+${Math.round(board.boost * 100)}%**`
+        : ''
+    )
   );
 
   return message.reply({
@@ -1636,7 +1644,7 @@ async function handleInteraction(client, interaction) {
       content: '',
     });
 
-    // Apply the nickname tag immediately after joining.
+    // Apply nickname tag immediately after invitation acceptance.
     if (
       !result.rejected &&
       interaction.guildId
@@ -1689,7 +1697,8 @@ module.exports = {
       return;
     }
 
-    // Safe to call repeatedly; clanTags.init prevents duplicates.
+    // Safe to call repeatedly.
+    // clanTags.init prevents duplicate initialization.
     try {
       clanTags.init(client);
     } catch (error) {
