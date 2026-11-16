@@ -1,4 +1,3 @@
-
 'use strict';
 
 // ============================================================
@@ -16,11 +15,18 @@ const Database = require('better-sqlite3');
 const economy = require('./economy');
 const shopSystem = require('./shopSystem');
 const CFG = require('./clanConfig');
+
 const db = economy.db;
 
 if (!db || typeof db.prepare !== 'function') {
-  throw new Error('[Clan] economy.db is unavailable. Check handlers/economy.js.');
+  throw new Error(
+    '[Clan] economy.db is unavailable. Check handlers/economy.js.'
+  );
 }
+
+// ============================================================
+// CLAN ERROR
+// ============================================================
 
 class ClanError extends Error {
   constructor(message) {
@@ -28,6 +34,10 @@ class ClanError extends Error {
     this.name = 'ClanError';
   }
 }
+
+// ============================================================
+// RANKS
+// ============================================================
 
 const RANK = {
   MEMBER: 1,
@@ -45,9 +55,9 @@ const RANK_NAMES = {
   5: 'Owner',
 };
 
-// ------------------------------------------------------------
-// Schema
-// ------------------------------------------------------------
+// ============================================================
+// DATABASE SCHEMA
+// ============================================================
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS clans (
@@ -168,16 +178,24 @@ CREATE TABLE IF NOT EXISTS clan_donors (
 );
 `);
 
+// ============================================================
+// SAFE COLUMN MIGRATIONS
+// ============================================================
+
 function addColumn(table, columnSql) {
   try {
-    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${columnSql}`).run();
+    db.prepare(
+      `ALTER TABLE ${table} ADD COLUMN ${columnSql}`
+    ).run();
+
     return true;
   } catch {
     return false;
   }
 }
 
-// Optional columns. Existing database data is preserved.
+// Existing database data is preserved.
+
 addColumn('clans', 'logo_emoji TEXT');
 addColumn('clans', 'embed_color TEXT');
 
@@ -194,23 +212,46 @@ addColumn(
 if (boosterColumnAdded) {
   db.prepare(`
     UPDATE clans
-    SET booster_tier = xp_tier,
-        booster_until = ?
+    SET
+      booster_tier = xp_tier,
+      booster_until = ?
     WHERE xp_tier > 0
-  `).run(Date.now() + CFG.XP_BOOSTER_DURATION_MS);
+  `).run(
+    Date.now() + CFG.XP_BOOSTER_DURATION_MS
+  );
 }
 
 // Preserve historical donor totals.
+
 db.prepare(`
   INSERT OR IGNORE INTO clan_donors
     (clan_id, user_id, total_deposited)
-  SELECT clan_id, user_id, total_deposited
+  SELECT
+    clan_id,
+    user_id,
+    total_deposited
   FROM clan_members
   WHERE total_deposited > 0
 `).run();
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const MEDIA_DIR = path.join(DATA_DIR, 'clan_media');
+// ============================================================
+// DIRECTORIES
+// ============================================================
+
+const DATA_DIR = path.join(
+  __dirname,
+  '..',
+  'data'
+);
+
+const MEDIA_DIR = path.join(
+  DATA_DIR,
+  'clan_media'
+);
+
+// ============================================================
+// SHOP DATABASE
+// ============================================================
 
 const shopDb = new Database(
   path.join(DATA_DIR, 'shop.sqlite')
@@ -219,15 +260,18 @@ const shopDb = new Database(
 shopDb.pragma('journal_mode = WAL');
 shopDb.pragma('busy_timeout = 5000');
 
-const INV_TABLE = CFG.SHOP_KEY === 'ec'
-  ? 'ec_shop_inventory'
-  : 'normal_shop_inventory';
+const INV_TABLE =
+  CFG.SHOP_KEY === 'ec'
+    ? 'ec_shop_inventory'
+    : 'normal_shop_inventory';
 
 const SHOP = {
   take: shopDb.prepare(`
     UPDATE ${INV_TABLE}
-    SET quantity = quantity - 1,
-        last_updated = ?
+    SET
+      quantity = quantity - 1,
+      last_updated = ?
+
     WHERE guild_id = ?
       AND user_id = ?
       AND item_id = ?
@@ -237,18 +281,27 @@ const SHOP = {
   give: shopDb.prepare(`
     INSERT INTO ${INV_TABLE}
       (guild_id, user_id, item_id, quantity, last_updated)
+
     VALUES (?, ?, ?, 1, ?)
+
     ON CONFLICT(guild_id, user_id, item_id)
+
     DO UPDATE SET
       quantity = quantity + 1,
       last_updated = excluded.last_updated
   `),
 };
 
+// ============================================================
+// GENERAL HELPERS
+// ============================================================
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const money = amount => economy.formatCurrency(amount);
-const num = value => Number(value || 0).toLocaleString('en-US');
+
+const num = value =>
+  Number(value || 0).toLocaleString('en-US');
 
 const nameKey = value =>
   String(value)
@@ -257,7 +310,9 @@ const nameKey = value =>
     .replace(/\s+/g, ' ');
 
 function dayKey(timestamp = Date.now()) {
-  const d = new Date(timestamp + CFG.TZ_OFFSET_MS);
+  const d = new Date(
+    timestamp + CFG.TZ_OFFSET_MS
+  );
 
   return (
     `${d.getUTCFullYear()}-` +
@@ -271,18 +326,28 @@ function shuffle(array) {
 
   for (let i = copy.length - 1; i > 0; i--) {
     const j = randomInt(0, i + 1);
-    [copy[i], copy[j]] = [copy[j], copy[i]];
+
+    [copy[i], copy[j]] = [
+      copy[j],
+      copy[i],
+    ];
   }
 
   return copy;
 }
 
-const pick = array => array[randomInt(0, array.length)];
+const pick = array =>
+  array[randomInt(0, array.length)];
 
 function cleanName(raw) {
-  const name = String(raw || '').replace(/\s+/g, ' ').trim();
+  const name = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  if (name.length < CFG.NAME_MIN || name.length > CFG.NAME_MAX) {
+  if (
+    name.length < CFG.NAME_MIN ||
+    name.length > CFG.NAME_MAX
+  ) {
     throw new ClanError(
       `Clan names must be ${CFG.NAME_MIN} to ${CFG.NAME_MAX} characters long.`
     );
@@ -297,9 +362,9 @@ function cleanName(raw) {
   return name;
 }
 
-// ------------------------------------------------------------
-// Prepared statements
-// ------------------------------------------------------------
+// ============================================================
+// PREPARED STATEMENTS
+// ============================================================
 
 const S = {
   getClan: db.prepare(
@@ -317,12 +382,15 @@ const S = {
   insClan: db.prepare(`
     INSERT INTO clans
       (guild_id, name, name_key, owner_id, created_at)
+
     VALUES (?, ?, ?, ?, ?)
   `),
 
   setName: db.prepare(`
     UPDATE clans
-    SET name = ?, name_key = ?
+    SET
+      name = ?,
+      name_key = ?
     WHERE id = ?
   `),
 
@@ -332,13 +400,17 @@ const S = {
 
   setLogo: db.prepare(`
     UPDATE clans
-    SET logo_file = ?, logo_emoji = NULL
+    SET
+      logo_file = ?,
+      logo_emoji = NULL
     WHERE id = ?
   `),
 
   setLogoEmoji: db.prepare(`
     UPDATE clans
-    SET logo_emoji = ?, logo_file = NULL
+    SET
+      logo_emoji = ?,
+      logo_file = NULL
     WHERE id = ?
   `),
 
@@ -354,22 +426,25 @@ const S = {
 
   setClanXp: db.prepare(`
     UPDATE clans
-    SET level = ?, xp = ?
+    SET
+      level = ?,
+      xp = ?
     WHERE id = ?
   `),
 
-  // Fix: this statement is required by buyUpgrade().
   setBooster: db.prepare(`
     UPDATE clans
-    SET booster_tier = ?,
-        booster_until = ?
+    SET
+      booster_tier = ?,
+      booster_until = ?
     WHERE id = ?
   `),
 
   addVault: db.prepare(`
     UPDATE clans
-    SET vault = vault + ?,
-        last_deposit_at = ?
+    SET
+      vault = vault + ?,
+      last_deposit_at = ?
     WHERE id = ?
   `),
 
@@ -397,15 +472,23 @@ const S = {
   ),
 
   leaderboard: db.prepare(`
-    SELECT c.*,
+    SELECT
+      c.*,
       (
         SELECT COUNT(*)
         FROM clan_members m
         WHERE m.clan_id = c.id
       ) AS member_count
+
     FROM clans c
+
     WHERE c.guild_id = ?
-    ORDER BY c.vault DESC, c.level DESC, c.id ASC
+
+    ORDER BY
+      c.vault DESC,
+      c.level DESC,
+      c.id ASC
+
     LIMIT ? OFFSET ?
   `),
 
@@ -416,14 +499,18 @@ const S = {
   getMember: db.prepare(`
     SELECT *
     FROM clan_members
-    WHERE guild_id = ? AND user_id = ?
+    WHERE guild_id = ?
+      AND user_id = ?
   `),
 
   membersOf: db.prepare(`
     SELECT *
     FROM clan_members
     WHERE clan_id = ?
-    ORDER BY rank_no DESC, joined_at ASC, user_id ASC
+    ORDER BY
+      rank_no DESC,
+      joined_at ASC,
+      user_id ASC
   `),
 
   countMembers: db.prepare(`
@@ -435,18 +522,21 @@ const S = {
   countRank: db.prepare(`
     SELECT COUNT(*) AS n
     FROM clan_members
-    WHERE clan_id = ? AND rank_no = ?
+    WHERE clan_id = ?
+      AND rank_no = ?
   `),
 
   insMember: db.prepare(`
     INSERT INTO clan_members
       (guild_id, user_id, clan_id, rank_no, joined_at)
+
     VALUES (?, ?, ?, ?, ?)
   `),
 
   delMember: db.prepare(`
     DELETE FROM clan_members
-    WHERE guild_id = ? AND user_id = ?
+    WHERE guild_id = ?
+      AND user_id = ?
   `),
 
   delMembersOf: db.prepare(`
@@ -457,21 +547,22 @@ const S = {
   setRank: db.prepare(`
     UPDATE clan_members
     SET rank_no = ?
-    WHERE guild_id = ? AND user_id = ?
+    WHERE guild_id = ?
+      AND user_id = ?
   `),
 
-  // Used when transferring clan ownership.
   setOwner: db.prepare(`
     UPDATE clans
     SET owner_id = ?
     WHERE id = ?
   `),
 
-  // Used when resetting an individual member's clan profile.
   resetMemberContributions: db.prepare(`
     UPDATE clan_members
-    SET total_deposited = 0,
-        last_deposit_at = 0
+    SET
+      total_deposited = 0,
+      last_deposit_at = 0
+
     WHERE guild_id = ?
       AND user_id = ?
       AND clan_id = ?
@@ -479,26 +570,42 @@ const S = {
 
   memberDeposit: db.prepare(`
     UPDATE clan_members
-    SET total_deposited = total_deposited + ?,
-        last_deposit_at = ?
-    WHERE guild_id = ? AND user_id = ?
+    SET
+      total_deposited = total_deposited + ?,
+      last_deposit_at = ?
+
+    WHERE guild_id = ?
+      AND user_id = ?
   `),
 
   topDonors: db.prepare(`
-    SELECT user_id, total_deposited
+    SELECT
+      user_id,
+      total_deposited
+
     FROM clan_donors
-    WHERE clan_id = ? AND total_deposited > 0
-    ORDER BY total_deposited DESC, user_id ASC
+
+    WHERE clan_id = ?
+      AND total_deposited > 0
+
+    ORDER BY
+      total_deposited DESC,
+      user_id ASC
+
     LIMIT 3
   `),
 
   addDonor: db.prepare(`
     INSERT INTO clan_donors
       (clan_id, user_id, total_deposited)
+
     VALUES (?, ?, ?)
+
     ON CONFLICT(clan_id, user_id)
+
     DO UPDATE SET
-      total_deposited = total_deposited + excluded.total_deposited
+      total_deposited =
+        total_deposited + excluded.total_deposited
   `),
 
   deleteMemberDonor: db.prepare(`
@@ -510,13 +617,15 @@ const S = {
   insDeposit: db.prepare(`
     INSERT INTO clan_deposits
       (clan_id, guild_id, user_id, amount, ts)
+
     VALUES (?, ?, ?, ?, ?)
   `),
 
   recentDeposits: db.prepare(`
     SELECT *
     FROM clan_deposits
-    WHERE clan_id = ? AND ts >= ?
+    WHERE clan_id = ?
+      AND ts >= ?
     ORDER BY ts DESC, id DESC
     LIMIT ? OFFSET ?
   `),
@@ -524,7 +633,8 @@ const S = {
   countDeposits: db.prepare(`
     SELECT COUNT(*) AS n
     FROM clan_deposits
-    WHERE clan_id = ? AND ts >= ?
+    WHERE clan_id = ?
+      AND ts >= ?
   `),
 
   pruneDeposits: db.prepare(
@@ -545,19 +655,32 @@ const S = {
   getQuests: db.prepare(`
     SELECT *
     FROM clan_quests
-    WHERE clan_id = ? AND day_key = ?
+    WHERE clan_id = ?
+      AND day_key = ?
     ORDER BY slot
   `),
 
   insQuest: db.prepare(`
     INSERT OR IGNORE INTO clan_quests
-      (clan_id, day_key, slot, kind, tier, target, reward_coins, reward_xp)
+      (
+        clan_id,
+        day_key,
+        slot,
+        kind,
+        tier,
+        target,
+        reward_coins,
+        reward_xp
+      )
+
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
 
   delQuest: db.prepare(`
     DELETE FROM clan_quests
-    WHERE clan_id = ? AND day_key = ? AND slot = ?
+    WHERE clan_id = ?
+      AND day_key = ?
+      AND slot = ?
   `),
 
   setQuestProgress: db.prepare(`
@@ -571,8 +694,9 @@ const S = {
 
   finishQuest: db.prepare(`
     UPDATE clan_quests
-    SET progress = target,
-        done = 1
+    SET
+      progress = target,
+      done = 1
     WHERE clan_id = ?
       AND day_key = ?
       AND slot = ?
@@ -596,13 +720,15 @@ const S = {
   insBonus: db.prepare(`
     INSERT OR IGNORE INTO clan_quest_bonus
       (clan_id, day_key, claimed_at)
+
     VALUES (?, ?, ?)
   `),
 
   getBonus: db.prepare(`
     SELECT 1
     FROM clan_quest_bonus
-    WHERE clan_id = ? AND day_key = ?
+    WHERE clan_id = ?
+      AND day_key = ?
   `),
 
   delBonus: db.prepare(
@@ -612,13 +738,15 @@ const S = {
   getPool: db.prepare(`
     SELECT quest_id
     FROM clan_daily_pool
-    WHERE guild_id = ? AND day_key = ?
+    WHERE guild_id = ?
+      AND day_key = ?
     ORDER BY slot
   `),
 
   insPool: db.prepare(`
     INSERT OR IGNORE INTO clan_daily_pool
       (guild_id, day_key, slot, quest_id)
+
     VALUES (?, ?, ?, ?)
   `),
 
@@ -629,15 +757,21 @@ const S = {
   addStat: db.prepare(`
     INSERT INTO clan_daily_stats
       (clan_id, day_key, user_id, metric, value)
+
     VALUES (?, ?, ?, ?, ?)
+
     ON CONFLICT(clan_id, day_key, user_id, metric)
-    DO UPDATE SET value = value + excluded.value
+
+    DO UPDATE SET
+      value = value + excluded.value
   `),
 
   sumStat: db.prepare(`
     SELECT COALESCE(SUM(value), 0) AS n
     FROM clan_daily_stats
-    WHERE clan_id = ? AND day_key = ? AND metric = ?
+    WHERE clan_id = ?
+      AND day_key = ?
+      AND metric = ?
   `),
 
   distinctStat: db.prepare(`
@@ -666,14 +800,18 @@ const S = {
   getStreak: db.prepare(`
     SELECT *
     FROM clan_streaks
-    WHERE clan_id = ? AND game = ?
+    WHERE clan_id = ?
+      AND game = ?
   `),
 
   setStreak: db.prepare(`
     INSERT INTO clan_streaks
       (clan_id, game, day_key, current, best)
+
     VALUES (?, ?, ?, ?, ?)
+
     ON CONFLICT(clan_id, game)
+
     DO UPDATE SET
       day_key = excluded.day_key,
       current = excluded.current,
@@ -687,31 +825,36 @@ const S = {
   getHistory: db.prepare(`
     SELECT *
     FROM clan_user_history
-    WHERE clan_id = ? AND user_id = ?
+    WHERE clan_id = ?
+      AND user_id = ?
   `),
 
   ensureHistory: db.prepare(`
     INSERT OR IGNORE INTO clan_user_history
       (clan_id, guild_id, user_id)
+
     VALUES (?, ?, ?)
   `),
 
   setLeft: db.prepare(`
     UPDATE clan_user_history
     SET left_at = ?
-    WHERE clan_id = ? AND user_id = ?
+    WHERE clan_id = ?
+      AND user_id = ?
   `),
 
   addInactiveKick: db.prepare(`
     UPDATE clan_user_history
     SET inactive_kicks = inactive_kicks + 1
-    WHERE clan_id = ? AND user_id = ?
+    WHERE clan_id = ?
+      AND user_id = ?
   `),
 
   setBanned: db.prepare(`
     UPDATE clan_user_history
     SET banned = 1
-    WHERE clan_id = ? AND user_id = ?
+    WHERE clan_id = ?
+      AND user_id = ?
   `),
 
   delHistory: db.prepare(
@@ -722,15 +865,14 @@ const S = {
     'DELETE FROM clan_donors WHERE clan_id = ?'
   ),
 
-  // ----------------------------------------------------------
   // Atomic wallet deposit statements.
-  // The balance check and debit happen in the SAME SQL update.
-  // ----------------------------------------------------------
 
   debitWallet: db.prepare(`
     UPDATE economy_users
-    SET balance = balance - ?,
-        lifetime_spent = lifetime_spent + ?
+    SET
+      balance = balance - ?,
+      lifetime_spent = lifetime_spent + ?
+
     WHERE guild_id = ?
       AND user_id = ?
       AND balance >= ?
@@ -746,16 +888,19 @@ const S = {
       reason,
       timestamp
     )
+
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `),
 };
 
-// ------------------------------------------------------------
-// Clan lookups
-// ------------------------------------------------------------
+// ============================================================
+// CLAN LOOKUPS
+// ============================================================
 
 function clanCapacity(clanRow) {
-  const tier = Number(clanRow.capacity_tier || 0);
+  const tier = Number(
+    clanRow.capacity_tier || 0
+  );
 
   return tier > 0
     ? CFG.CAPACITY[tier - 1]?.capacity || CFG.BASE_CAPACITY
@@ -763,7 +908,9 @@ function clanCapacity(clanRow) {
 }
 
 function xpBoost(clanRow, now = Date.now()) {
-  if (Number(clanRow.booster_until || 0) <= now) {
+  if (
+    Number(clanRow.booster_until || 0) <= now
+  ) {
     return 0;
   }
 
@@ -776,11 +923,18 @@ function getMembership(gid, uid) {
   gid = String(gid);
   uid = String(uid);
 
-  const member = S.getMember.get(gid, uid);
+  const member = S.getMember.get(
+    gid,
+    uid
+  );
 
-  if (!member) return null;
+  if (!member) {
+    return null;
+  }
 
-  const clanRow = S.getClan.get(member.clan_id);
+  const clanRow = S.getClan.get(
+    member.clan_id
+  );
 
   if (!clanRow) {
     S.delMember.run(gid, uid);
@@ -797,7 +951,9 @@ function requireMembership(gid, uid) {
   const found = getMembership(gid, uid);
 
   if (!found) {
-    throw new ClanError('You are not in a clan.');
+    throw new ClanError(
+      'You are not in a clan.'
+    );
   }
 
   return found;
@@ -816,22 +972,30 @@ function assertNameFree(gid, name, exceptClanId = null) {
     nameKey(name)
   );
 
-  if (existing && existing.id !== exceptClanId) {
-    throw new ClanError('A clan with that name already exists.');
+  if (
+    existing &&
+    Number(existing.id) !== Number(exceptClanId)
+  ) {
+    throw new ClanError(
+      'A clan with that name already exists.'
+    );
   }
 }
 
 function describeClan(clanRow, now = Date.now()) {
-  const members = S.membersOf.all(clanRow.id);
+  const members = S.membersOf.all(
+    clanRow.id
+  );
 
   const ids = rank =>
     members
       .filter(member => member.rank_no === rank)
       .map(member => member.user_id);
 
-  const need = clanRow.level >= CFG.MAX_LEVEL
-    ? 0
-    : CFG.xpToNext(clanRow.level);
+  const need =
+    clanRow.level >= CFG.MAX_LEVEL
+      ? 0
+      : CFG.xpToNext(clanRow.level);
 
   return {
     clan: clanRow,
@@ -845,7 +1009,10 @@ function describeClan(clanRow, now = Date.now()) {
     donors: S.topDonors.all(clanRow.id),
     xpNeeded: need,
     pct: need
-      ? Math.min(100, Math.floor((clanRow.xp / need) * 100))
+      ? Math.min(
+          100,
+          Math.floor((clanRow.xp / need) * 100)
+        )
       : 100,
   };
 }
@@ -854,11 +1021,23 @@ function getLeaderboard(gid, page = 0, size = 10) {
   gid = String(gid);
 
   const total = S.countClans.get(gid).n;
-  const pages = Math.max(1, Math.ceil(total / size));
-  const current = Math.min(Math.max(0, page), pages - 1);
+
+  const pages = Math.max(
+    1,
+    Math.ceil(total / size)
+  );
+
+  const current = Math.min(
+    Math.max(0, page),
+    pages - 1
+  );
 
   return {
-    rows: S.leaderboard.all(gid, size, current * size),
+    rows: S.leaderboard.all(
+      gid,
+      size,
+      current * size
+    ),
     total,
     pages,
     page: current,
@@ -866,20 +1045,29 @@ function getLeaderboard(gid, page = 0, size = 10) {
   };
 }
 
-// ------------------------------------------------------------
-// XP and levels
-// ------------------------------------------------------------
+// ============================================================
+// XP AND LEVELS
+// ============================================================
 
 function addClanXp(clanId, amount, notes) {
-  amount = Math.max(0, Math.floor(Number(amount) || 0));
+  amount = Math.max(
+    0,
+    Math.floor(Number(amount) || 0)
+  );
 
-  if (amount <= 0) return;
+  if (amount <= 0) {
+    return;
+  }
 
   const current = S.getClan.get(clanId);
-  if (!current) return;
+
+  if (!current) {
+    return;
+  }
 
   let level = current.level;
   let xp = current.xp + amount;
+
   const gained = [];
 
   while (
@@ -895,7 +1083,11 @@ function addClanXp(clanId, amount, notes) {
     xp = 0;
   }
 
-  S.setClanXp.run(level, xp, clanId);
+  S.setClanXp.run(
+    level,
+    xp,
+    clanId
+  );
 
   if (notes) {
     notes.xp = (notes.xp || 0) + amount;
@@ -909,25 +1101,36 @@ function addClanXp(clanId, amount, notes) {
   }
 }
 
-// ------------------------------------------------------------
-// Daily quests
-// ------------------------------------------------------------
+// ============================================================
+// DAILY QUESTS
+// ============================================================
 
 const POOL = new Map(
-  CFG.QUEST_POOL.map(quest => [quest.id, quest])
+  CFG.QUEST_POOL.map(quest => [
+    quest.id,
+    quest,
+  ])
 );
 
 function questText(quest) {
   const def = POOL.get(quest.kind);
-  return def ? def.text(quest.target) : 'Quest';
+
+  return def
+    ? def.text(quest.target)
+    : 'Quest';
 }
 
 function pickDailyQuests(avoid) {
   const all = CFG.QUEST_POOL;
 
   const fresh = list => {
-    const unused = list.filter(q => !avoid.has(q.id));
-    return pick(unused.length ? unused : list);
+    const unused = list.filter(
+      q => !avoid.has(q.id)
+    );
+
+    return pick(
+      unused.length ? unused : list
+    );
   };
 
   const games = [
@@ -942,10 +1145,21 @@ function pickDailyQuests(avoid) {
     const [g1, g2] = shuffle(games);
 
     const chosen = [
-      fresh(all.filter(q => q.cat === 'economic')),
-      fresh(all.filter(q => q.game === g1)),
-      fresh(all.filter(q => q.game === g2)),
-      fresh(all.filter(q => q.cat === 'recruitment')),
+      fresh(
+        all.filter(q => q.cat === 'economic')
+      ),
+
+      fresh(
+        all.filter(q => q.game === g1)
+      ),
+
+      fresh(
+        all.filter(q => q.game === g2)
+      ),
+
+      fresh(
+        all.filter(q => q.cat === 'recruitment')
+      ),
     ];
 
     if (
@@ -964,20 +1178,36 @@ function pickDailyQuests(avoid) {
 function ensureDailyPool(guildId, now) {
   const dk = dayKey(now);
 
-  let rows = S.getPool.all(guildId, dk);
+  let rows = S.getPool.all(
+    guildId,
+    dk
+  );
 
   if (!rows.length) {
     const yesterday = new Set(
       S.getPool
-        .all(guildId, dayKey(now - DAY_MS))
+        .all(
+          guildId,
+          dayKey(now - DAY_MS)
+        )
         .map(row => row.quest_id)
     );
 
-    pickDailyQuests(yesterday).forEach((id, slot) => {
-      S.insPool.run(guildId, dk, slot, id);
-    });
+    pickDailyQuests(yesterday).forEach(
+      (id, slot) => {
+        S.insPool.run(
+          guildId,
+          dk,
+          slot,
+          id
+        );
+      }
+    );
 
-    rows = S.getPool.all(guildId, dk);
+    rows = S.getPool.all(
+      guildId,
+      dk
+    );
   }
 
   return rows.map(row => row.quest_id);
@@ -986,34 +1216,68 @@ function ensureDailyPool(guildId, now) {
 function ensureQuests(clanRow, now) {
   const dk = dayKey(now);
 
-  let rows = S.getQuests.all(clanRow.id, dk);
+  let rows = S.getQuests.all(
+    clanRow.id,
+    dk
+  );
 
   for (const row of rows) {
-    if (!POOL.has(row.kind) && !row.done) {
-      S.delQuest.run(clanRow.id, dk, row.slot);
+    if (
+      !POOL.has(row.kind) &&
+      !row.done
+    ) {
+      S.delQuest.run(
+        clanRow.id,
+        dk,
+        row.slot
+      );
     }
   }
 
-  rows = S.getQuests.all(clanRow.id, dk);
+  rows = S.getQuests.all(
+    clanRow.id,
+    dk
+  );
 
   if (rows.length >= CFG.QUEST_COUNT) {
     return rows;
   }
 
-  const ids = ensureDailyPool(clanRow.guild_id, now);
-  const memberCount = S.countMembers.get(clanRow.id).n;
-  const full = memberCount >= clanCapacity(clanRow);
-  const have = new Set(rows.map(row => row.slot));
+  const ids = ensureDailyPool(
+    clanRow.guild_id,
+    now
+  );
+
+  const memberCount = S.countMembers.get(
+    clanRow.id
+  ).n;
+
+  const full =
+    memberCount >= clanCapacity(clanRow);
+
+  const have = new Set(
+    rows.map(row => row.slot)
+  );
 
   ids.forEach((id, slot) => {
-    if (have.has(slot)) return;
+    if (have.has(slot)) {
+      return;
+    }
 
     let def = POOL.get(id);
-    if (!def) return;
 
-    if (def.cat === 'recruitment' && full) {
+    if (!def) {
+      return;
+    }
+
+    if (
+      def.cat === 'recruitment' &&
+      full
+    ) {
       const spare = CFG.QUEST_POOL.filter(
-        q => q.cat === 'economic' && !ids.includes(q.id)
+        q =>
+          q.cat === 'economic' &&
+          !ids.includes(q.id)
       );
 
       if (spare.length) {
@@ -1044,7 +1308,10 @@ function ensureQuests(clanRow, now) {
     );
   });
 
-  return S.getQuests.all(clanRow.id, dk);
+  return S.getQuests.all(
+    clanRow.id,
+    dk
+  );
 }
 
 function progressOf(clanId, dk, def) {
@@ -1079,7 +1346,13 @@ function progressOf(clanId, dk, def) {
   return 0;
 }
 
-function recordMetric(clanId, dk, userId, metric, delta = 1) {
+function recordMetric(
+  clanId,
+  dk,
+  userId,
+  metric,
+  delta = 1
+) {
   S.addStat.run(
     clanId,
     dk,
@@ -1090,19 +1363,27 @@ function recordMetric(clanId, dk, userId, metric, delta = 1) {
 }
 
 function updateStreak(clanId, game, dk, result) {
-  if (result === null || result === undefined) {
+  if (
+    result === null ||
+    result === undefined
+  ) {
     return;
   }
 
-  const row = S.getStreak.get(clanId, game);
+  const row = S.getStreak.get(
+    clanId,
+    game
+  );
 
-  let current = row && row.day_key === dk
-    ? row.current
-    : 0;
+  let current =
+    row && row.day_key === dk
+      ? row.current
+      : 0;
 
-  let best = row && row.day_key === dk
-    ? row.best
-    : 0;
+  let best =
+    row && row.day_key === dk
+      ? row.best
+      : 0;
 
   if (result) {
     current += 1;
@@ -1122,17 +1403,32 @@ function updateStreak(clanId, game, dk, result) {
 
 function evaluateQuests(clanId, now, notes) {
   const clanRow = S.getClan.get(clanId);
-  if (!clanRow) return;
+
+  if (!clanRow) {
+    return;
+  }
 
   const dk = dayKey(now);
-  const quests = ensureQuests(clanRow, now);
-  const boost = xpBoost(clanRow, now);
+  const quests = ensureQuests(
+    clanRow,
+    now
+  );
+
+  const boost = xpBoost(
+    clanRow,
+    now
+  );
 
   for (const quest of quests) {
-    if (quest.done) continue;
+    if (quest.done) {
+      continue;
+    }
 
     const def = POOL.get(quest.kind);
-    if (!def) continue;
+
+    if (!def) {
+      continue;
+    }
 
     const progress = Math.min(
       quest.target,
@@ -1168,7 +1464,11 @@ function evaluateQuests(clanId, now, notes) {
         clanId
       );
 
-      addClanXp(clanId, xp, notes);
+      addClanXp(
+        clanId,
+        xp,
+        notes
+      );
 
       if (notes) {
         notes.quests = notes.quests || [];
@@ -1182,7 +1482,10 @@ function evaluateQuests(clanId, now, notes) {
     }
   }
 
-  const refreshed = S.getQuests.all(clanId, dk);
+  const refreshed = S.getQuests.all(
+    clanId,
+    dk
+  );
 
   if (
     refreshed.length &&
@@ -1199,7 +1502,11 @@ function evaluateQuests(clanId, now, notes) {
         CFG.QUEST_BONUS_XP * (1 + boost)
       );
 
-      addClanXp(clanId, xp, notes);
+      addClanXp(
+        clanId,
+        xp,
+        notes
+      );
 
       if (notes) {
         notes.questBonus = { xp };
@@ -1208,24 +1515,44 @@ function evaluateQuests(clanId, now, notes) {
   }
 }
 
-const questBoardTx = db.transaction((gid, uid, now) => {
-  const { clan: clanRow } = requireMembership(gid, uid);
-  const quests = ensureQuests(clanRow, now);
-  const boost = xpBoost(clanRow, now);
+// ============================================================
+// QUEST BOARD
+// ============================================================
 
-  return {
-    clan: clanRow,
-    quests,
-    bonusClaimed: !!S.getBonus.get(
-      clanRow.id,
-      dayKey(now)
-    ),
-    boost,
-    bonusXp: Math.round(
-      CFG.QUEST_BONUS_XP * (1 + boost)
-    ),
-  };
-});
+const questBoardTx = db.transaction(
+  (gid, uid, now) => {
+    const { clan: clanRow } = requireMembership(
+      gid,
+      uid
+    );
+
+    const quests = ensureQuests(
+      clanRow,
+      now
+    );
+
+    const boost = xpBoost(
+      clanRow,
+      now
+    );
+
+    return {
+      clan: clanRow,
+      quests,
+
+      bonusClaimed: !!S.getBonus.get(
+        clanRow.id,
+        dayKey(now)
+      ),
+
+      boost,
+
+      bonusXp: Math.round(
+        CFG.QUEST_BONUS_XP * (1 + boost)
+      ),
+    };
+  }
+);
 
 function getQuestBoard(gid, uid, now = Date.now()) {
   return questBoardTx(
@@ -1235,11 +1562,28 @@ function getQuestBoard(gid, uid, now = Date.now()) {
   );
 }
 
+// ============================================================
+// RECORD GAMES
+// ============================================================
+
 // result: true = win, false = loss, null = draw/push.
-function recordGame(guildId, userId, game, result, now = Date.now()) {
+
+function recordGame(
+  guildId,
+  userId,
+  game,
+  result,
+  now = Date.now()
+) {
   try {
-    const found = getMembership(guildId, userId);
-    if (!found) return null;
+    const found = getMembership(
+      guildId,
+      userId
+    );
+
+    if (!found) {
+      return null;
+    }
 
     const allowedGames = new Set([
       'coinflip',
@@ -1258,7 +1602,10 @@ function recordGame(guildId, userId, game, result, now = Date.now()) {
       const dk = dayKey(now);
       const id = found.clan.id;
 
-      ensureQuests(found.clan, now);
+      ensureQuests(
+        found.clan,
+        now
+      );
 
       recordMetric(
         id,
@@ -1278,22 +1625,51 @@ function recordGame(guildId, userId, game, result, now = Date.now()) {
         );
       }
 
-      updateStreak(id, game, dk, result);
-      evaluateQuests(id, now, notes);
+      updateStreak(
+        id,
+        game,
+        dk,
+        result
+      );
+
+      evaluateQuests(
+        id,
+        now,
+        notes
+      );
     })();
 
     return notes;
 
   } catch (error) {
-    console.error('[Clan] recordGame failed:', error);
+    console.error(
+      '[Clan] recordGame failed:',
+      error
+    );
+
     return null;
   }
 }
 
-function recordFarm(guildId, userId, harvested, now = Date.now()) {
+// ============================================================
+// RECORD FARM
+// ============================================================
+
+function recordFarm(
+  guildId,
+  userId,
+  harvested,
+  now = Date.now()
+) {
   try {
-    const found = getMembership(guildId, userId);
-    if (!found) return null;
+    const found = getMembership(
+      guildId,
+      userId
+    );
+
+    if (!found) {
+      return null;
+    }
 
     const notes = {};
 
@@ -1301,7 +1677,10 @@ function recordFarm(guildId, userId, harvested, now = Date.now()) {
       const dk = dayKey(now);
       const id = found.clan.id;
 
-      ensureQuests(found.clan, now);
+      ensureQuests(
+        found.clan,
+        now
+      );
 
       recordMetric(
         id,
@@ -1321,25 +1700,42 @@ function recordFarm(guildId, userId, harvested, now = Date.now()) {
         );
       }
 
-      evaluateQuests(id, now, notes);
+      evaluateQuests(
+        id,
+        now,
+        notes
+      );
     })();
 
     return notes;
 
   } catch (error) {
-    console.error('[Clan] recordFarm failed:', error);
+    console.error(
+      '[Clan] recordFarm failed:',
+      error
+    );
+
     return null;
   }
 }
 
-async function announce(channel, notes) {
-  if (!channel?.send || !notes) return;
+// ============================================================
+// ANNOUNCEMENTS
+// ============================================================
 
-  const quiet = { parse: [] };
+async function announce(channel, notes) {
+  if (!channel?.send || !notes) {
+    return;
+  }
+
+  const quiet = {
+    parse: [],
+  };
 
   for (const quest of notes.quests || []) {
     await channel.send({
-      content: `Clan quest **${quest.text}** completed!`,
+      content:
+        `Clan quest **${quest.text}** completed!`,
       allowedMentions: quiet,
     }).catch(() => {});
   }
@@ -1355,15 +1751,22 @@ async function announce(channel, notes) {
 
   for (const level of notes.levelUps || []) {
     await channel.send({
-      content: `The clan reached level **${level}**!`,
+      content:
+        `The clan reached level **${level}**!`,
       allowedMentions: quiet,
     }).catch(() => {});
   }
 }
 
+// ============================================================
+// TRACK GAME
+// ============================================================
+
 async function trackGame(message, game, result) {
   try {
-    if (!message?.guild) return;
+    if (!message?.guild) {
+      return;
+    }
 
     const notes = recordGame(
       message.guild.id,
@@ -1373,16 +1776,28 @@ async function trackGame(message, game, result) {
     );
 
     if (notes) {
-      await announce(message.channel, notes);
+      await announce(
+        message.channel,
+        notes
+      );
     }
   } catch (error) {
-    console.error('[Clan] trackGame failed:', error);
+    console.error(
+      '[Clan] trackGame failed:',
+      error
+    );
   }
 }
 
+// ============================================================
+// TRACK FARM
+// ============================================================
+
 async function trackFarm(message, harvested) {
   try {
-    if (!message?.guild) return;
+    if (!message?.guild) {
+      return;
+    }
 
     const notes = recordFarm(
       message.guild.id,
@@ -1391,16 +1806,22 @@ async function trackFarm(message, harvested) {
     );
 
     if (notes) {
-      await announce(message.channel, notes);
+      await announce(
+        message.channel,
+        notes
+      );
     }
   } catch (error) {
-    console.error('[Clan] trackFarm failed:', error);
+    console.error(
+      '[Clan] trackFarm failed:',
+      error
+    );
   }
 }
 
-// ------------------------------------------------------------
-// Creating, naming and joining
-// ------------------------------------------------------------
+// ============================================================
+// CREATING, NAMING AND JOINING
+// ============================================================
 
 function findClanItem(guildId) {
   const items = shopSystem.listShopItems(
@@ -1409,7 +1830,9 @@ function findClanItem(guildId) {
   );
 
   if (CFG.SHOP_ITEM_ID) {
-    const pinned = String(CFG.SHOP_ITEM_ID).padStart(2, '0');
+    const pinned = String(
+      CFG.SHOP_ITEM_ID
+    ).padStart(2, '0');
 
     return items.find(
       item => String(item.item_id) === pinned
@@ -1427,45 +1850,68 @@ function findClanItem(guildId) {
   ) || null;
 }
 
-const createTx = db.transaction((gid, uid, name, now) => {
-  if (S.getMember.get(gid, uid)) {
-    throw new ClanError('You are already in a clan.');
+// ============================================================
+// CREATE CLAN TRANSACTION
+// ============================================================
+
+const createTx = db.transaction(
+  (gid, uid, name, now) => {
+    if (S.getMember.get(gid, uid)) {
+      throw new ClanError(
+        'You are already in a clan.'
+      );
+    }
+
+    assertNameFree(
+      gid,
+      name
+    );
+
+    const result = S.insClan.run(
+      gid,
+      name,
+      nameKey(name),
+      uid,
+      now
+    );
+
+    const id = Number(
+      result.lastInsertRowid
+    );
+
+    S.insMember.run(
+      gid,
+      uid,
+      id,
+      RANK.OWNER,
+      now
+    );
+
+    return S.getClan.get(id);
   }
+);
 
-  assertNameFree(gid, name);
-
-  const result = S.insClan.run(
-    gid,
-    name,
-    nameKey(name),
-    uid,
-    now
-  );
-
-  const id = Number(result.lastInsertRowid);
-
-  S.insMember.run(
-    gid,
-    uid,
-    id,
-    RANK.OWNER,
-    now
-  );
-
-  return S.getClan.get(id);
-});
-
-function createFromVoucher(gid, uid, rawName, now = Date.now()) {
+function createFromVoucher(
+  gid,
+  uid,
+  rawName,
+  now = Date.now()
+) {
   gid = String(gid);
   uid = String(uid);
 
   if (S.getMember.get(gid, uid)) {
-    throw new ClanError('You are already in a clan.');
+    throw new ClanError(
+      'You are already in a clan.'
+    );
   }
 
   const name = cleanName(rawName);
 
-  assertNameFree(gid, name);
+  assertNameFree(
+    gid,
+    name
+  );
 
   const item = findClanItem(gid);
 
@@ -1507,49 +1953,70 @@ function createFromVoucher(gid, uid, rawName, now = Date.now()) {
   }
 }
 
-const renameTx = db.transaction((gid, uid, rawName, now) => {
-  const { clan: clanRow, member } = requireMembership(gid, uid);
+// ============================================================
+// RENAME CLAN
+// ============================================================
 
-  if (member.rank_no !== RANK.OWNER) {
-    throw new ClanError('Only the clan owner can rename the clan.');
-  }
+const renameTx = db.transaction(
+  (gid, uid, rawName, now) => {
+    const {
+      clan: clanRow,
+      member,
+    } = requireMembership(gid, uid);
 
-  const name = cleanName(rawName);
-
-  assertNameFree(gid, name, clanRow.id);
-
-  const removed = economy.removeCrowns(
-    gid,
-    uid,
-    CFG.RENAME_COST,
-    {
-      type: 'clan_rename',
-      reason: `Clan rename: ${clanRow.name} to ${name}`,
-      actorId: uid,
-      timestamp: now,
+    if (member.rank_no !== RANK.OWNER) {
+      throw new ClanError(
+        'Only the clan owner can rename the clan.'
+      );
     }
-  );
 
-  if (!removed) {
-    throw new ClanError(
-      `Renaming costs ${money(CFG.RENAME_COST)}, but you only have ${money(economy.getBalance(gid, uid))}.`
+    const name = cleanName(rawName);
+
+    assertNameFree(
+      gid,
+      name,
+      clanRow.id
     );
+
+    const removed = economy.removeCrowns(
+      gid,
+      uid,
+      CFG.RENAME_COST,
+      {
+        type: 'clan_rename',
+        reason:
+          `Clan rename: ${clanRow.name} to ${name}`,
+        actorId: uid,
+        timestamp: now,
+      }
+    );
+
+    if (!removed) {
+      throw new ClanError(
+        `Renaming costs ${money(CFG.RENAME_COST)}, but you only have ${money(economy.getBalance(gid, uid))}.`
+      );
+    }
+
+    S.setName.run(
+      name,
+      nameKey(name),
+      clanRow.id
+    );
+
+    return {
+      clan: S.getClan.get(clanRow.id),
+      oldName: clanRow.name,
+      cost: CFG.RENAME_COST,
+    };
   }
+);
 
-  S.setName.run(
-    name,
-    nameKey(name),
-    clanRow.id
-  );
-
-  return {
-    clan: S.getClan.get(clanRow.id),
-    oldName: clanRow.name,
-    cost: CFG.RENAME_COST,
-  };
-});
-
-function renameClan(gid, uid, rawName, now = Date.now()) {
+function renameClan(
+  gid,
+  uid,
+  rawName,
+  now = Date.now()
+) {
   return renameTx(
     String(gid),
     String(uid),
@@ -1558,81 +2025,125 @@ function renameClan(gid, uid, rawName, now = Date.now()) {
   );
 }
 
-const joinTx = db.transaction((gid, uid, clanId, now, viaInvite) => {
-  if (S.getMember.get(gid, uid)) {
-    throw new ClanError('You are already in a clan.');
-  }
+// ============================================================
+// JOIN CLAN TRANSACTION
+// ============================================================
 
-  const clanRow = S.getClan.get(clanId);
+const joinTx = db.transaction(
+  (gid, uid, clanId, now, viaInvite) => {
+    if (S.getMember.get(gid, uid)) {
+      throw new ClanError(
+        'You are already in a clan.'
+      );
+    }
 
-  if (!clanRow || clanRow.guild_id !== gid) {
-    throw new ClanError('That clan no longer exists.');
-  }
+    const clanRow = S.getClan.get(clanId);
 
-  const history = S.getHistory.get(clanId, uid);
+    if (
+      !clanRow ||
+      clanRow.guild_id !== gid
+    ) {
+      throw new ClanError(
+        'That clan no longer exists.'
+      );
+    }
 
-  if (history?.banned) {
-    throw new ClanError(`You are banned from **${clanRow.name}**.`);
-  }
-
-  if (history?.left_at && now - history.left_at < CFG.REJOIN_LOCK_MS) {
-    const wait = CFG.REJOIN_LOCK_MS - (now - history.left_at);
-
-    throw new ClanError(
-      `You left **${clanRow.name}** recently. You can rejoin in **${economy.formatDuration(wait)}**.`
+    const history = S.getHistory.get(
+      clanId,
+      uid
     );
-  }
 
-  if (S.countMembers.get(clanId).n >= clanCapacity(clanRow)) {
-    throw new ClanError(`**${clanRow.name}** is full.`);
-  }
+    if (history?.banned) {
+      throw new ClanError(
+        `You are banned from **${clanRow.name}**.`
+      );
+    }
 
-  if (clanRow.is_private && !viaInvite) {
-    throw new ClanError(
-      `**${clanRow.name}** is private. It can only be joined by invitation.`
+    if (
+      history?.left_at &&
+      now - history.left_at < CFG.REJOIN_LOCK_MS
+    ) {
+      const wait =
+        CFG.REJOIN_LOCK_MS -
+        (now - history.left_at);
+
+      throw new ClanError(
+        `You left **${clanRow.name}** recently. You can rejoin in **${economy.formatDuration(wait)}**.`
+      );
+    }
+
+    if (
+      S.countMembers.get(clanId).n >=
+      clanCapacity(clanRow)
+    ) {
+      throw new ClanError(
+        `**${clanRow.name}** is full.`
+      );
+    }
+
+    if (
+      clanRow.is_private &&
+      !viaInvite
+    ) {
+      throw new ClanError(
+        `**${clanRow.name}** is private. It can only be joined by invitation.`
+      );
+    }
+
+    S.insMember.run(
+      gid,
+      uid,
+      clanId,
+      RANK.MEMBER,
+      now
     );
-  }
 
-  S.insMember.run(
-    gid,
-    uid,
-    clanId,
-    RANK.MEMBER,
-    now
-  );
+    const notes = {};
+    const dk = dayKey(now);
 
-  const notes = {};
-  const dk = dayKey(now);
+    ensureQuests(
+      clanRow,
+      now
+    );
 
-  ensureQuests(clanRow, now);
-
-  recordMetric(
-    clanId,
-    dk,
-    uid,
-    'recruit',
-    1
-  );
-
-  if (viaInvite) {
     recordMetric(
       clanId,
       dk,
       uid,
-      'recruit_invite',
+      'recruit',
       1
     );
+
+    if (viaInvite) {
+      recordMetric(
+        clanId,
+        dk,
+        uid,
+        'recruit_invite',
+        1
+      );
+    }
+
+    evaluateQuests(
+      clanId,
+      now,
+      notes
+    );
+
+    return {
+      clan: S.getClan.get(clanId),
+      notes,
+    };
   }
+);
 
-  evaluateQuests(clanId, now, notes);
-
-  return {
-    clan: S.getClan.get(clanId),
-    notes,
-  };
-});
-
-function joinClan(gid, uid, clanId, now = Date.now(), viaInvite = false) {
+function joinClan(
+  gid,
+  uid,
+  clanId,
+  now = Date.now(),
+  viaInvite = false
+) {
   return joinTx(
     String(gid),
     String(uid),
@@ -1642,8 +2153,16 @@ function joinClan(gid, uid, clanId, now = Date.now(), viaInvite = false) {
   );
 }
 
-function joinByName(gid, uid, rawName, now = Date.now()) {
-  const clanRow = getClanByName(gid, rawName);
+function joinByName(
+  gid,
+  uid,
+  rawName,
+  now = Date.now()
+) {
+  const clanRow = getClanByName(
+    gid,
+    rawName
+  );
 
   if (!clanRow) {
     throw new ClanError(
@@ -1666,31 +2185,51 @@ function joinByName(gid, uid, rawName, now = Date.now()) {
   );
 }
 
-const leaveTx = db.transaction((gid, uid, now) => {
-  const { clan: clanRow, member } = requireMembership(gid, uid);
+// ============================================================
+// LEAVE CLAN
+// ============================================================
 
-  if (member.rank_no === RANK.OWNER) {
-    throw new ClanError('The owner cannot leave the clan.');
+const leaveTx = db.transaction(
+  (gid, uid, now) => {
+    const {
+      clan: clanRow,
+      member,
+    } = requireMembership(gid, uid);
+
+    if (member.rank_no === RANK.OWNER) {
+      throw new ClanError(
+        'The owner cannot leave the clan.'
+      );
+    }
+
+    S.delMember.run(
+      gid,
+      uid
+    );
+
+    S.ensureHistory.run(
+      clanRow.id,
+      gid,
+      uid
+    );
+
+    S.setLeft.run(
+      now,
+      clanRow.id,
+      uid
+    );
+
+    return {
+      clan: clanRow,
+    };
   }
+);
 
-  S.delMember.run(gid, uid);
-
-  S.ensureHistory.run(
-    clanRow.id,
-    gid,
-    uid
-  );
-
-  S.setLeft.run(
-    now,
-    clanRow.id,
-    uid
-  );
-
-  return { clan: clanRow };
-});
-
-function leaveClan(gid, uid, now = Date.now()) {
+function leaveClan(
+  gid,
+  uid,
+  now = Date.now()
+) {
   return leaveTx(
     String(gid),
     String(uid),
@@ -1698,16 +2237,24 @@ function leaveClan(gid, uid, now = Date.now()) {
   );
 }
 
-// ------------------------------------------------------------
-// Invites, kicks and ranks
-// ------------------------------------------------------------
+// ============================================================
+// INVITES, KICKS AND RANKS
+// ============================================================
 
-function assertCanInvite(gid, actorId, targetId, now = Date.now()) {
+function assertCanInvite(
+  gid,
+  actorId,
+  targetId,
+  now = Date.now()
+) {
   gid = String(gid);
   actorId = String(actorId);
   targetId = String(targetId);
 
-  const { clan: clanRow, member } = requireMembership(
+  const {
+    clan: clanRow,
+    member,
+  } = requireMembership(
     gid,
     actorId
   );
@@ -1728,11 +2275,15 @@ function assertCanInvite(gid, actorId, targetId, now = Date.now()) {
   }
 
   if (actorId === targetId) {
-    throw new ClanError('You cannot invite yourself.');
+    throw new ClanError(
+      'You cannot invite yourself.'
+    );
   }
 
   if (S.getMember.get(gid, targetId)) {
-    throw new ClanError('That user is already in a clan.');
+    throw new ClanError(
+      'That user is already in a clan.'
+    );
   }
 
   const history = S.getHistory.get(
@@ -1746,15 +2297,23 @@ function assertCanInvite(gid, actorId, targetId, now = Date.now()) {
     );
   }
 
-  if (history?.left_at && now - history.left_at < CFG.REJOIN_LOCK_MS) {
-    const wait = CFG.REJOIN_LOCK_MS - (now - history.left_at);
+  if (
+    history?.left_at &&
+    now - history.left_at < CFG.REJOIN_LOCK_MS
+  ) {
+    const wait =
+      CFG.REJOIN_LOCK_MS -
+      (now - history.left_at);
 
     throw new ClanError(
       `That user left your clan recently and can rejoin in **${economy.formatDuration(wait)}**.`
     );
   }
 
-  if (S.countMembers.get(clanRow.id).n >= clanCapacity(clanRow)) {
+  if (
+    S.countMembers.get(clanRow.id).n >=
+    clanCapacity(clanRow)
+  ) {
     throw new ClanError(
       'Your clan is full. Buy a Member Capacity upgrade to make more room.'
     );
@@ -1766,60 +2325,82 @@ function assertCanInvite(gid, actorId, targetId, now = Date.now()) {
   };
 }
 
-const kickTx = db.transaction((gid, actorId, targetId, now) => {
-  const { clan: clanRow, member: actor } = requireMembership(
-    gid,
-    actorId
-  );
+// ============================================================
+// KICK TRANSACTION
+// ============================================================
 
-  const target = S.getMember.get(
-    gid,
-    targetId
-  );
-
-  if (!target || target.clan_id !== clanRow.id) {
-    throw new ClanError('That user is not in your clan.');
-  }
-
-  if (actorId === targetId) {
-    throw new ClanError(
-      'You cannot kick yourself. Use the leave command instead.'
+const kickTx = db.transaction(
+  (gid, actorId, targetId, now) => {
+    const {
+      clan: clanRow,
+      member: actor,
+    } = requireMembership(
+      gid,
+      actorId
     );
-  }
 
-  if (actor.rank_no < RANK.SENIOR) {
-    throw new ClanError(
-      'Only Seniors and above can kick members.'
+    const target = S.getMember.get(
+      gid,
+      targetId
     );
-  }
 
-  if (actor.rank_no <= target.rank_no) {
-    throw new ClanError(
-      `You cannot kick a ${RANK_NAMES[target.rank_no]}. You can only kick members who rank below you.`
+    if (
+      !target ||
+      target.clan_id !== clanRow.id
+    ) {
+      throw new ClanError(
+        'That user is not in your clan.'
+      );
+    }
+
+    if (actorId === targetId) {
+      throw new ClanError(
+        'You cannot kick yourself. Use the leave command instead.'
+      );
+    }
+
+    if (actor.rank_no < RANK.SENIOR) {
+      throw new ClanError(
+        'Only Seniors and above can kick members.'
+      );
+    }
+
+    if (actor.rank_no <= target.rank_no) {
+      throw new ClanError(
+        `You cannot kick a ${RANK_NAMES[target.rank_no]}. You can only kick members who rank below you.`
+      );
+    }
+
+    S.delMember.run(
+      gid,
+      targetId
     );
+
+    S.ensureHistory.run(
+      clanRow.id,
+      gid,
+      targetId
+    );
+
+    S.setLeft.run(
+      now,
+      clanRow.id,
+      targetId
+    );
+
+    return {
+      clan: clanRow,
+      target,
+    };
   }
+);
 
-  S.delMember.run(gid, targetId);
-
-  S.ensureHistory.run(
-    clanRow.id,
-    gid,
-    targetId
-  );
-
-  S.setLeft.run(
-    now,
-    clanRow.id,
-    targetId
-  );
-
-  return {
-    clan: clanRow,
-    target,
-  };
-});
-
-function kickMember(gid, actorId, targetId, now = Date.now()) {
+function kickMember(
+  gid,
+  actorId,
+  targetId,
+  now = Date.now()
+) {
   return kickTx(
     String(gid),
     String(actorId),
@@ -1828,90 +2409,117 @@ function kickMember(gid, actorId, targetId, now = Date.now()) {
   );
 }
 
-const rankTx = db.transaction((
-  gid,
-  actorId,
-  targetId,
-  newRank,
-  expectedRank
-) => {
-  const { clan: clanRow, member: actor } = requireMembership(
+// ============================================================
+// RANK TRANSACTION
+// ============================================================
+
+const rankTx = db.transaction(
+  (
     gid,
-    actorId
-  );
-
-  const target = S.getMember.get(
-    gid,
-    targetId
-  );
-
-  if (!target || target.clan_id !== clanRow.id) {
-    throw new ClanError('That user is not in your clan.');
-  }
-
-  if (actorId === targetId) {
-    throw new ClanError('You cannot change your own rank.');
-  }
-
-  if (target.rank_no >= RANK.OWNER) {
-    throw new ClanError("The owner's rank cannot be changed.");
-  }
-
-  if (expectedRank && target.rank_no !== expectedRank) {
-    throw new ClanError(
-      `That user is not a ${RANK_NAMES[expectedRank]}.`
-    );
-  }
-
-  if (!expectedRank && target.rank_no === newRank) {
-    throw new ClanError(
-      `That user is already a ${RANK_NAMES[newRank]}.`
-    );
-  }
-
-  const touchesCoOwner =
-    newRank === RANK.COOWNER ||
-    target.rank_no === RANK.COOWNER;
-
-  const needed = touchesCoOwner
-    ? RANK.OWNER
-    : RANK.COOWNER;
-
-  if (actor.rank_no < needed) {
-    throw new ClanError(
-      touchesCoOwner
-        ? 'Only the Owner can appoint or remove Co-owners.'
-        : 'Only Co-owners and the Owner can appoint and remove Managers and Seniors.'
-    );
-  }
-
-  if (actor.rank_no <= target.rank_no) {
-    throw new ClanError(
-      `You cannot change the rank of a ${RANK_NAMES[target.rank_no]}.`
-    );
-  }
-
-  if (
-    newRank === RANK.COOWNER &&
-    S.countRank.get(clanRow.id, RANK.COOWNER).n >= CFG.MAX_CO_OWNERS
-  ) {
-    throw new ClanError(
-      `A clan can have at most ${CFG.MAX_CO_OWNERS} Co-owners.`
-    );
-  }
-
-  S.setRank.run(
+    actorId,
+    targetId,
     newRank,
-    gid,
-    targetId
-  );
+    expectedRank
+  ) => {
+    const {
+      clan: clanRow,
+      member: actor,
+    } = requireMembership(
+      gid,
+      actorId
+    );
 
-  return {
-    clan: clanRow,
-    from: target.rank_no,
-    to: newRank,
-  };
-});
+    const target = S.getMember.get(
+      gid,
+      targetId
+    );
+
+    if (
+      !target ||
+      target.clan_id !== clanRow.id
+    ) {
+      throw new ClanError(
+        'That user is not in your clan.'
+      );
+    }
+
+    if (actorId === targetId) {
+      throw new ClanError(
+        'You cannot change your own rank.'
+      );
+    }
+
+    if (target.rank_no >= RANK.OWNER) {
+      throw new ClanError(
+        "The owner's rank cannot be changed."
+      );
+    }
+
+    if (
+      expectedRank &&
+      target.rank_no !== expectedRank
+    ) {
+      throw new ClanError(
+        `That user is not a ${RANK_NAMES[expectedRank]}.`
+      );
+    }
+
+    if (
+      !expectedRank &&
+      target.rank_no === newRank
+    ) {
+      throw new ClanError(
+        `That user is already a ${RANK_NAMES[newRank]}.`
+      );
+    }
+
+    const touchesCoOwner =
+      newRank === RANK.COOWNER ||
+      target.rank_no === RANK.COOWNER;
+
+    const needed = touchesCoOwner
+      ? RANK.OWNER
+      : RANK.COOWNER;
+
+    if (actor.rank_no < needed) {
+      throw new ClanError(
+        touchesCoOwner
+          ? 'Only the Owner can appoint or remove Co-owners.'
+          : 'Only Co-owners and the Owner can appoint and remove Managers and Seniors.'
+      );
+    }
+
+    if (actor.rank_no <= target.rank_no) {
+      throw new ClanError(
+        `You cannot change the rank of a ${RANK_NAMES[target.rank_no]}.`
+      );
+    }
+
+    if (
+      newRank === RANK.COOWNER &&
+      S.countRank.get(
+        clanRow.id,
+        RANK.COOWNER
+      ).n >= CFG.MAX_CO_OWNERS
+    ) {
+      throw new ClanError(
+        `A clan can have at most ${CFG.MAX_CO_OWNERS} Co-owners.`
+      );
+    }
+
+    S.setRank.run(
+      newRank,
+      gid,
+      targetId
+    );
+
+    return {
+      clan: clanRow,
+      from: target.rank_no,
+      to: newRank,
+    };
+  }
+);
 
 function changeRank(
   gid,
@@ -1925,128 +2533,147 @@ function changeRank(
     String(actorId),
     String(targetId),
     Number(newRank),
-    expectedRank == null ? null : Number(expectedRank)
+    expectedRank == null
+      ? null
+      : Number(expectedRank)
   );
 }
 
-// ------------------------------------------------------------
-// Reset a member's clan profile
-//
-// - Keeps the member in the clan.
-// - Keeps the member's current rank.
-// - Clears their contribution total and donor ranking.
-// - Removes their deposit history and personal daily stats.
-// - Does not change the clan vault.
-// - Only the actual clan Owner can perform this operation.
-// ------------------------------------------------------------
+// ============================================================
+// RESET MEMBER PROFILE
+// ============================================================
 
-const resetMemberStatsTx = db.transaction((
+const resetMemberStatsTx = db.transaction(
+  (
+    gid,
+    actorId,
+    targetId,
+    now
+  ) => {
+    const {
+      clan: clanRow,
+      member: actor,
+    } = requireMembership(
+      gid,
+      actorId
+    );
+
+    if (
+      actor.rank_no !== RANK.OWNER ||
+      String(clanRow.owner_id) !== actorId
+    ) {
+      throw new ClanError(
+        'Only the clan Owner can reset a member’s clan profile.'
+      );
+    }
+
+    const target = S.getMember.get(
+      gid,
+      targetId
+    );
+
+    if (
+      !target ||
+      Number(target.clan_id) !== Number(clanRow.id)
+    ) {
+      throw new ClanError(
+        'That user is not a member of your clan.'
+      );
+    }
+
+    if (actorId === targetId) {
+      throw new ClanError(
+        'You cannot reset your own profile with this command.'
+      );
+    }
+
+    const contributionUpdate =
+      S.resetMemberContributions.run(
+        gid,
+        targetId,
+        clanRow.id
+      );
+
+    if (contributionUpdate.changes !== 1) {
+      throw new ClanError(
+        'The member profile could not be reset. Please try again.'
+      );
+    }
+
+    const depositsDeleted =
+      S.deleteMemberDeposits.run(
+        clanRow.id,
+        gid,
+        targetId
+      ).changes;
+
+    S.deleteMemberDonor.run(
+      clanRow.id,
+      targetId
+    );
+
+    const statsDeleted =
+      S.deleteMemberStats.run(
+        clanRow.id,
+        targetId
+      ).changes;
+
+    const actorsDeleted =
+      S.deleteMemberQuestActors.run(
+        clanRow.id,
+        targetId
+      ).changes;
+
+    const dk = dayKey(now);
+
+    const quests = S.getQuests.all(
+      clanRow.id,
+      dk
+    );
+
+    for (const quest of quests) {
+      if (quest.done) {
+        continue;
+      }
+
+      const def = POOL.get(quest.kind);
+
+      if (!def) {
+        continue;
+      }
+
+      const progress = Math.min(
+        quest.target,
+        progressOf(clanRow.id, dk, def)
+      );
+
+      if (progress !== quest.progress) {
+        S.setQuestProgress.run(
+          progress,
+          clanRow.id,
+          dk,
+          quest.slot
+        );
+      }
+    }
+
+    return {
+      clan: S.getClan.get(clanRow.id),
+      member: S.getMember.get(gid, targetId),
+      targetId,
+      depositsDeleted,
+      statsDeleted,
+      actorsDeleted,
+    };
+  }
+);
+
+function resetMemberStats(
   gid,
   actorId,
   targetId,
-  now
-) => {
-  const { clan: clanRow, member: actor } = requireMembership(
-    gid,
-    actorId
-  );
-
-  if (
-    actor.rank_no !== RANK.OWNER ||
-    String(clanRow.owner_id) !== actorId
-  ) {
-    throw new ClanError(
-      'Only the clan Owner can reset a member’s clan profile.'
-    );
-  }
-
-  const target = S.getMember.get(
-    gid,
-    targetId
-  );
-
-  if (!target || Number(target.clan_id) !== Number(clanRow.id)) {
-    throw new ClanError(
-      'That user is not a member of your clan.'
-    );
-  }
-
-  if (actorId === targetId) {
-    throw new ClanError(
-      'You cannot reset your own profile with this command.'
-    );
-  }
-
-  const contributionUpdate = S.resetMemberContributions.run(
-    gid,
-    targetId,
-    clanRow.id
-  );
-
-  if (contributionUpdate.changes !== 1) {
-    throw new ClanError(
-      'The member profile could not be reset. Please try again.'
-    );
-  }
-
-  const depositsDeleted = S.deleteMemberDeposits.run(
-    clanRow.id,
-    gid,
-    targetId
-  ).changes;
-
-  S.deleteMemberDonor.run(
-    clanRow.id,
-    targetId
-  );
-
-  const statsDeleted = S.deleteMemberStats.run(
-    clanRow.id,
-    targetId
-  ).changes;
-
-  const actorsDeleted = S.deleteMemberQuestActors.run(
-    clanRow.id,
-    targetId
-  ).changes;
-
-  // Recalculate current unfinished daily quests.
-  // Completed quests and already-earned rewards are preserved.
-  const dk = dayKey(now);
-  const quests = S.getQuests.all(clanRow.id, dk);
-
-  for (const quest of quests) {
-    if (quest.done) continue;
-
-    const def = POOL.get(quest.kind);
-    if (!def) continue;
-
-    const progress = Math.min(
-      quest.target,
-      progressOf(clanRow.id, dk, def)
-    );
-
-    if (progress !== quest.progress) {
-      S.setQuestProgress.run(
-        progress,
-        clanRow.id,
-        dk,
-        quest.slot
-      );
-    }
-  }
-
-  return {
-    clan: S.getClan.get(clanRow.id),
-    member: S.getMember.get(gid, targetId),
-    targetId,
-    depositsDeleted,
-    statsDeleted,
-    actorsDeleted,
-  };
-});
-
-function resetMemberStats(gid, actorId, targetId, now = Date.now()) {
+  now = Date.now()
+) {
   return resetMemberStatsTx.immediate(
     String(gid),
     String(actorId),
@@ -2055,120 +2682,123 @@ function resetMemberStats(gid, actorId, targetId, now = Date.now()) {
   );
 }
 
-// ------------------------------------------------------------
-// Transfer clan leadership
-//
-// - Target must already be in the same clan.
-// - New owner receives OWNER rank.
-// - Previous owner becomes COOWNER.
-// - clans.owner_id is updated.
-// - All changes happen in one SQLite transaction.
-// - Only the actual Owner can transfer leadership.
-// ------------------------------------------------------------
+// ============================================================
+// TRANSFER LEADERSHIP
+// ============================================================
 
-const transferLeadershipTx = db.transaction((
+const transferLeadershipTx = db.transaction(
+  (
+    gid,
+    actorId,
+    targetId
+  ) => {
+    const {
+      clan: clanRow,
+      member: actor,
+    } = requireMembership(
+      gid,
+      actorId
+    );
+
+    if (
+      actor.rank_no !== RANK.OWNER ||
+      String(clanRow.owner_id) !== actorId
+    ) {
+      throw new ClanError(
+        'Only the clan Owner can transfer leadership.'
+      );
+    }
+
+    if (actorId === targetId) {
+      throw new ClanError(
+        'You are already the clan Owner.'
+      );
+    }
+
+    const target = S.getMember.get(
+      gid,
+      targetId
+    );
+
+    if (
+      !target ||
+      Number(target.clan_id) !== Number(clanRow.id)
+    ) {
+      throw new ClanError(
+        'That user is not a member of your clan.'
+      );
+    }
+
+    if (target.rank_no >= RANK.OWNER) {
+      throw new ClanError(
+        'That member already has the Owner rank.'
+      );
+    }
+
+    const currentCoOwners = S.countRank.get(
+      clanRow.id,
+      RANK.COOWNER
+    ).n;
+
+    const finalCoOwners =
+      currentCoOwners -
+      (target.rank_no === RANK.COOWNER ? 1 : 0) +
+      1;
+
+    if (finalCoOwners > CFG.MAX_CO_OWNERS) {
+      throw new ClanError(
+        `The transfer would exceed the maximum of ${CFG.MAX_CO_OWNERS} Co-owners. Remove a Co-owner first.`
+      );
+    }
+
+    const promoted = S.setRank.run(
+      RANK.OWNER,
+      gid,
+      targetId
+    );
+
+    if (promoted.changes !== 1) {
+      throw new ClanError(
+        'The new owner could not be promoted. No changes were saved.'
+      );
+    }
+
+    const demoted = S.setRank.run(
+      RANK.COOWNER,
+      gid,
+      actorId
+    );
+
+    if (demoted.changes !== 1) {
+      throw new ClanError(
+        'The previous owner could not be changed to Co-owner. No changes were saved.'
+      );
+    }
+
+    const ownerUpdated = S.setOwner.run(
+      targetId,
+      clanRow.id
+    );
+
+    if (ownerUpdated.changes !== 1) {
+      throw new ClanError(
+        'The clan owner record could not be updated. No changes were saved.'
+      );
+    }
+
+    return {
+      clan: S.getClan.get(clanRow.id),
+      previousOwnerId: actorId,
+      newOwnerId: targetId,
+    };
+  }
+);
+
+function transferLeadership(
   gid,
   actorId,
   targetId
-) => {
-  const { clan: clanRow, member: actor } = requireMembership(
-    gid,
-    actorId
-  );
-
-  if (
-    actor.rank_no !== RANK.OWNER ||
-    String(clanRow.owner_id) !== actorId
-  ) {
-    throw new ClanError(
-      'Only the clan Owner can transfer leadership.'
-    );
-  }
-
-  if (actorId === targetId) {
-    throw new ClanError(
-      'You are already the clan Owner.'
-    );
-  }
-
-  const target = S.getMember.get(
-    gid,
-    targetId
-  );
-
-  if (!target || Number(target.clan_id) !== Number(clanRow.id)) {
-    throw new ClanError(
-      'That user is not a member of your clan.'
-    );
-  }
-
-  if (target.rank_no >= RANK.OWNER) {
-    throw new ClanError(
-      'That member already has the Owner rank.'
-    );
-  }
-
-  // The previous owner becomes a Co-owner.
-  // Account for the target already being a Co-owner.
-  const currentCoOwners = S.countRank.get(
-    clanRow.id,
-    RANK.COOWNER
-  ).n;
-
-  const finalCoOwners =
-    currentCoOwners -
-    (target.rank_no === RANK.COOWNER ? 1 : 0) +
-    1;
-
-  if (finalCoOwners > CFG.MAX_CO_OWNERS) {
-    throw new ClanError(
-      `The transfer would exceed the maximum of ${CFG.MAX_CO_OWNERS} Co-owners. Remove a Co-owner first.`
-    );
-  }
-
-  const promoted = S.setRank.run(
-    RANK.OWNER,
-    gid,
-    targetId
-  );
-
-  if (promoted.changes !== 1) {
-    throw new ClanError(
-      'The new owner could not be promoted. No changes were saved.'
-    );
-  }
-
-  const demoted = S.setRank.run(
-    RANK.COOWNER,
-    gid,
-    actorId
-  );
-
-  if (demoted.changes !== 1) {
-    throw new ClanError(
-      'The previous owner could not be changed to Co-owner. No changes were saved.'
-    );
-  }
-
-  const ownerUpdated = S.setOwner.run(
-    targetId,
-    clanRow.id
-  );
-
-  if (ownerUpdated.changes !== 1) {
-    throw new ClanError(
-      'The clan owner record could not be updated. No changes were saved.'
-    );
-  }
-
-  return {
-    clan: S.getClan.get(clanRow.id),
-    previousOwnerId: actorId,
-    newOwnerId: targetId,
-  };
-});
-
-function transferLeadership(gid, actorId, targetId) {
+) {
   return transferLeadershipTx.immediate(
     String(gid),
     String(actorId),
@@ -2176,8 +2806,15 @@ function transferLeadership(gid, actorId, targetId) {
   );
 }
 
+// ============================================================
+// PRIVATE CLANS
+// ============================================================
+
 function setPrivate(gid, name, value) {
-  const clanRow = getClanByName(gid, name);
+  const clanRow = getClanByName(
+    gid,
+    name
+  );
 
   if (!clanRow) {
     throw new ClanError(
@@ -2190,152 +2827,169 @@ function setPrivate(gid, name, value) {
     clanRow.id
   );
 
-  return S.getClan.get(clanRow.id);
-}
-
-// ------------------------------------------------------------
-// Vault
-// ------------------------------------------------------------
-
-// This transaction uses IMMEDIATE mode so SQLite obtains its
-// write lock BEFORE reading the wallet. That prevents overlapping
-// economy operations from racing between the balance check and
-// the debit.
-//
-// The wallet debit, economy history, vault, member contribution,
-// donor total, deposit history and quest progress are committed
-// together. If any step fails, the entire deposit rolls back.
-
-const depositTx = db.transaction((gid, uid, amountRaw, now) => {
-  const { clan: clanRow } = requireMembership(gid, uid);
-
-  const wallet = Number(economy.getBalance(gid, uid) || 0);
-
-  const raw = String(amountRaw ?? '').trim();
-  let amount;
-
-  if (raw.toLowerCase() === 'all') {
-    amount = wallet;
-  } else {
-    if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(raw)) {
-      throw new ClanError('Enter a valid amount to deposit.');
-    }
-
-    amount = Number(raw.replace(/,/g, ''));
-  }
-
-  if (!Number.isSafeInteger(amount) || amount <= 0) {
-    throw new ClanError(
-      raw.toLowerCase() === 'all'
-        ? 'Your wallet is empty.'
-        : 'Enter a valid amount to deposit.'
-    );
-  }
-
-  if (wallet < amount) {
-    throw new ClanError(
-      `You only have ${money(wallet)} in your wallet.`
-    );
-  }
-
-  // Atomically debit only when the current balance is sufficient.
-  const debit = S.debitWallet.run(
-    amount,
-    amount,
-    gid,
-    uid,
-    amount
-  );
-
-  if (debit.changes !== 1) {
-    throw new ClanError(
-      'Your wallet balance changed before the deposit completed. Please check your balance and try again.'
-    );
-  }
-
-  // Keep the regular economy transaction history accurate.
-  S.insertWalletTransaction.run(
-    gid,
-    uid,
-    uid,
-    'clan_deposit',
-    amount,
-    `Clan vault deposit (${clanRow.name})`,
-    now
-  );
-
-  // Update the clan vault.
-  const vaultUpdate = S.addVault.run(
-    amount,
-    now,
+  return S.getClan.get(
     clanRow.id
   );
+}
 
-  if (vaultUpdate.changes !== 1) {
-    throw new ClanError(
-      'The clan vault could not be updated. Your wallet debit has been rolled back.'
-    );
-  }
+// ============================================================
+// VAULT DEPOSITS
+// ============================================================
 
-  // Update the member's lifetime clan contributions.
-  const contributionUpdate = S.memberDeposit.run(
-    amount,
-    now,
-    gid,
-    uid
-  );
-
-  if (contributionUpdate.changes !== 1) {
-    throw new ClanError(
-      'Your clan contribution could not be recorded. The deposit has been rolled back.'
-    );
-  }
-
-  // Update the clan's top donor records.
-  S.addDonor.run(
-    clanRow.id,
-    uid,
-    amount
-  );
-
-  // Store an individual deposit history entry.
-  S.insDeposit.run(
-    clanRow.id,
+const depositTx = db.transaction(
+  (
     gid,
     uid,
-    amount,
+    amountRaw,
     now
-  );
+  ) => {
+    const { clan: clanRow } = requireMembership(
+      gid,
+      uid
+    );
 
-  // Record the deposit quest metric and evaluate quests.
-  const notes = {};
+    const wallet = Number(
+      economy.getBalance(gid, uid) || 0
+    );
 
-  ensureQuests(clanRow, now);
+    const raw = String(
+      amountRaw ?? ''
+    ).trim();
 
-  recordMetric(
-    clanRow.id,
-    dayKey(now),
-    uid,
-    'deposit',
-    amount
-  );
+    let amount;
 
-  evaluateQuests(
-    clanRow.id,
-    now,
-    notes
-  );
+    if (raw.toLowerCase() === 'all') {
+      amount = wallet;
+    } else {
+      if (
+        !/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(raw)
+      ) {
+        throw new ClanError(
+          'Enter a valid amount to deposit.'
+        );
+      }
 
-  return {
-    clan: S.getClan.get(clanRow.id),
-    amount,
-    wallet: economy.getBalance(gid, uid),
-    notes,
-  };
-});
+      amount = Number(
+        raw.replace(/,/g, '')
+      );
+    }
 
-function deposit(gid, uid, amountRaw, now = Date.now()) {
-  // IMMEDIATE is important here: lock before reading the wallet.
+    if (
+      !Number.isSafeInteger(amount) ||
+      amount <= 0
+    ) {
+      throw new ClanError(
+        raw.toLowerCase() === 'all'
+          ? 'Your wallet is empty.'
+          : 'Enter a valid amount to deposit.'
+      );
+    }
+
+    if (wallet < amount) {
+      throw new ClanError(
+        `You only have ${money(wallet)} in your wallet.`
+      );
+    }
+
+    const debit = S.debitWallet.run(
+      amount,
+      amount,
+      gid,
+      uid,
+      amount
+    );
+
+    if (debit.changes !== 1) {
+      throw new ClanError(
+        'Your wallet balance changed before the deposit completed. Please check your balance and try again.'
+      );
+    }
+
+    S.insertWalletTransaction.run(
+      gid,
+      uid,
+      uid,
+      'clan_deposit',
+      amount,
+      `Clan vault deposit (${clanRow.name})`,
+      now
+    );
+
+    const vaultUpdate = S.addVault.run(
+      amount,
+      now,
+      clanRow.id
+    );
+
+    if (vaultUpdate.changes !== 1) {
+      throw new ClanError(
+        'The clan vault could not be updated. Your wallet debit has been rolled back.'
+      );
+    }
+
+    const contributionUpdate = S.memberDeposit.run(
+      amount,
+      now,
+      gid,
+      uid
+    );
+
+    if (contributionUpdate.changes !== 1) {
+      throw new ClanError(
+        'Your clan contribution could not be recorded. The deposit has been rolled back.'
+      );
+    }
+
+    S.addDonor.run(
+      clanRow.id,
+      uid,
+      amount
+    );
+
+    S.insDeposit.run(
+      clanRow.id,
+      gid,
+      uid,
+      amount,
+      now
+    );
+
+    const notes = {};
+
+    ensureQuests(
+      clanRow,
+      now
+    );
+
+    recordMetric(
+      clanRow.id,
+      dayKey(now),
+      uid,
+      'deposit',
+      amount
+    );
+
+    evaluateQuests(
+      clanRow.id,
+      now,
+      notes
+    );
+
+    return {
+      clan: S.getClan.get(clanRow.id),
+      amount,
+      wallet: economy.getBalance(gid, uid),
+      notes,
+    };
+  }
+);
+
+function deposit(
+  gid,
+  uid,
+  amountRaw,
+  now = Date.now()
+) {
   return depositTx.immediate(
     String(gid),
     String(uid),
@@ -2344,8 +2998,20 @@ function deposit(gid, uid, amountRaw, now = Date.now()) {
   );
 }
 
-function depositHistory(gid, uid, page = 0, size = 10, now = Date.now()) {
-  const { clan: clanRow, member } = requireMembership(gid, uid);
+function depositHistory(
+  gid,
+  uid,
+  page = 0,
+  size = 10,
+  now = Date.now()
+) {
+  const {
+    clan: clanRow,
+    member,
+  } = requireMembership(
+    gid,
+    uid
+  );
 
   if (member.rank_no < RANK.SENIOR) {
     throw new ClanError(
@@ -2353,19 +3019,34 @@ function depositHistory(gid, uid, page = 0, size = 10, now = Date.now()) {
     );
   }
 
-  const since = now - CFG.DEPOSIT_HISTORY_DAYS * DAY_MS;
-  const total = S.countDeposits.get(clanRow.id, since).n;
-  const pages = Math.max(1, Math.ceil(total / size));
-  const current = Math.min(Math.max(0, page), pages - 1);
+  const since =
+    now - CFG.DEPOSIT_HISTORY_DAYS * DAY_MS;
+
+  const total = S.countDeposits.get(
+    clanRow.id,
+    since
+  ).n;
+
+  const pages = Math.max(
+    1,
+    Math.ceil(total / size)
+  );
+
+  const current = Math.min(
+    Math.max(0, page),
+    pages - 1
+  );
 
   return {
     clan: clanRow,
+
     rows: S.recentDeposits.all(
       clanRow.id,
       since,
       size,
       current * size
     ),
+
     total,
     pages,
     page: current,
@@ -2373,14 +3054,25 @@ function depositHistory(gid, uid, page = 0, size = 10, now = Date.now()) {
   };
 }
 
-// ------------------------------------------------------------
-// Upgrades
-// ------------------------------------------------------------
+// ============================================================
+// UPGRADES
+// ============================================================
 
-function upgradeView(gid, uid, now = Date.now()) {
-  const { clan: clanRow, member } = requireMembership(gid, uid);
+function upgradeView(
+  gid,
+  uid,
+  now = Date.now()
+) {
+  const {
+    clan: clanRow,
+    member,
+  } = requireMembership(
+    gid,
+    uid
+  );
 
-  const active = Number(clanRow.booster_until || 0) > now;
+  const active =
+    Number(clanRow.booster_until || 0) > now;
 
   return {
     clan: clanRow,
@@ -2391,153 +3083,197 @@ function upgradeView(gid, uid, now = Date.now()) {
 
     booster: {
       active,
-      tier: active ? clanRow.booster_tier : 0,
-      until: active ? clanRow.booster_until : 0,
-      tiers: CFG.XP_BOOSTER.map((tier, index) => ({
-        tier: index + 1,
-        ...tier,
-      })),
+      tier: active
+        ? clanRow.booster_tier
+        : 0,
+      until: active
+        ? clanRow.booster_until
+        : 0,
+
+      tiers: CFG.XP_BOOSTER.map(
+        (tier, index) => ({
+          tier: index + 1,
+          ...tier,
+        })
+      ),
     },
 
     cap: {
       tier: clanRow.capacity_tier,
       max: CFG.CAPACITY.length,
-      next: CFG.CAPACITY[clanRow.capacity_tier] || null,
+      next:
+        CFG.CAPACITY[clanRow.capacity_tier] ||
+        null,
     },
   };
 }
 
-const upgradeTx = db.transaction((
-  gid,
-  uid,
-  kind,
-  tierRaw,
-  now
-) => {
-  const { clan: clanRow, member } = requireMembership(gid, uid);
-
-  if (member.rank_no < RANK.COOWNER) {
-    throw new ClanError(
-      'Only Co-owners and the Owner can buy upgrades.'
+const upgradeTx = db.transaction(
+  (
+    gid,
+    uid,
+    kind,
+    tierRaw,
+    now
+  ) => {
+    const {
+      clan: clanRow,
+      member,
+    } = requireMembership(
+      gid,
+      uid
     );
-  }
 
-  const notes = {};
-
-  if (kind === 'xp') {
-    const tier = Math.floor(Number(tierRaw));
-    const def = CFG.XP_BOOSTER[tier - 1];
-
-    if (!def) {
-      throw new ClanError('That XP Booster does not exist.');
-    }
-
-    const active = Number(clanRow.booster_until || 0) > now;
-
-    if (active && clanRow.booster_tier > tier) {
+    if (member.rank_no < RANK.COOWNER) {
       throw new ClanError(
-        `XP Booster ${clanRow.booster_tier} is already active and is stronger than XP Booster ${tier}.`
+        'Only Co-owners and the Owner can buy upgrades.'
       );
     }
 
-    const sameTier = active && clanRow.booster_tier === tier;
+    const notes = {};
 
-    const until = sameTier
-      ? clanRow.booster_until + CFG.XP_BOOSTER_DURATION_MS
-      : now + CFG.XP_BOOSTER_DURATION_MS;
+    if (kind === 'xp') {
+      const tier = Math.floor(
+        Number(tierRaw)
+      );
 
-    if (until - now > CFG.XP_BOOSTER_MAX_STACK_MS) {
+      const def = CFG.XP_BOOSTER[tier - 1];
+
+      if (!def) {
+        throw new ClanError(
+          'That XP Booster does not exist.'
+        );
+      }
+
+      const active =
+        Number(clanRow.booster_until || 0) > now;
+
+      if (
+        active &&
+        clanRow.booster_tier > tier
+      ) {
+        throw new ClanError(
+          `XP Booster ${clanRow.booster_tier} is already active and is stronger than XP Booster ${tier}.`
+        );
+      }
+
+      const sameTier =
+        active &&
+        clanRow.booster_tier === tier;
+
+      const until = sameTier
+        ? clanRow.booster_until +
+          CFG.XP_BOOSTER_DURATION_MS
+        : now + CFG.XP_BOOSTER_DURATION_MS;
+
+      if (
+        until - now >
+        CFG.XP_BOOSTER_MAX_STACK_MS
+      ) {
+        throw new ClanError(
+          'That booster is already extended to the maximum time. Wait for it to run down before adding more.'
+        );
+      }
+
+      const spent = S.spendVault.run(
+        def.cost,
+        clanRow.id,
+        def.cost
+      );
+
+      if (!spent.changes) {
+        throw new ClanError(
+          `The vault needs ${money(def.cost)} for that upgrade, but it only has ${money(clanRow.vault)}.`
+        );
+      }
+
+      S.setBooster.run(
+        tier,
+        until,
+        clanRow.id
+      );
+
+      addClanXp(
+        clanRow.id,
+        def.xp,
+        notes
+      );
+
+      return {
+        clan: S.getClan.get(clanRow.id),
+        kind,
+        tier,
+        cost: def.cost,
+        xp: def.xp,
+        until,
+        notes,
+      };
+    }
+
+    const next = CFG.CAPACITY[
+      clanRow.capacity_tier
+    ];
+
+    if (!next) {
       throw new ClanError(
-        'That booster is already extended to the maximum time. Wait for it to run down before adding more.'
+        'Member capacity is already at its maximum.'
       );
     }
 
     const spent = S.spendVault.run(
-      def.cost,
+      next.cost,
       clanRow.id,
-      def.cost
+      next.cost
     );
 
     if (!spent.changes) {
       throw new ClanError(
-        `The vault needs ${money(def.cost)} for that upgrade, but it only has ${money(clanRow.vault)}.`
+        `The vault needs ${money(next.cost)} for that upgrade, but it only has ${money(clanRow.vault)}.`
       );
     }
 
-    S.setBooster.run(
-      tier,
-      until,
+    S.bumpCapTier.run(
       clanRow.id
     );
 
     addClanXp(
       clanRow.id,
-      def.xp,
+      next.xp,
       notes
     );
 
     return {
       clan: S.getClan.get(clanRow.id),
-      kind,
-      tier,
-      cost: def.cost,
-      xp: def.xp,
-      until,
+      kind: 'capacity',
+      capacity: next.capacity,
+      cost: next.cost,
+      xp: next.xp,
       notes,
     };
   }
+);
 
-  const next = CFG.CAPACITY[clanRow.capacity_tier];
-
-  if (!next) {
-    throw new ClanError(
-      'Member capacity is already at its maximum.'
-    );
-  }
-
-  const spent = S.spendVault.run(
-    next.cost,
-    clanRow.id,
-    next.cost
-  );
-
-  if (!spent.changes) {
-    throw new ClanError(
-      `The vault needs ${money(next.cost)} for that upgrade, but it only has ${money(clanRow.vault)}.`
-    );
-  }
-
-  S.bumpCapTier.run(clanRow.id);
-
-  addClanXp(
-    clanRow.id,
-    next.xp,
-    notes
-  );
-
-  return {
-    clan: S.getClan.get(clanRow.id),
-    kind: 'capacity',
-    capacity: next.capacity,
-    cost: next.cost,
-    xp: next.xp,
-    notes,
-  };
-});
-
-function buyUpgrade(gid, uid, kind, tier = 1, now = Date.now()) {
+function buyUpgrade(
+  gid,
+  uid,
+  kind,
+  tier = 1,
+  now = Date.now()
+) {
   return upgradeTx(
     String(gid),
     String(uid),
-    kind === 'capacity' ? 'capacity' : 'xp',
+    kind === 'capacity'
+      ? 'capacity'
+      : 'xp',
     tier,
     now
   );
 }
 
-// ------------------------------------------------------------
-// Logo and banner
-// ------------------------------------------------------------
+// ============================================================
+// LOGO AND BANNER
+// ============================================================
 
 const EXT_BY_TYPE = {
   'image/png': 'png',
@@ -2555,14 +3291,18 @@ const EXT_BY_NAME = {
 };
 
 function mediaPath(file) {
-  if (!file) return null;
+  if (!file) {
+    return null;
+  }
 
   const full = path.join(
     MEDIA_DIR,
     path.basename(String(file))
   );
 
-  return fs.existsSync(full) ? full : null;
+  return fs.existsSync(full)
+    ? full
+    : null;
 }
 
 function removeFile(file) {
@@ -2573,14 +3313,23 @@ function removeFile(file) {
   }
 }
 
-function download(url, maxBytes, redirects = 3) {
+function download(
+  url,
+  maxBytes,
+  redirects = 3
+) {
   return new Promise((resolve, reject) => {
     let parsed;
 
     try {
       parsed = new URL(url);
     } catch {
-      reject(new ClanError('That image URL is invalid.'));
+      reject(
+        new ClanError(
+          'That image URL is invalid.'
+        )
+      );
+
       return;
     }
 
@@ -2592,76 +3341,87 @@ function download(url, maxBytes, redirects = 3) {
       ].includes(parsed.hostname.toLowerCase())
     ) {
       reject(
-        new ClanError('Only Discord-hosted attachments can be used.')
+        new ClanError(
+          'Only Discord-hosted attachments can be used.'
+        )
       );
+
       return;
     }
 
-    const req = https.get(parsed, response => {
-      if (
-        response.statusCode >= 300 &&
-        response.statusCode < 400 &&
-        response.headers.location &&
-        redirects > 0
-      ) {
-        response.resume();
+    const req = https.get(
+      parsed,
+      response => {
+        if (
+          response.statusCode >= 300 &&
+          response.statusCode < 400 &&
+          response.headers.location &&
+          redirects > 0
+        ) {
+          response.resume();
 
-        resolve(
-          download(
-            new URL(response.headers.location, parsed).toString(),
-            maxBytes,
-            redirects - 1
-          )
-        );
-
-        return;
-      }
-
-      if (response.statusCode !== 200) {
-        response.resume();
-
-        reject(
-          new ClanError(
-            'I could not download that image. Try uploading it again.'
-          )
-        );
-
-        return;
-      }
-
-      const chunks = [];
-      let size = 0;
-
-      response.on('data', chunk => {
-        size += chunk.length;
-
-        if (size > maxBytes) {
-          req.destroy();
-
-          reject(
-            new ClanError(
-              `Images can be at most ${Math.floor(maxBytes / 1024 / 1024)} MB.`
+          resolve(
+            download(
+              new URL(
+                response.headers.location,
+                parsed
+              ).toString(),
+              maxBytes,
+              redirects - 1
             )
           );
 
           return;
         }
 
-        chunks.push(chunk);
-      });
+        if (response.statusCode !== 200) {
+          response.resume();
 
-      response.on('end', () => {
-        resolve(Buffer.concat(chunks));
-      });
+          reject(
+            new ClanError(
+              'I could not download that image. Try uploading it again.'
+            )
+          );
 
-      response.on('error', () => {
-        reject(
-          new ClanError(
-            'I could not download the image. Try again.'
-          )
-        );
-      });
-    });
+          return;
+        }
+
+        const chunks = [];
+        let size = 0;
+
+        response.on('data', chunk => {
+          size += chunk.length;
+
+          if (size > maxBytes) {
+            req.destroy();
+
+            reject(
+              new ClanError(
+                `Images can be at most ${Math.floor(maxBytes / 1024 / 1024)} MB.`
+              )
+            );
+
+            return;
+          }
+
+          chunks.push(chunk);
+        });
+
+        response.on('end', () => {
+          resolve(
+            Buffer.concat(chunks)
+          );
+        });
+
+        response.on('error', () => {
+          reject(
+            new ClanError(
+              'I could not download the image. Try again.'
+            )
+          );
+        });
+      }
+    );
 
     req.on('error', () => {
       reject(
@@ -2683,8 +3443,19 @@ function download(url, maxBytes, redirects = 3) {
   });
 }
 
-async function setMedia(gid, uid, kind, attachment) {
-  const { clan: clanRow, member } = requireMembership(gid, uid);
+async function setMedia(
+  gid,
+  uid,
+  kind,
+  attachment
+) {
+  const {
+    clan: clanRow,
+    member,
+  } = requireMembership(
+    gid,
+    uid
+  );
 
   if (member.rank_no < RANK.COOWNER) {
     throw new ClanError(
@@ -2692,13 +3463,17 @@ async function setMedia(gid, uid, kind, attachment) {
     );
   }
 
-  if (!['logo', 'banner'].includes(kind)) {
+  if (
+    !['logo', 'banner'].includes(kind)
+  ) {
     throw new ClanError(
       'Choose either a clan logo or banner.'
     );
   }
 
-  const type = String(attachment.contentType || '')
+  const type = String(
+    attachment.contentType || ''
+  )
     .split(';')[0]
     .trim()
     .toLowerCase();
@@ -2706,7 +3481,9 @@ async function setMedia(gid, uid, kind, attachment) {
   const ext =
     EXT_BY_TYPE[type] ||
     EXT_BY_NAME[
-      path.extname(String(attachment.name || '')).toLowerCase()
+      path.extname(
+        String(attachment.name || '').toLowerCase()
+      )
     ];
 
   if (!ext) {
@@ -2715,7 +3492,10 @@ async function setMedia(gid, uid, kind, attachment) {
     );
   }
 
-  if (Number(attachment.size) > CFG.MAX_IMAGE_BYTES) {
+  if (
+    Number(attachment.size) >
+    CFG.MAX_IMAGE_BYTES
+  ) {
     throw new ClanError(
       `Images can be at most ${Math.floor(CFG.MAX_IMAGE_BYTES / 1024 / 1024)} MB.`
     );
@@ -2726,33 +3506,49 @@ async function setMedia(gid, uid, kind, attachment) {
     CFG.MAX_IMAGE_BYTES
   );
 
-  fs.mkdirSync(MEDIA_DIR, {
-    recursive: true,
-  });
+  fs.mkdirSync(
+    MEDIA_DIR,
+    { recursive: true }
+  );
 
-  const file = `${clanRow.id}_${kind}_${Date.now()}.${ext}`;
+  const file =
+    `${clanRow.id}_${kind}_${Date.now()}.${ext}`;
 
   fs.writeFileSync(
     path.join(MEDIA_DIR, file),
     buffer
   );
 
-  const old = kind === 'logo'
-    ? clanRow.logo_file
-    : clanRow.banner_file;
+  const old =
+    kind === 'logo'
+      ? clanRow.logo_file
+      : clanRow.banner_file;
 
   if (kind === 'logo') {
-    S.setLogo.run(file, clanRow.id);
+    S.setLogo.run(
+      file,
+      clanRow.id
+    );
   } else {
-    S.setBanner.run(file, clanRow.id);
+    S.setBanner.run(
+      file,
+      clanRow.id
+    );
   }
 
   removeFile(old);
 
-  return S.getClan.get(clanRow.id);
+  return S.getClan.get(
+    clanRow.id
+  );
 }
 
-const CUSTOM_EMOJI = /^<a?:\w{2,32}:(\d{15,25})>$/;
+// ============================================================
+// EMOJI
+// ============================================================
+
+const CUSTOM_EMOJI =
+  /^<a?:\w{2,32}:(\d{15,25})>$/;
 
 const UNICODE_EMOJI =
   /^\p{Extended_Pictographic}[\p{Extended_Pictographic}\u200d\ufe0f\u{1F3FB}-\u{1F3FF}]*$/u;
@@ -2784,8 +3580,18 @@ function parseEmoji(raw) {
   return null;
 }
 
-function setLogoEmoji(gid, uid, raw) {
-  const { clan: clanRow, member } = requireMembership(gid, uid);
+function setLogoEmoji(
+  gid,
+  uid,
+  raw
+) {
+  const {
+    clan: clanRow,
+    member,
+  } = requireMembership(
+    gid,
+    uid
+  );
 
   if (member.rank_no < RANK.COOWNER) {
     throw new ClanError(
@@ -2810,16 +3616,27 @@ function setLogoEmoji(gid, uid, raw) {
 
   removeFile(old);
 
-  return S.getClan.get(clanRow.id);
+  return S.getClan.get(
+    clanRow.id
+  );
 }
 
-// ------------------------------------------------------------
-// Clan embed colour
-// Owner and Co-owners can change the clan info embed colour.
-// ------------------------------------------------------------
+// ============================================================
+// CLAN EMBED COLOUR
+// ============================================================
 
-function setEmbedColor(gid, uid, rawColor) {
-  const { clan: clanRow, member } = requireMembership(gid, uid);
+function setEmbedColor(
+  gid,
+  uid,
+  rawColor
+) {
+  const {
+    clan: clanRow,
+    member,
+  } = requireMembership(
+    gid,
+    uid
+  );
 
   if (member.rank_no < RANK.COOWNER) {
     throw new ClanError(
@@ -2827,7 +3644,9 @@ function setEmbedColor(gid, uid, rawColor) {
     );
   }
 
-  const input = String(rawColor || '').trim();
+  const input = String(
+    rawColor || ''
+  ).trim();
 
   if (!/^#?[0-9a-fA-F]{6}$/.test(input)) {
     throw new ClanError(
@@ -2843,39 +3662,51 @@ function setEmbedColor(gid, uid, rawColor) {
     clanRow.id
   );
 
-  return S.getClan.get(clanRow.id);
+  return S.getClan.get(
+    clanRow.id
+  );
 }
 
-// ------------------------------------------------------------
-// Clan deletion
-// ------------------------------------------------------------
+// ============================================================
+// CLAN DELETION
+// ============================================================
 
-const deleteClanTx = db.transaction(clanId => {
-  const clanRow = S.getClan.get(clanId);
+const deleteClanTx = db.transaction(
+  clanId => {
+    const clanRow = S.getClan.get(
+      clanId
+    );
 
-  if (!clanRow) {
-    return null;
+    if (!clanRow) {
+      return null;
+    }
+
+    S.delMembersOf.run(clanId);
+    S.delDeposits.run(clanId);
+    S.delQuests.run(clanId);
+    S.delActors.run(clanId);
+    S.delBonus.run(clanId);
+    S.delStats.run(clanId);
+    S.delStreaks.run(clanId);
+    S.delHistory.run(clanId);
+    S.delDonors.run(clanId);
+    S.delClan.run(clanId);
+
+    return clanRow;
   }
-
-  S.delMembersOf.run(clanId);
-  S.delDeposits.run(clanId);
-  S.delQuests.run(clanId);
-  S.delActors.run(clanId);
-  S.delBonus.run(clanId);
-  S.delStats.run(clanId);
-  S.delStreaks.run(clanId);
-  S.delHistory.run(clanId);
-  S.delDonors.run(clanId);
-  S.delClan.run(clanId);
-
-  return clanRow;
-});
+);
 
 function deleteClan(gid, uid) {
   gid = String(gid);
   uid = String(uid);
 
-  const { clan: clanRow, member } = requireMembership(gid, uid);
+  const {
+    clan: clanRow,
+    member,
+  } = requireMembership(
+    gid,
+    uid
+  );
 
   if (
     member.rank_no !== RANK.OWNER ||
@@ -2886,7 +3717,9 @@ function deleteClan(gid, uid) {
     );
   }
 
-  const deleted = deleteClanTx.immediate(clanRow.id);
+  const deleted = deleteClanTx.immediate(
+    clanRow.id
+  );
 
   if (!deleted) {
     throw new ClanError(
@@ -2900,47 +3733,64 @@ function deleteClan(gid, uid) {
   return deleted;
 }
 
-// ------------------------------------------------------------
-// Activity checks
-// ------------------------------------------------------------
+// ============================================================
+// ACTIVITY CHECKS
+// ============================================================
 
-const inactiveKickTx = db.transaction((clanId, gid, uid, now) => {
-  S.delMember.run(gid, uid);
-
-  S.ensureHistory.run(
+const inactiveKickTx = db.transaction(
+  (
     clanId,
     gid,
-    uid
-  );
+    uid,
+    now
+  ) => {
+    S.delMember.run(
+      gid,
+      uid
+    );
 
-  S.addInactiveKick.run(
-    clanId,
-    uid
-  );
+    S.ensureHistory.run(
+      clanId,
+      gid,
+      uid
+    );
 
-  S.setLeft.run(
-    now,
-    clanId,
-    uid
-  );
-
-  const history = S.getHistory.get(
-    clanId,
-    uid
-  );
-
-  const banned =
-    history.inactive_kicks >= CFG.INACTIVE_KICKS_BEFORE_BAN;
-
-  if (banned) {
-    S.setBanned.run(
+    S.addInactiveKick.run(
       clanId,
       uid
     );
-  }
 
-  return { banned };
-});
+    S.setLeft.run(
+      now,
+      clanId,
+      uid
+    );
+
+    const history = S.getHistory.get(
+      clanId,
+      uid
+    );
+
+    const banned =
+      history.inactive_kicks >=
+      CFG.INACTIVE_KICKS_BEFORE_BAN;
+
+    if (banned) {
+      S.setBanned.run(
+        clanId,
+        uid
+      );
+    }
+
+    return {
+      banned,
+    };
+  }
+);
+
+// ============================================================
+// INACTIVITY SWEEP
+// ============================================================
 
 function sweep(now = Date.now()) {
   const events = {
@@ -2949,10 +3799,13 @@ function sweep(now = Date.now()) {
   };
 
   S.pruneDeposits.run(
-    now - (CFG.DEPOSIT_HISTORY_DAYS + 1) * DAY_MS
+    now -
+    (CFG.DEPOSIT_HISTORY_DAYS + 1) * DAY_MS
   );
 
-  const oldDay = dayKey(now - 3 * DAY_MS);
+  const oldDay = dayKey(
+    now - 3 * DAY_MS
+  );
 
   S.pruneStats.run(oldDay);
   S.prunePool.run(oldDay);
@@ -2970,14 +3823,21 @@ function sweep(now = Date.now()) {
       clanRow.created_at || 0
     );
 
-    if (now - lastActivity >= CFG.INACTIVE_CLAN_MS) {
-      const deleted = deleteClanTx(clanRow.id);
+    if (
+      now - lastActivity >=
+      CFG.INACTIVE_CLAN_MS
+    ) {
+      const deleted = deleteClanTx(
+        clanRow.id
+      );
 
       if (deleted) {
         removeFile(deleted.logo_file);
         removeFile(deleted.banner_file);
 
-        events.deletedClans.push(deleted);
+        events.deletedClans.push(
+          deleted
+        );
       }
 
       continue;
@@ -2993,7 +3853,9 @@ function sweep(now = Date.now()) {
         member.joined_at || 0
       );
 
-      if (now - base < CFG.INACTIVE_MEMBER_MS) {
+      if (
+        now - base < CFG.INACTIVE_MEMBER_MS
+      ) {
         continue;
       }
 
@@ -3016,10 +3878,21 @@ function sweep(now = Date.now()) {
   return events;
 }
 
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+
 async function notify(client, events) {
-  const sendTo = async (userId, content, guildId = null) => {
+  const sendTo = async (
+    userId,
+    content,
+    guildId = null
+  ) => {
     try {
-      if (CFG.NOTIFY_CHANNEL_ID && guildId) {
+      if (
+        CFG.NOTIFY_CHANNEL_ID &&
+        guildId
+      ) {
         const channel = await client.channels
           .fetch(String(CFG.NOTIFY_CHANNEL_ID))
           .catch(() => null);
@@ -3046,7 +3919,7 @@ async function notify(client, events) {
       await user.send(content);
 
     } catch {
-      // DMs may be closed; the cleanup remains committed.
+      // DMs may be closed; cleanup remains committed.
     }
   };
 
@@ -3072,22 +3945,83 @@ async function notify(client, events) {
   }
 }
 
+// ============================================================
+// INVITATION PRUNING
+// ============================================================
+
+function invitesPruneSafe() {
+  try {
+    require('./clanInvites').prune();
+  } catch (error) {
+    console.error(
+      '[Clan] Could not prune expired invites:',
+      error
+    );
+  }
+}
+
+// ============================================================
+// CLAN TAG SYNCHRONIZATION
+// ============================================================
+
+function syncClanTagsSafe(client) {
+  try {
+    const tags = require('./clanTags');
+
+    if (typeof tags.syncAll !== 'function') {
+      return;
+    }
+
+    tags.syncAll(client).catch(error => {
+      console.error(
+        '[Clan] Clan tag synchronization failed:',
+        error
+      );
+    });
+
+  } catch (error) {
+    console.error(
+      '[Clan] Could not load clan tag handler:',
+      error
+    );
+  }
+}
+
+// ============================================================
+// RUN SWEEP
+// ============================================================
+
 function runSweep(client) {
   try {
     invitesPruneSafe();
 
     const events = sweep();
 
+    // This also restores tags for members automatically kicked
+    // for inactivity and for members of automatically deleted clans.
+    syncClanTagsSafe(client);
+
     if (
       events.deletedClans.length ||
       events.kicked.length
     ) {
-      notify(client, events).catch(() => {});
+      notify(
+        client,
+        events
+      ).catch(() => {});
     }
+
   } catch (error) {
-    console.error('[Clan] Activity sweep failed:', error);
+    console.error(
+      '[Clan] Activity sweep failed:',
+      error
+    );
   }
 }
+
+// ============================================================
+// INITIALIZATION
+// ============================================================
 
 function init(client) {
   if (client._clanReady) {
@@ -3096,6 +4030,16 @@ function init(client) {
 
   client._clanReady = true;
   client.clanSystem = module.exports;
+
+  // Initialize the nickname tag system.
+  try {
+    require('./clanTags').init(client);
+  } catch (error) {
+    console.error(
+      '[Clan] Could not initialize clan tags:',
+      error
+    );
+  }
 
   invitesPruneSafe();
 
@@ -3116,21 +4060,21 @@ function init(client) {
   return module.exports;
 }
 
-function invitesPruneSafe() {
-  // The persistent invite module may not have been required yet.
-  try {
-    require('./clanInvites').prune();
-  } catch (error) {
-    console.error(
-      '[Clan] Could not prune expired invites:',
-      error
-    );
-  }
-}
+// ============================================================
+// CLOSE
+// ============================================================
 
 function close(client = null) {
   if (client?._clanSweepInterval) {
-    clearInterval(client._clanSweepInterval);
+    clearInterval(
+      client._clanSweepInterval
+    );
+  }
+
+  if (client?._clanTagSyncInterval) {
+    clearInterval(
+      client._clanTagSyncInterval
+    );
   }
 
   try {
@@ -3140,12 +4084,13 @@ function close(client = null) {
   } catch {}
 }
 
-// ------------------------------------------------------------
-// Exports
-// ------------------------------------------------------------
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = {
   ClanError,
+
   RANK,
   RANK_NAMES,
 
