@@ -8,6 +8,7 @@ const {
 
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const Database = require('better-sqlite3');
 
 // Optional config for bot owner IDs
@@ -17,7 +18,9 @@ try {
   config = require('../../config');
 } catch {}
 
-// ---------- Universal permission helpers ----------
+// ============================================================
+// PERMISSION HELPERS
+// ============================================================
 
 function getBotOwnerIds(client) {
   const ids = new Set();
@@ -66,20 +69,22 @@ function hasStealPermission(client, member) {
 
     if (!db) return false;
 
-    const row = db.prepare(
-      `SELECT 1 FROM staffadd_access
-       WHERE guild_id = ?
-       AND target_type = ?
-       AND target_id = ?`
-    ).get(member.guild.id, 'user', member.id);
+    const row = db.prepare(`
+      SELECT 1
+      FROM staffadd_access
+      WHERE guild_id = ?
+        AND target_type = ?
+        AND target_id = ?
+    `).get(member.guild.id, 'user', member.id);
 
     if (row) return true;
 
-    const roleRows = db.prepare(
-      `SELECT target_id FROM staffadd_access
-       WHERE guild_id = ?
-       AND target_type = ?`
-    ).all(member.guild.id, 'role');
+    const roleRows = db.prepare(`
+      SELECT target_id
+      FROM staffadd_access
+      WHERE guild_id = ?
+        AND target_type = ?
+    `).all(member.guild.id, 'role');
 
     for (const role of roleRows) {
       if (member.roles.cache.has(role.target_id)) {
@@ -93,7 +98,9 @@ function hasStealPermission(client, member) {
   return false;
 }
 
-// ---------- Staff access database ----------
+// ============================================================
+// STAFF ACCESS DATABASE
+// ============================================================
 
 function initStaffAddDB(client) {
   if (client._staffaddReady) return;
@@ -129,12 +136,12 @@ function initStaffAddDB(client) {
   client._staffaddReady = true;
 }
 
-// ---------- Fetch helper ----------
-
-const fetchFn = global.fetch;
+// ============================================================
+// DOWNLOAD HELPER
+// ============================================================
 
 async function downloadAsset(url, timeout = 15000) {
-  if (typeof fetchFn !== 'function') {
+  if (typeof global.fetch !== 'function') {
     throw new Error('Global fetch is unavailable. Node.js 18+ is required.');
   }
 
@@ -145,12 +152,18 @@ async function downloadAsset(url, timeout = 15000) {
   }, timeout);
 
   try {
-    const response = await fetchFn(url, {
+    const response = await global.fetch(url, {
       signal: controller.signal,
     });
 
     if (!response.ok) {
-      throw new Error(`Download failed with HTTP ${response.status}`);
+      const error = new Error(
+        `Asset download failed with HTTP ${response.status}.`
+      );
+
+      error.status = response.status;
+
+      throw error;
     }
 
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -165,18 +178,120 @@ async function downloadAsset(url, timeout = 15000) {
   }
 }
 
-// ---------- Sticker extraction ----------
+// ============================================================
+// APNG TO GIF CONVERSION
+// ============================================================
+
+function convertApngToGif(buffer) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-hide_banner',
+      '-loglevel', 'error',
+
+      '-i', 'pipe:0',
+
+      '-filter_complex',
+      [
+        'fps=15',
+        'scale=320:320:force_original_aspect_ratio=decrease:flags=lanczos',
+        'pad=320:320:(ow-iw)/2:(oh-ih)/2:color=0x00000000',
+        'split[a][b]',
+        '[a]palettegen=reserve_transparent=1[p]',
+        '[b][p]paletteuse=alpha_threshold=128',
+      ].join(','),
+
+      '-loop', '0',
+      '-f', 'gif',
+      'pipe:1',
+    ];
+
+    const ffmpeg = spawn('ffmpeg', args);
+
+    const output = [];
+    const errors = [];
+
+    let finished = false;
+
+    const finish = (callback, value) => {
+      if (finished) return;
+
+      finished = true;
+      clearTimeout(timeout);
+
+      callback(value);
+    };
+
+    const timeout = setTimeout(() => {
+      ffmpeg.kill('SIGKILL');
+
+      finish(
+        reject,
+        new Error('APNG conversion timed out.')
+      );
+    }, 20000);
+
+    ffmpeg.stdout.on('data', chunk => {
+      output.push(chunk);
+    });
+
+    ffmpeg.stderr.on('data', chunk => {
+      errors.push(chunk);
+    });
+
+    ffmpeg.on('error', error => {
+      finish(reject, error);
+    });
+
+    ffmpeg.on('close', code => {
+      if (finished) return;
+
+      if (code !== 0) {
+        return finish(
+          reject,
+          new Error(
+            Buffer.concat(errors).toString() ||
+            `FFmpeg exited with code ${code}.`
+          )
+        );
+      }
+
+      const gifBuffer = Buffer.concat(output);
+
+      if (!gifBuffer.length) {
+        return finish(
+          reject,
+          new Error('Generated GIF is empty.')
+        );
+      }
+
+      finish(resolve, gifBuffer);
+    });
+
+    ffmpeg.stdin.on('error', () => {
+      // The process may close its input while shutting down.
+    });
+
+    ffmpeg.stdin.end(buffer);
+  });
+}
+
+// ============================================================
+// STICKER EXTRACTION
+// ============================================================
 
 async function extractSticker(message, repliedMessage) {
   const sticker = repliedMessage.stickers.first();
 
   if (!sticker) return null;
 
-  // Discord sticker format:
-  // 1 = PNG
-  // 2 = APNG
-  // 3 = Lottie
-  // 4 = GIF
+  /*
+   * Discord sticker formats:
+   *
+   * 1 = PNG
+   * 2 = APNG (animated PNG)
+   * 3 = Lottie JSON
+   * 4 = GIF
+   */
 
   const format = Number(sticker.format);
 
@@ -195,7 +310,7 @@ async function extractSticker(message, repliedMessage) {
     );
   }
 
-  // GIF stickers use Discord's media proxy.
+  // Discord uses a special media proxy URL for GIF stickers.
   const stickerUrl = format === 4
     ? `https://media.discordapp.net/stickers/${sticker.id}.gif`
     : `https://cdn.discordapp.com/stickers/${sticker.id}.${extension}`;
@@ -214,7 +329,7 @@ async function extractSticker(message, repliedMessage) {
     }
 
     return message.reply(
-      'I could not download that sticker. Its original asset might be unavailable.'
+      'I could not download this sticker. Its original asset might be unavailable.'
     );
   }
 
@@ -222,51 +337,162 @@ async function extractSticker(message, repliedMessage) {
     .replace(/[^a-zA-Z0-9_-]/g, '_')
     .slice(0, 40) || 'sticker';
 
-  const filename = `${safeName}.${extension}`;
-
-  const attachment = new AttachmentBuilder(buffer, {
-    name: filename,
-  });
-
-  const sizeKB = (buffer.length / 1024).toFixed(1);
-
-  const description = [
-    `**Sticker:** ${sticker.name}`,
-    `**Format:** ${extension.toUpperCase()}`,
-    `**File size:** ${sizeKB} KB`,
-    '',
-    format === 3
-      ? 'This is a Lottie sticker. The original JSON asset is attached instead of a rendered image.'
-      : 'Original sticker asset attached. You can use it when uploading a server sticker.',
-    buffer.length > 512 * 1024
-      ? '\n⚠️ This file exceeds Discord\'s 512 KB sticker upload limit and may need compression.'
-      : '',
-  ].filter(Boolean).join('\n');
+  const files = [];
 
   const embed = new EmbedBuilder()
     .setColor('#22c55e')
     .setTitle('Sticker Extracted')
-    .setDescription(description)
-    .setFooter({
-      text: `Requested by ${message.author.tag}`,
-    })
     .setTimestamp();
 
-  // Display image preview for image-based stickers.
-  if (format !== 3) {
-    embed.setImage(`attachment://${filename}`);
+  const description = [
+    `**Sticker:** ${sticker.name}`,
+    `**Original format:** ${extension.toUpperCase()}`,
+    `**Original size:** ${(buffer.length / 1024).toFixed(1)} KB`,
+  ];
+
+  // ========================================================
+  // APNG STICKERS
+  // ========================================================
+
+  if (format === 2) {
+    const originalName = `${safeName}.png`;
+
+    // Preserve original APNG for uploading.
+    files.push(
+      new AttachmentBuilder(buffer, {
+        name: originalName,
+      })
+    );
+
+    try {
+      // Generate animated GIF for Discord's preview.
+      const gifBuffer = await convertApngToGif(buffer);
+
+      const gifName = `${safeName}_animated.gif`;
+
+      files.push(
+        new AttachmentBuilder(gifBuffer, {
+          name: gifName,
+        })
+      );
+
+      // Display the GIF in the embed.
+      embed.setImage(`attachment://${gifName}`);
+
+      description.push(
+        '',
+        '✅ Animated GIF preview generated.',
+        '📁 Original APNG included for sticker uploading.',
+        `**GIF preview size:** ${(gifBuffer.length / 1024).toFixed(1)} KB`
+      );
+    } catch (error) {
+      console.error(
+        '[Steal] APNG to GIF conversion failed:',
+        error
+      );
+
+      description.push(
+        '',
+        '⚠️ GIF preview conversion failed.',
+        'The original APNG is still attached.'
+      );
+    }
+
+    if (buffer.length > 512 * 1024) {
+      description.push(
+        '',
+        '⚠️ Original APNG exceeds the 512 KB sticker upload limit.'
+      );
+    }
   }
+
+  // ========================================================
+  // GIF STICKERS
+  // ========================================================
+
+  else if (format === 4) {
+    const filename = `${safeName}.gif`;
+
+    files.push(
+      new AttachmentBuilder(buffer, {
+        name: filename,
+      })
+    );
+
+    embed.setImage(`attachment://${filename}`);
+
+    description.push(
+      '',
+      '✅ Original animated GIF attached.'
+    );
+
+    if (buffer.length > 512 * 1024) {
+      description.push(
+        '',
+        '⚠️ This file exceeds the 512 KB sticker upload limit.'
+      );
+    }
+  }
+
+  // ========================================================
+  // STATIC PNG STICKERS
+  // ========================================================
+
+  else if (format === 1) {
+    const filename = `${safeName}.png`;
+
+    files.push(
+      new AttachmentBuilder(buffer, {
+        name: filename,
+      })
+    );
+
+    embed.setImage(`attachment://${filename}`);
+
+    description.push(
+      '',
+      'Static PNG sticker attached.'
+    );
+  }
+
+  // ========================================================
+  // LOTTIE STICKERS
+  // ========================================================
+
+  else if (format === 3) {
+    const filename = `${safeName}.json`;
+
+    files.push(
+      new AttachmentBuilder(buffer, {
+        name: filename,
+      })
+    );
+
+    description.push(
+      '',
+      'Lottie animation JSON attached.',
+      'This is the original animation data, not a rendered GIF.'
+    );
+  }
+
+  embed.setDescription(description.join('\n'));
+
+  embed.setFooter({
+    text: `Requested by ${message.author.tag}`,
+  });
 
   return message.reply({
     embeds: [embed],
-    files: [attachment],
+    files,
     allowedMentions: {
       repliedUser: false,
     },
   });
 }
 
-// ---------- Main command ----------
+// ============================================================
+// MAIN COMMAND
+// ============================================================
 
 module.exports = {
   name: 'steal',
@@ -283,10 +509,13 @@ module.exports = {
     if (!message.guild) return;
 
     const prefix = typeof client.getPrefix === 'function'
-      ? client.getPrefix(message.guild.id)
+      ? client.getPrefix(message.guild.id) || '$'
       : '$';
 
-    // Permission check
+    // ========================================================
+    // PERMISSION CHECK
+    // ========================================================
+
     if (!hasStealPermission(client, message.member)) {
       return message.reply({
         embeds: [
@@ -299,9 +528,9 @@ module.exports = {
       });
     }
 
-    // ================================================
+    // ========================================================
     // FETCH REPLIED MESSAGE
-    // ================================================
+    // ========================================================
 
     let repliedMsg = null;
 
@@ -311,23 +540,27 @@ module.exports = {
           message.reference.messageId
         );
       } catch (error) {
-        console.error('[Steal] Could not fetch replied message:', error);
+        console.error(
+          '[Steal] Could not fetch replied message:',
+          error
+        );
       }
     }
 
-    // ================================================
-    // STICKER EXTRACTION
-    // ================================================
+    // ========================================================
+    // CHECK FOR STICKER FIRST
+    // ========================================================
 
     if (repliedMsg?.stickers?.size > 0) {
       return extractSticker(message, repliedMsg);
     }
 
-    // ================================================
+    // ========================================================
     // EMOJI EXTRACTION
-    // ================================================
+    // ========================================================
 
-    const emojiRegex = /<(a?):([a-zA-Z0-9_]{2,32}):(\d{17,20})>/g;
+    const emojiRegex =
+      /<(a?):([a-zA-Z0-9_]{2,32}):(\d{17,20})>/g;
 
     let emojiData = null;
 
@@ -347,7 +580,7 @@ module.exports = {
       }
     }
 
-    // Check direct argument.
+    // Check command argument.
     if (!emojiData && args[0]) {
       const match = String(args[0]).match(
         /<(a?):([a-zA-Z0-9_]{2,32}):(\d{17,20})>/
@@ -368,12 +601,12 @@ module.exports = {
       );
     }
 
-    // ================================================
+    // ========================================================
     // BOT PERMISSIONS
-    // ================================================
+    // ========================================================
 
     if (
-      !message.guild.members.me?.permissions.has(
+      !message.guild.members.me?.permissions?.has(
         PermissionFlagsBits.ManageGuildExpressions
       )
     ) {
@@ -382,9 +615,9 @@ module.exports = {
       );
     }
 
-    // ================================================
+    // ========================================================
     // EMOJI LIMIT CHECK
-    // ================================================
+    // ========================================================
 
     let currentGuild;
     let emojiCache;
@@ -393,7 +626,10 @@ module.exports = {
       currentGuild = await message.guild.fetch();
       emojiCache = await currentGuild.emojis.fetch();
     } catch (error) {
-      console.error('[Steal] Emoji limit check failed:', error);
+      console.error(
+        '[Steal] Emoji limit check failed:',
+        error
+      );
 
       return message.reply(
         'Could not check the server emoji slots. Please try again.'
@@ -424,9 +660,9 @@ module.exports = {
       );
     }
 
-    // ================================================
-    // EMOJI NAME
-    // ================================================
+    // ========================================================
+    // EMOJI NAME HANDLING
+    // ========================================================
 
     let desiredName = args[1] || emojiData.name;
 
@@ -440,17 +676,19 @@ module.exports = {
       );
     }
 
+    // Case-insensitive duplicate check and auto-rename.
     let finalName = desiredName;
 
     if (
-      message.guild.emojis.cache.some(
-        emoji => emoji.name.toLowerCase() === desiredName.toLowerCase()
+      emojiCache.some(
+        emoji =>
+          emoji.name.toLowerCase() === desiredName.toLowerCase()
       )
     ) {
       let suffix = 1;
 
       while (
-        message.guild.emojis.cache.some(
+        emojiCache.some(
           emoji =>
             emoji.name.toLowerCase() ===
             `${desiredName}_${suffix}`.toLowerCase()
@@ -462,9 +700,9 @@ module.exports = {
       finalName = `${desiredName}_${suffix}`;
     }
 
-    // ================================================
-    // DOWNLOAD & CREATE EMOJI
-    // ================================================
+    // ========================================================
+    // DOWNLOAD AND CREATE EMOJI
+    // ========================================================
 
     const ext = emojiData.animated ? 'gif' : 'png';
 
@@ -532,7 +770,16 @@ module.exports = {
         );
       }
 
-      console.error('[Steal] Emoji creation failed:', error);
+      console.error(
+        '[Steal] Emoji creation failed:',
+        error
+      );
+
+      if (error.status === 404) {
+        return message.reply(
+          'That emoji no longer exists or cannot be accessed.'
+        );
+      }
 
       if (error.code === 50035 && emojiData.animated) {
         return message.reply(
@@ -556,7 +803,9 @@ module.exports = {
         embeds: [
           new EmbedBuilder()
             .setColor('#ef4444')
-            .setDescription(`Failed to add emoji: ${description}`),
+            .setDescription(
+              `Failed to add emoji: ${description}`
+            ),
         ],
       });
     }
