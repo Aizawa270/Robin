@@ -1,3 +1,4 @@
+
 'use strict';
 
 const {
@@ -16,7 +17,7 @@ if (!db || typeof db.prepare !== 'function') {
 }
 
 // ============================================================
-// DATABASE MIGRATION
+// DATABASE HELPERS
 // ============================================================
 
 function addColumn(table, definition) {
@@ -24,15 +25,14 @@ function addColumn(table, definition) {
     db.exec(
       `ALTER TABLE ${table} ADD COLUMN ${definition}`
     );
-
     return true;
   } catch {
     return false;
   }
 }
 
-// Existing clans receive TAG_DEFAULT_ENABLED = 1.
-// Existing values are never overwritten.
+// Existing clans receive enabled tags on the first migration.
+// Existing stored settings are never overwritten.
 
 addColumn(
   'clans',
@@ -46,33 +46,37 @@ addColumn(
   'tag_alias TEXT'
 );
 
-// Original nickname tracking.
+// Persistent original nickname tracking.
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS clan_tag_nicknames (
     guild_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     clan_id INTEGER NOT NULL,
-
     original_nickname TEXT,
     applied_nickname TEXT,
-
+    applied_tag TEXT,
     updated_at INTEGER NOT NULL DEFAULT 0,
-
     PRIMARY KEY (guild_id, user_id)
   );
 
   CREATE INDEX IF NOT EXISTS
     idx_clan_tag_nicknames_clan
-
   ON clan_tag_nicknames (
     guild_id,
     clan_id
   );
 `);
 
+// Upgrade an older tracking table safely.
+
+addColumn(
+  'clan_tag_nicknames',
+  'applied_tag TEXT'
+);
+
 // ============================================================
-// DATABASE STATEMENTS
+// PREPARED STATEMENTS
 // ============================================================
 
 const S = {
@@ -139,10 +143,11 @@ const S = {
       clan_id,
       original_nickname,
       applied_nickname,
+      applied_tag,
       updated_at
     )
 
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
 
     ON CONFLICT(guild_id, user_id)
 
@@ -150,6 +155,7 @@ const S = {
       clan_id = excluded.clan_id,
       original_nickname = excluded.original_nickname,
       applied_nickname = excluded.applied_nickname,
+      applied_tag = excluded.applied_tag,
       updated_at = excluded.updated_at
   `),
 
@@ -175,18 +181,17 @@ const S = {
 };
 
 // ============================================================
-// ERRORS
+// CLAN ERROR
 // ============================================================
 
 function clanError(message) {
   const error = new Error(message);
   error.name = 'ClanError';
-
   return error;
 }
 
 // ============================================================
-// SMALL-CAPITAL / SUPERSCRIPT LETTERS
+// SMALL CAPITAL / SUPERSCRIPT LETTERS
 // ============================================================
 
 const LOWER = {
@@ -240,6 +245,10 @@ const UPPER = {
   w: 'ᵂ',
 };
 
+// ============================================================
+// TEXT NORMALIZATION
+// ============================================================
+
 function normalizeLetters(value) {
   return Array.from(
     String(value || '')
@@ -247,6 +256,10 @@ function normalizeLetters(value) {
       .toLowerCase()
   ).filter(char => /\p{L}/u.test(char));
 }
+
+// ============================================================
+// FORMAT TAG
+// ============================================================
 
 function formatTag(value) {
   const letters = normalizeLetters(value);
@@ -257,34 +270,177 @@ function formatTag(value) {
 
   return letters.map((letter, index) => {
     if (index === 0) {
-      return UPPER[letter] || LOWER[letter] || letter;
+      return (
+        UPPER[letter] ||
+        LOWER[letter] ||
+        letter
+      );
     }
 
     return LOWER[letter] || letter;
   }).join('');
 }
 
+// ============================================================
+// BUILD CLAN TAG
+// ============================================================
+
+// IMPORTANT:
+// An alias REPLACES the full clan name.
+// It is never appended to the normal clan tag.
+
 function buildClanTag(clanRow) {
+  if (!clanRow) {
+    return '';
+  }
+
   const source = String(
     clanRow.tag_alias || clanRow.name || ''
-  );
+  ).trim();
 
   return formatTag(source);
 }
 
 // ============================================================
-// ALIAS VALIDATION
+// KNOWN TAG SUFFIXES
+// ============================================================
+
+function getKnownTagSuffixes(clanRow, previous = null) {
+  const candidates = [];
+
+  if (previous?.applied_tag) {
+    candidates.push(
+      String(previous.applied_tag)
+    );
+  }
+
+  // Current alias.
+  if (clanRow?.tag_alias) {
+    candidates.push(
+      formatTag(clanRow.tag_alias)
+    );
+  }
+
+  // Full clan name is included as a fallback.
+  // This also recognizes older tags applied before
+  // the alias system was introduced.
+
+  if (clanRow?.name) {
+    candidates.push(
+      formatTag(clanRow.name)
+    );
+  }
+
+  return [
+    ...new Set(
+      candidates.filter(Boolean)
+    ),
+  ].sort(
+    (a, b) => Array.from(b).length - Array.from(a).length
+  );
+}
+
+// ============================================================
+// REMOVE A KNOWN TAG SUFFIX
+// ============================================================
+
+function stripKnownTag(nickname, clanRow, previous = null) {
+  if (nickname === null || nickname === undefined) {
+    return nickname;
+  }
+
+  const current = String(nickname);
+
+  const suffixes = getKnownTagSuffixes(
+    clanRow,
+    previous
+  );
+
+  for (const suffix of suffixes) {
+    if (current.endsWith(suffix)) {
+      const base = current.slice(
+        0,
+        current.length - suffix.length
+      );
+
+      return base || null;
+    }
+  }
+
+  return nickname;
+}
+
+// ============================================================
+// GET ORIGINAL NICKNAME
+// ============================================================
+
+function getOriginalNickname(
+  member,
+  clanRow,
+  previous
+) {
+  const current = member.nickname;
+
+  if (previous) {
+    // Best case:
+    // The current nickname exactly matches what Vanessa
+    // previously applied. Use the saved original.
+
+    if (
+      previous.applied_nickname !== null &&
+      previous.applied_nickname !== undefined &&
+      current === previous.applied_nickname
+    ) {
+      return previous.original_nickname;
+    }
+
+    // The member may have manually changed the base
+    // nickname while retaining the clan tag.
+    // Remove the tag but preserve their edited base.
+
+    const stripped = stripKnownTag(
+      current,
+      clanRow,
+      previous
+    );
+
+    if (stripped !== current) {
+      return stripped;
+    }
+
+    // No recognizable old tag:
+    // treat the current nickname as the new original.
+    return current;
+  }
+
+  // Legacy support:
+  // A tag may already be present from an older version
+  // even though no tracking record exists yet.
+
+  return stripKnownTag(
+    current,
+    clanRow
+  );
+}
+
+// ============================================================
+// VALIDATE ALIAS
 // ============================================================
 
 function validateAlias(clanName, rawAlias) {
-  const alias = String(rawAlias || '').trim();
+  const alias = String(
+    rawAlias || ''
+  ).trim();
 
   const requiredLength = Number(
     CFG.TAG_ALIAS_LENGTH || 3
   );
 
+  const aliasLetters = normalizeLetters(alias);
+
   if (
     Array.from(alias).length !== requiredLength ||
+    aliasLetters.length !== requiredLength ||
     !/^\p{L}+$/u.test(alias)
   ) {
     throw clanError(
@@ -295,8 +451,6 @@ function validateAlias(clanName, rawAlias) {
   const clanLetters = new Set(
     normalizeLetters(clanName)
   );
-
-  const aliasLetters = normalizeLetters(alias);
 
   for (const letter of aliasLetters) {
     if (!clanLetters.has(letter)) {
@@ -338,7 +492,7 @@ function requireClanOwner(guildId, userId) {
 }
 
 // ============================================================
-// SETTINGS
+// SET TAG ENABLED
 // ============================================================
 
 function setEnabled(guildId, userId, enabled) {
@@ -359,6 +513,10 @@ function setEnabled(guildId, userId, enabled) {
   );
 }
 
+// ============================================================
+// SET CLAN ALIAS
+// ============================================================
+
 function setAlias(guildId, userId, rawAlias) {
   const found = requireClanOwner(
     guildId,
@@ -367,7 +525,10 @@ function setAlias(guildId, userId, rawAlias) {
 
   const alias = rawAlias === null
     ? null
-    : validateAlias(found.name, rawAlias);
+    : validateAlias(
+        found.name,
+        rawAlias
+      );
 
   S.updateAlias.run(
     alias,
@@ -382,7 +543,7 @@ function setAlias(guildId, userId, rawAlias) {
 }
 
 // ============================================================
-// DISCORD MEMBER FETCHING
+// FETCH GUILD
 // ============================================================
 
 async function getGuild(client, guildId) {
@@ -398,6 +559,10 @@ async function getGuild(client, guildId) {
 
   return guild;
 }
+
+// ============================================================
+// FETCH MEMBER
+// ============================================================
 
 async function getMember(client, guildId, userId) {
   const guild = await getGuild(
@@ -423,7 +588,7 @@ async function getMember(client, guildId, userId) {
 }
 
 // ============================================================
-// PERMISSION CHECK
+// CHECK NICKNAME PERMISSIONS
 // ============================================================
 
 async function canManageMember(member) {
@@ -462,17 +627,21 @@ async function canManageMember(member) {
 }
 
 // ============================================================
-// NICKNAME CONSTRUCTION
+// CREATE FINAL NICKNAME
 // ============================================================
 
-function createNickname(originalNickname, tag) {
+function createNickname(
+  originalNickname,
+  tag,
+  fallbackUsername
+) {
   const maxLength = Number(
     CFG.TAG_NICKNAME_MAX_LENGTH || 32
   );
 
   const base = originalNickname === null
-    ? ''
-    : String(originalNickname);
+    ? String(fallbackUsername || '')
+    : String(originalNickname ?? '');
 
   const tagCharacters = Array.from(tag);
   const baseCharacters = Array.from(base);
@@ -490,15 +659,34 @@ function createNickname(originalNickname, tag) {
 }
 
 // ============================================================
+// SAVE TRACKING
+// ============================================================
+
+function saveTracking(
+  guildId,
+  userId,
+  clanId,
+  originalNickname,
+  appliedNickname,
+  appliedTag
+) {
+  S.saveTag.run(
+    String(guildId),
+    String(userId),
+    Number(clanId),
+    originalNickname,
+    appliedNickname,
+    appliedTag,
+    Date.now()
+  );
+}
+
+// ============================================================
 // APPLY TAG
 // ============================================================
 
 async function applyTag(member, clanRow) {
-  if (!member || !clanRow) {
-    return false;
-  }
-
-  if (member.user.bot) {
+  if (!member || !clanRow || member.user.bot) {
     return false;
   }
 
@@ -513,26 +701,15 @@ async function applyTag(member, clanRow) {
     userId
   );
 
-  let originalNickname;
+  // Always calculate the original from the tracked record
+  // or strip an older known clan-tag suffix.
+  const originalNickname = getOriginalNickname(
+    member,
+    clanRow,
+    previous
+  );
 
-  if (!previous) {
-    originalNickname = currentNickname;
-  } else {
-    const previousTagMatches =
-      previous.applied_nickname !== null &&
-      currentNickname === previous.applied_nickname;
-
-    if (previousTagMatches) {
-      // The existing nickname is still our own tag.
-      // Keep the original nickname unchanged.
-      originalNickname = previous.original_nickname;
-    } else {
-      // The member changed their nickname manually.
-      // Use their current nickname as the new original.
-      originalNickname = currentNickname;
-    }
-  }
-
+  // Alias takes priority over the full clan name.
   const tag = buildClanTag(clanRow);
 
   if (!tag) {
@@ -540,36 +717,35 @@ async function applyTag(member, clanRow) {
   }
 
   const desiredNickname = createNickname(
-    originalNickname === null
-      ? member.user.username
-      : originalNickname,
-    tag
-  );
-
-  // Save the original BEFORE attempting the Discord update.
-  // This prevents losing the original if the API request fails.
-
-  S.saveTag.run(
-    guildId,
-    userId,
-    clanId,
     originalNickname,
-    previous?.applied_nickname ?? null,
-    Date.now()
+    tag,
+    member.user.username
   );
 
+  // If the nickname is already correct, update tracking.
   if (currentNickname === desiredNickname) {
-    S.saveTag.run(
+    saveTracking(
       guildId,
       userId,
       clanId,
       originalNickname,
       desiredNickname,
-      Date.now()
+      tag
     );
 
     return true;
   }
+
+  // Save the original before making an API request.
+  // Keep the old applied data until the new nickname succeeds.
+  saveTracking(
+    guildId,
+    userId,
+    clanId,
+    originalNickname,
+    previous?.applied_nickname ?? null,
+    previous?.applied_tag ?? null
+  );
 
   const allowed = await canManageMember(member);
 
@@ -583,13 +759,14 @@ async function applyTag(member, clanRow) {
       `Apply clan identity tag: ${clanRow.name}`
     );
 
-    S.saveTag.run(
+    // Record the new tag only after Discord accepts it.
+    saveTracking(
       guildId,
       userId,
       clanId,
       originalNickname,
       desiredNickname,
-      Date.now()
+      tag
     );
 
     return true;
@@ -633,48 +810,74 @@ async function restoreTag(
   );
 
   if (!member) {
-    // Keep the record so restoration can be retried.
+    // Keep the tracking record so a later sync can retry.
     return false;
   }
 
-  // Only restore if the nickname is still exactly
-  // the nickname Vanessa applied.
+  const currentNickname = member.nickname;
 
-  if (
+  let nicknameToRestore = previous.original_nickname;
+
+  const exactMatch =
     previous.applied_nickname !== null &&
-    member.nickname === previous.applied_nickname
-  ) {
-    const allowed = await canManageMember(member);
+    currentNickname === previous.applied_nickname;
 
-    if (!allowed) {
-      return false;
-    }
+  if (!exactMatch) {
+    // If someone manually edited the base but retained
+    // the clan tag, remove only the tag and preserve the edit.
 
-    try {
-      await member.setNickname(
-        previous.original_nickname,
-        'Remove clan identity tag'
+    const clanRow = S.getClan.get(
+      previous.clan_id,
+      guildId
+    );
+
+    const stripped = stripKnownTag(
+      currentNickname,
+      clanRow,
+      previous
+    );
+
+    if (stripped !== currentNickname) {
+      nicknameToRestore = stripped;
+    } else {
+      // The member changed their nickname independently.
+      // Preserve it rather than overwrite it.
+      S.deleteTag.run(
+        guildId,
+        userId
       );
 
-    } catch (error) {
-      console.warn(
-        `[ClanTags] Could not restore nickname for ${userId}:`,
-        error.message
-      );
-
-      return false;
+      return true;
     }
   }
 
-  // If the member manually changed their nickname,
-  // leave that nickname untouched.
+  const allowed = await canManageMember(member);
 
-  S.deleteTag.run(
-    guildId,
-    userId
-  );
+  if (!allowed) {
+    return false;
+  }
 
-  return true;
+  try {
+    await member.setNickname(
+      nicknameToRestore,
+      'Remove clan identity tag'
+    );
+
+    S.deleteTag.run(
+      guildId,
+      userId
+    );
+
+    return true;
+
+  } catch (error) {
+    console.warn(
+      `[ClanTags] Could not restore nickname for ${userId}:`,
+      error.message
+    );
+
+    return false;
+  }
 }
 
 // ============================================================
@@ -690,10 +893,7 @@ async function syncMember(client, guildId, userId) {
     userId
   );
 
-  if (
-    !found ||
-    Number(found.tag_enabled) !== 1
-  ) {
+  if (!found || Number(found.tag_enabled) !== 1) {
     return restoreTag(
       client,
       guildId,
@@ -735,9 +935,7 @@ async function syncClan(client, guildId, clanId) {
     clanId
   );
 
-  // Clan was deleted.
-  // Restore all remaining tracked members.
-
+  // The clan was deleted.
   if (!clanRow) {
     for (const row of tracked) {
       await restoreTag(
@@ -753,8 +951,7 @@ async function syncClan(client, guildId, clanId) {
     };
   }
 
-  // Tags disabled: restore everybody.
-
+  // Tags disabled: restore tracked members.
   if (Number(clanRow.tag_enabled) !== 1) {
     for (const row of tracked) {
       await restoreTag(
@@ -791,9 +988,7 @@ async function syncClan(client, guildId, clanId) {
     processed++;
   }
 
-  // Restore anyone whose tracking record exists
-  // but who is no longer in the clan.
-
+  // Restore records for users no longer in this clan.
   for (const row of tracked) {
     if (!activeIds.has(String(row.user_id))) {
       await restoreTag(
@@ -825,9 +1020,7 @@ async function syncAll(client) {
     );
   }
 
-  // Clean up nickname records belonging to deleted clans
-  // or members whose clan membership no longer exists.
-
+  // Clean up stale tracking records.
   const remaining = S.getAllTags.all();
 
   for (const row of remaining) {
@@ -867,7 +1060,7 @@ function init(client) {
   const synchronize = () => {
     syncAll(client).catch(error => {
       console.error(
-        '[ClanTags] Initial synchronization failed:',
+        '[ClanTags] Synchronization failed:',
         error
       );
     });
@@ -879,7 +1072,7 @@ function init(client) {
     client.once('ready', synchronize);
   }
 
-  // Apply tags when a previous clan member rejoins the server.
+  // Reapply tags if a clan member leaves and rejoins the server.
   client.on('guildMemberAdd', member => {
     syncMember(
       client,
@@ -893,10 +1086,13 @@ function init(client) {
     });
   });
 
-  // Periodic reconciliation also catches missed changes.
+  // Periodic reconciliation.
   const interval = setInterval(
     synchronize,
-    Number(CFG.TAG_SYNC_INTERVAL_MS || 30 * 60 * 1000)
+    Number(
+      CFG.TAG_SYNC_INTERVAL_MS ||
+      30 * 60 * 1000
+    )
   );
 
   interval.unref?.();
@@ -915,11 +1111,17 @@ module.exports = {
   setAlias,
 
   validateAlias,
+  formatTag,
   buildClanTag,
+
+  createNickname,
+  getOriginalNickname,
+  stripKnownTag,
+
+  applyTag,
+  restoreTag,
 
   syncMember,
   syncClan,
   syncAll,
-
-  restoreTag,
 };
