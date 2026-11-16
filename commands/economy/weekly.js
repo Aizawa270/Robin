@@ -5,7 +5,7 @@ const {
   formatDuration,
 } = require('../../handlers/economyExtras');
 
-const WEEKLY_REWARD = 15000;
+const WEEKLY_REWARD = 25000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 module.exports = {
