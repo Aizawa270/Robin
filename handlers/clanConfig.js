@@ -1,9 +1,10 @@
 
+'use strict';
+
 // ============================================================
 // CLAN CONFIG
 // Prices, times, rewards and limits for the clan system.
 // Money values are in Crowns.
-// This file sits next to clanService.js inside handlers/.
 // ============================================================
 
 const MIN = 60 * 1000;
@@ -21,16 +22,9 @@ module.exports = {
   // CLAN TAG SETTINGS
   // ==========================================================
 
-  // Existing and newly created clans have tags enabled by default.
   TAG_DEFAULT_ENABLED: true,
-
-  // Clan aliases must contain exactly three letters.
   TAG_ALIAS_LENGTH: 3,
-
-  // Discord server nickname maximum.
   TAG_NICKNAME_MAX_LENGTH: 32,
-
-  // Periodic synchronization interval.
   TAG_SYNC_INTERVAL_MS: 30 * MIN,
 
   // ==========================================================
@@ -59,6 +53,9 @@ module.exports = {
     quest: '<:quests:1567944748830957770>',
     objective: '<:objective:1567944836953276558>',
     trophy: '<:trOphy:1567945051986984980>',
+
+    // Quest completion / claimed indicator
+    tick: '<:GreenTick:1571944819561988136>',
   },
 
   // ==========================================================
@@ -76,7 +73,6 @@ module.exports = {
   ],
 
   RENAME_COST: 5000000,
-
   NAME_MIN: 3,
   NAME_MAX: 24,
 
@@ -107,7 +103,6 @@ module.exports = {
   INACTIVE_KICKS_BEFORE_BAN: 2,
 
   EXEMPT_PRIVATE_FROM_INACTIVITY: true,
-
   SWEEP_INTERVAL_MS: 30 * MIN,
 
   NOTIFY_CHANNEL_ID: null,
@@ -125,7 +120,6 @@ module.exports = {
   // ==========================================================
 
   QUEST_COUNT: 4,
-
   QUEST_BONUS_XP: 500,
 
   QUEST_TIERS: {
@@ -146,9 +140,7 @@ module.exports = {
   },
 
   QUEST_POOL: [
-    // ========================================================
     // ECONOMIC QUESTS
-    // ========================================================
 
     {
       id: 'eco_each_20k',
@@ -158,7 +150,6 @@ module.exports = {
       metric: 'deposit',
       min: 20000,
       target: 3,
-
       text: t =>
         `Have ${t} member${s(t)} deposit at least ${n(20000)} Crowns each`,
     },
@@ -170,7 +161,6 @@ module.exports = {
       type: 'sum',
       metric: 'deposit',
       target: 500000,
-
       text: t =>
         `Deposit ${n(t)} Crowns into the vault as a clan`,
     },
@@ -183,7 +173,6 @@ module.exports = {
       metric: 'deposit',
       min: 1,
       target: 5,
-
       text: t =>
         `Have ${t} different member${s(t)} make a deposit`,
     },
@@ -195,7 +184,6 @@ module.exports = {
       type: 'sum',
       metric: 'deposit',
       target: 1000000,
-
       text: t =>
         `Reach ${n(t)} Crowns in total deposits`,
     },
@@ -208,14 +196,11 @@ module.exports = {
       metric: 'deposit',
       min: 100000,
       target: 3,
-
       text: t =>
         `Have ${t} member${s(t)} deposit at least ${n(100000)} Crowns each`,
     },
 
-    // ========================================================
     // COINFLIP QUESTS
-    // ========================================================
 
     {
       id: 'cf_win_5',
@@ -225,9 +210,7 @@ module.exports = {
       type: 'sum',
       metric: 'coinflip_win',
       target: 5,
-
-      text: t =>
-        `Win ${t} coinflips collectively`,
+      text: t => `Win ${t} coinflips collectively`,
     },
 
     {
@@ -239,7 +222,6 @@ module.exports = {
       metric: 'coinflip_win',
       min: 1,
       target: 3,
-
       text: t =>
         `Have ${t} different member${s(t)} win a coinflip`,
     },
@@ -252,7 +234,6 @@ module.exports = {
       type: 'streak',
       metric: 'coinflip',
       target: 3,
-
       text: t =>
         `Win ${t} coinflips consecutively`,
     },
@@ -266,14 +247,11 @@ module.exports = {
       metric: 'coinflip_play',
       min: 1,
       target: 5,
-
       text: t =>
         `Have ${t} member${s(t)} take part in coinflip`,
     },
 
-    // ========================================================
     // SPINWHEEL QUESTS
-    // ========================================================
 
     {
       id: 'sw_win_3',
@@ -283,7 +261,6 @@ module.exports = {
       type: 'sum',
       metric: 'spinwheel_win',
       target: 3,
-
       text: t =>
         `Win the spinwheel ${t} times collectively`,
     },
@@ -297,7 +274,6 @@ module.exports = {
       metric: 'spinwheel_win',
       min: 1,
       target: 2,
-
       text: t =>
         `Have ${t} different member${s(t)} win the spinwheel`,
     },
@@ -311,14 +287,11 @@ module.exports = {
       metric: 'spinwheel_play',
       min: 1,
       target: 5,
-
       text: t =>
         `Have ${t} member${s(t)} spin the wheel`,
     },
 
-    // ========================================================
     // FARM QUESTS
-    // ========================================================
 
     {
       id: 'fm_harvest_members',
@@ -329,7 +302,6 @@ module.exports = {
       metric: 'farm_harvest',
       min: 1,
       target: 3,
-
       text: t =>
         `Have ${t} member${s(t)} successfully harvest their farm`,
     },
@@ -342,7 +314,6 @@ module.exports = {
       type: 'sum',
       metric: 'farm_harvest',
       target: 10,
-
       text: t =>
         `Harvest farms ${t} times collectively`,
     },
@@ -356,14 +327,11 @@ module.exports = {
       metric: 'farm_play',
       min: 1,
       target: 5,
-
       text: t =>
         `Have ${t} member${s(t)} play the farm game`,
     },
 
-    // ========================================================
     // DICE QUESTS
-    // ========================================================
 
     {
       id: 'dice_win_5',
@@ -373,7 +341,6 @@ module.exports = {
       type: 'sum',
       metric: 'dice_win',
       target: 5,
-
       text: t =>
         `Win ${t} dice games collectively`,
     },
@@ -387,7 +354,6 @@ module.exports = {
       metric: 'dice_win',
       min: 1,
       target: 3,
-
       text: t =>
         `Have ${t} different member${s(t)} win a dice game`,
     },
@@ -401,14 +367,11 @@ module.exports = {
       metric: 'dice_play',
       min: 1,
       target: 5,
-
       text: t =>
         `Have ${t} member${s(t)} take part in dice`,
     },
 
-    // ========================================================
     // BLACKJACK QUESTS
-    // ========================================================
 
     {
       id: 'bj_win_5',
@@ -418,7 +381,6 @@ module.exports = {
       type: 'sum',
       metric: 'blackjack_win',
       target: 5,
-
       text: t =>
         `Win ${t} blackjack games collectively`,
     },
@@ -432,7 +394,6 @@ module.exports = {
       metric: 'blackjack_win',
       min: 1,
       target: 3,
-
       text: t =>
         `Have ${t} different member${s(t)} win blackjack`,
     },
@@ -445,14 +406,11 @@ module.exports = {
       type: 'streak',
       metric: 'blackjack',
       target: 3,
-
       text: t =>
         `Win ${t} blackjack games consecutively`,
     },
 
-    // ========================================================
     // RECRUITMENT QUESTS
-    // ========================================================
 
     {
       id: 'rec_1',
@@ -461,7 +419,6 @@ module.exports = {
       type: 'sum',
       metric: 'recruit',
       target: 1,
-
       text: t =>
         `Invite ${t} new member${s(t)} to the clan`,
     },
@@ -473,7 +430,6 @@ module.exports = {
       type: 'sum',
       metric: 'recruit',
       target: 2,
-
       text: t =>
         `Have ${t} new members join the clan`,
     },
@@ -485,7 +441,6 @@ module.exports = {
       type: 'sum',
       metric: 'recruit_invite',
       target: 3,
-
       text: t =>
         `Have ${t} new members join the clan by invitation`,
     },
@@ -496,35 +451,14 @@ module.exports = {
   // ==========================================================
 
   XP_BOOSTER_DURATION_MS: 7 * DAY,
-
   XP_BOOSTER_MAX_STACK_MS: 28 * DAY,
 
   XP_BOOSTER: [
-    {
-      cost: 1000000,
-      bonus: 0.10,
-      xp: 150,
-    },
-    {
-      cost: 2500000,
-      bonus: 0.20,
-      xp: 300,
-    },
-    {
-      cost: 6000000,
-      bonus: 0.30,
-      xp: 600,
-    },
-    {
-      cost: 12000000,
-      bonus: 0.40,
-      xp: 1000,
-    },
-    {
-      cost: 25000000,
-      bonus: 0.50,
-      xp: 1600,
-    },
+    { cost: 1000000, bonus: 0.10, xp: 150 },
+    { cost: 2500000, bonus: 0.20, xp: 300 },
+    { cost: 6000000, bonus: 0.30, xp: 600 },
+    { cost: 12000000, bonus: 0.40, xp: 1000 },
+    { cost: 25000000, bonus: 0.50, xp: 1600 },
   ],
 
   // ==========================================================
@@ -532,31 +466,11 @@ module.exports = {
   // ==========================================================
 
   CAPACITY: [
-    {
-      cost: 4000000,
-      capacity: 25,
-      xp: 300,
-    },
-    {
-      cost: 10000000,
-      capacity: 30,
-      xp: 600,
-    },
-    {
-      cost: 25000000,
-      capacity: 40,
-      xp: 1200,
-    },
-    {
-      cost: 60000000,
-      capacity: 50,
-      xp: 2400,
-    },
-    {
-      cost: 120000000,
-      capacity: 60,
-      xp: 3500,
-    },
+    { cost: 4000000, capacity: 25, xp: 300 },
+    { cost: 10000000, capacity: 30, xp: 600 },
+    { cost: 25000000, capacity: 40, xp: 1200 },
+    { cost: 60000000, capacity: 50, xp: 2400 },
+    { cost: 120000000, capacity: 60, xp: 3500 },
   ],
 
   // ==========================================================
@@ -567,7 +481,6 @@ module.exports = {
 
   // ==========================================================
   // TIMEZONE
-  // Bangladesh UTC+6
   // ==========================================================
 
   TZ_OFFSET_MS: 6 * HOUR,
