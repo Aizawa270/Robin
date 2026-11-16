@@ -5,7 +5,7 @@ const {
   formatDuration,
 } = require('../../handlers/economyExtras');
 
-const DAILY_REWARD = 5000;
+const DAILY_REWARD = 10000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 module.exports = {
