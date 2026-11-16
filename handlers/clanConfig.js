@@ -1,8 +1,9 @@
+
 // ============================================================
 // CLAN CONFIG
 // Prices, times, rewards and limits for the clan system.
-// Money values are in Crowns. This file is intended to sit next
-// to clanService.js inside handlers/.
+// Money values are in Crowns.
+// This file sits next to clanService.js inside handlers/.
 // ============================================================
 
 const MIN = 60 * 1000;
@@ -15,6 +16,26 @@ const s = t => (t === 1 ? '' : 's');
 module.exports = {
   PREFIX: '$',
   COLOR: '#5b0000',
+
+  // ==========================================================
+  // CLAN TAG SETTINGS
+  // ==========================================================
+
+  // Existing and newly created clans have tags enabled by default.
+  TAG_DEFAULT_ENABLED: true,
+
+  // Clan aliases must contain exactly three letters.
+  TAG_ALIAS_LENGTH: 3,
+
+  // Discord server nickname maximum.
+  TAG_NICKNAME_MAX_LENGTH: 32,
+
+  // Periodic synchronization interval.
+  TAG_SYNC_INTERVAL_MS: 30 * MIN,
+
+  // ==========================================================
+  // CLAN ICONS
+  // ==========================================================
 
   ICONS: {
     vault: '<:vault:1567943346825986109>',
@@ -40,42 +61,95 @@ module.exports = {
     trophy: '<:trOphy:1567945051986984980>',
   },
 
+  // ==========================================================
+  // CLAN CREATION AND NAMING
+  // ==========================================================
+
   SHOP_KEY: 'normal',
   SHOP_ITEM_ID: null,
-  SHOP_ITEM_NAMES: ['clan', 'create clan', 'create a clan', 'clan creation'],
+
+  SHOP_ITEM_NAMES: [
+    'clan',
+    'create clan',
+    'create a clan',
+    'clan creation',
+  ],
+
   RENAME_COST: 5000000,
+
   NAME_MIN: 3,
   NAME_MAX: 24,
 
+  // ==========================================================
+  // CAPACITY AND RANKS
+  // ==========================================================
+
   BASE_CAPACITY: 20,
   MAX_CO_OWNERS: 5,
+
   REJOIN_LOCK_MS: 5 * DAY,
   INVITE_TIMEOUT_MS: 10 * MIN,
   PRIVATE_INVITE_MIN_RANK: 4,
 
+  // ==========================================================
+  // DEPOSIT HISTORY
+  // ==========================================================
+
   DEPOSIT_HISTORY_DAYS: 7,
+
+  // ==========================================================
+  // INACTIVITY SYSTEM
+  // ==========================================================
 
   INACTIVE_CLAN_MS: 30 * DAY,
   INACTIVE_MEMBER_MS: 30 * DAY,
+
   INACTIVE_KICKS_BEFORE_BAN: 2,
+
   EXEMPT_PRIVATE_FROM_INACTIVITY: true,
+
   SWEEP_INTERVAL_MS: 30 * MIN,
+
   NOTIFY_CHANNEL_ID: null,
 
+  // ==========================================================
+  // LEVELS AND EXPERIENCE
+  // ==========================================================
+
   MAX_LEVEL: 100,
+
   xpToNext: level => 1000 + 300 * (level - 1),
 
+  // ==========================================================
+  // DAILY QUESTS
+  // ==========================================================
+
   QUEST_COUNT: 4,
+
   QUEST_BONUS_XP: 500,
 
   QUEST_TIERS: {
-    Easy: { coins: 20000, xp: 250 },
-    Medium: { coins: 40000, xp: 300 },
-    Hard: { coins: 100000, xp: 400 },
+    Easy: {
+      coins: 20000,
+      xp: 250,
+    },
+
+    Medium: {
+      coins: 40000,
+      xp: 300,
+    },
+
+    Hard: {
+      coins: 100000,
+      xp: 400,
+    },
   },
 
   QUEST_POOL: [
+    // ========================================================
     // ECONOMIC QUESTS
+    // ========================================================
+
     {
       id: 'eco_each_20k',
       cat: 'economic',
@@ -84,8 +158,11 @@ module.exports = {
       metric: 'deposit',
       min: 20000,
       target: 3,
-      text: t => `Have ${t} member${s(t)} deposit at least ${n(20000)} Crowns each`,
+
+      text: t =>
+        `Have ${t} member${s(t)} deposit at least ${n(20000)} Crowns each`,
     },
+
     {
       id: 'eco_total_500k',
       cat: 'economic',
@@ -93,8 +170,11 @@ module.exports = {
       type: 'sum',
       metric: 'deposit',
       target: 500000,
-      text: t => `Deposit ${n(t)} Crowns into the vault as a clan`,
+
+      text: t =>
+        `Deposit ${n(t)} Crowns into the vault as a clan`,
     },
+
     {
       id: 'eco_five_members',
       cat: 'economic',
@@ -103,8 +183,11 @@ module.exports = {
       metric: 'deposit',
       min: 1,
       target: 5,
-      text: t => `Have ${t} different member${s(t)} make a deposit`,
+
+      text: t =>
+        `Have ${t} different member${s(t)} make a deposit`,
     },
+
     {
       id: 'eco_total_1m',
       cat: 'economic',
@@ -112,8 +195,11 @@ module.exports = {
       type: 'sum',
       metric: 'deposit',
       target: 1000000,
-      text: t => `Reach ${n(t)} Crowns in total deposits`,
+
+      text: t =>
+        `Reach ${n(t)} Crowns in total deposits`,
     },
+
     {
       id: 'eco_each_100k',
       cat: 'economic',
@@ -122,10 +208,15 @@ module.exports = {
       metric: 'deposit',
       min: 100000,
       target: 3,
-      text: t => `Have ${t} member${s(t)} deposit at least ${n(100000)} Crowns each`,
+
+      text: t =>
+        `Have ${t} member${s(t)} deposit at least ${n(100000)} Crowns each`,
     },
 
+    // ========================================================
     // COINFLIP QUESTS
+    // ========================================================
+
     {
       id: 'cf_win_5',
       cat: 'gaming',
@@ -134,8 +225,11 @@ module.exports = {
       type: 'sum',
       metric: 'coinflip_win',
       target: 5,
-      text: t => `Win ${t} coinflips collectively`,
+
+      text: t =>
+        `Win ${t} coinflips collectively`,
     },
+
     {
       id: 'cf_win_members',
       cat: 'gaming',
@@ -145,8 +239,11 @@ module.exports = {
       metric: 'coinflip_win',
       min: 1,
       target: 3,
-      text: t => `Have ${t} different member${s(t)} win a coinflip`,
+
+      text: t =>
+        `Have ${t} different member${s(t)} win a coinflip`,
     },
+
     {
       id: 'cf_streak',
       cat: 'gaming',
@@ -155,8 +252,11 @@ module.exports = {
       type: 'streak',
       metric: 'coinflip',
       target: 3,
-      text: t => `Win ${t} coinflips consecutively`,
+
+      text: t =>
+        `Win ${t} coinflips consecutively`,
     },
+
     {
       id: 'cf_play_members',
       cat: 'gaming',
@@ -166,10 +266,15 @@ module.exports = {
       metric: 'coinflip_play',
       min: 1,
       target: 5,
-      text: t => `Have ${t} member${s(t)} take part in coinflip`,
+
+      text: t =>
+        `Have ${t} member${s(t)} take part in coinflip`,
     },
 
+    // ========================================================
     // SPINWHEEL QUESTS
+    // ========================================================
+
     {
       id: 'sw_win_3',
       cat: 'gaming',
@@ -178,8 +283,11 @@ module.exports = {
       type: 'sum',
       metric: 'spinwheel_win',
       target: 3,
-      text: t => `Win the spinwheel ${t} times collectively`,
+
+      text: t =>
+        `Win the spinwheel ${t} times collectively`,
     },
+
     {
       id: 'sw_win_members',
       cat: 'gaming',
@@ -189,8 +297,11 @@ module.exports = {
       metric: 'spinwheel_win',
       min: 1,
       target: 2,
-      text: t => `Have ${t} different member${s(t)} win the spinwheel`,
+
+      text: t =>
+        `Have ${t} different member${s(t)} win the spinwheel`,
     },
+
     {
       id: 'sw_play_members',
       cat: 'gaming',
@@ -200,10 +311,15 @@ module.exports = {
       metric: 'spinwheel_play',
       min: 1,
       target: 5,
-      text: t => `Have ${t} member${s(t)} spin the wheel`,
+
+      text: t =>
+        `Have ${t} member${s(t)} spin the wheel`,
     },
 
+    // ========================================================
     // FARM QUESTS
+    // ========================================================
+
     {
       id: 'fm_harvest_members',
       cat: 'gaming',
@@ -213,8 +329,11 @@ module.exports = {
       metric: 'farm_harvest',
       min: 1,
       target: 3,
-      text: t => `Have ${t} member${s(t)} successfully harvest their farm`,
+
+      text: t =>
+        `Have ${t} member${s(t)} successfully harvest their farm`,
     },
+
     {
       id: 'fm_harvest_10',
       cat: 'gaming',
@@ -223,8 +342,11 @@ module.exports = {
       type: 'sum',
       metric: 'farm_harvest',
       target: 10,
-      text: t => `Harvest farms ${t} times collectively`,
+
+      text: t =>
+        `Harvest farms ${t} times collectively`,
     },
+
     {
       id: 'fm_play_members',
       cat: 'gaming',
@@ -234,10 +356,15 @@ module.exports = {
       metric: 'farm_play',
       min: 1,
       target: 5,
-      text: t => `Have ${t} member${s(t)} play the farm game`,
+
+      text: t =>
+        `Have ${t} member${s(t)} play the farm game`,
     },
 
+    // ========================================================
     // DICE QUESTS
+    // ========================================================
+
     {
       id: 'dice_win_5',
       cat: 'gaming',
@@ -246,8 +373,11 @@ module.exports = {
       type: 'sum',
       metric: 'dice_win',
       target: 5,
-      text: t => `Win ${t} dice games collectively`,
+
+      text: t =>
+        `Win ${t} dice games collectively`,
     },
+
     {
       id: 'dice_win_members',
       cat: 'gaming',
@@ -257,8 +387,11 @@ module.exports = {
       metric: 'dice_win',
       min: 1,
       target: 3,
-      text: t => `Have ${t} different member${s(t)} win a dice game`,
+
+      text: t =>
+        `Have ${t} different member${s(t)} win a dice game`,
     },
+
     {
       id: 'dice_play_members',
       cat: 'gaming',
@@ -268,10 +401,15 @@ module.exports = {
       metric: 'dice_play',
       min: 1,
       target: 5,
-      text: t => `Have ${t} member${s(t)} take part in dice`,
+
+      text: t =>
+        `Have ${t} member${s(t)} take part in dice`,
     },
 
+    // ========================================================
     // BLACKJACK QUESTS
+    // ========================================================
+
     {
       id: 'bj_win_5',
       cat: 'gaming',
@@ -280,8 +418,11 @@ module.exports = {
       type: 'sum',
       metric: 'blackjack_win',
       target: 5,
-      text: t => `Win ${t} blackjack games collectively`,
+
+      text: t =>
+        `Win ${t} blackjack games collectively`,
     },
+
     {
       id: 'bj_win_members',
       cat: 'gaming',
@@ -291,8 +432,11 @@ module.exports = {
       metric: 'blackjack_win',
       min: 1,
       target: 3,
-      text: t => `Have ${t} different member${s(t)} win blackjack`,
+
+      text: t =>
+        `Have ${t} different member${s(t)} win blackjack`,
     },
+
     {
       id: 'bj_streak',
       cat: 'gaming',
@@ -301,10 +445,15 @@ module.exports = {
       type: 'streak',
       metric: 'blackjack',
       target: 3,
-      text: t => `Win ${t} blackjack games consecutively`,
+
+      text: t =>
+        `Win ${t} blackjack games consecutively`,
     },
 
+    // ========================================================
     // RECRUITMENT QUESTS
+    // ========================================================
+
     {
       id: 'rec_1',
       cat: 'recruitment',
@@ -312,8 +461,11 @@ module.exports = {
       type: 'sum',
       metric: 'recruit',
       target: 1,
-      text: t => `Invite ${t} new member${s(t)} to the clan`,
+
+      text: t =>
+        `Invite ${t} new member${s(t)} to the clan`,
     },
+
     {
       id: 'rec_2',
       cat: 'recruitment',
@@ -321,8 +473,11 @@ module.exports = {
       type: 'sum',
       metric: 'recruit',
       target: 2,
-      text: t => `Have ${t} new members join the clan`,
+
+      text: t =>
+        `Have ${t} new members join the clan`,
     },
+
     {
       id: 'rec_3_invite',
       cat: 'recruitment',
@@ -330,29 +485,90 @@ module.exports = {
       type: 'sum',
       metric: 'recruit_invite',
       target: 3,
-      text: t => `Have ${t} new members join the clan by invitation`,
+
+      text: t =>
+        `Have ${t} new members join the clan by invitation`,
     },
   ],
 
+  // ==========================================================
+  // XP BOOSTERS
+  // ==========================================================
+
   XP_BOOSTER_DURATION_MS: 7 * DAY,
+
   XP_BOOSTER_MAX_STACK_MS: 28 * DAY,
 
   XP_BOOSTER: [
-    { cost: 1000000, bonus: 0.10, xp: 150 },
-    { cost: 2500000, bonus: 0.20, xp: 300 },
-    { cost: 6000000, bonus: 0.30, xp: 600 },
-    { cost: 12000000, bonus: 0.40, xp: 1000 },
-    { cost: 25000000, bonus: 0.50, xp: 1600 },
+    {
+      cost: 1000000,
+      bonus: 0.10,
+      xp: 150,
+    },
+    {
+      cost: 2500000,
+      bonus: 0.20,
+      xp: 300,
+    },
+    {
+      cost: 6000000,
+      bonus: 0.30,
+      xp: 600,
+    },
+    {
+      cost: 12000000,
+      bonus: 0.40,
+      xp: 1000,
+    },
+    {
+      cost: 25000000,
+      bonus: 0.50,
+      xp: 1600,
+    },
   ],
+
+  // ==========================================================
+  // MEMBER CAPACITY UPGRADES
+  // ==========================================================
 
   CAPACITY: [
-    { cost: 4000000, capacity: 25, xp: 300 },
-    { cost: 10000000, capacity: 30, xp: 600 },
-    { cost: 25000000, capacity: 40, xp: 1200 },
-    { cost: 60000000, capacity: 50, xp: 2400 },
-    { cost: 120000000, capacity: 60, xp: 3500 },
+    {
+      cost: 4000000,
+      capacity: 25,
+      xp: 300,
+    },
+    {
+      cost: 10000000,
+      capacity: 30,
+      xp: 600,
+    },
+    {
+      cost: 25000000,
+      capacity: 40,
+      xp: 1200,
+    },
+    {
+      cost: 60000000,
+      capacity: 50,
+      xp: 2400,
+    },
+    {
+      cost: 120000000,
+      capacity: 60,
+      xp: 3500,
+    },
   ],
 
+  // ==========================================================
+  // MEDIA
+  // ==========================================================
+
   MAX_IMAGE_BYTES: 8 * 1024 * 1024,
+
+  // ==========================================================
+  // TIMEZONE
+  // Bangladesh UTC+6
+  // ==========================================================
+
   TZ_OFFSET_MS: 6 * HOUR,
 };
