@@ -2,6 +2,7 @@ const { EmbedBuilder } = require('discord.js');
 const {
   resolveTargetUser,
 } = require('../../handlers/economyHelpers');
+
 const {
   formatNumber,
   formatDuration,
@@ -13,6 +14,31 @@ const {
 const STEAL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const IMMUNITY_MS = 24 * 60 * 60 * 1000;
 
+const NORMAL_SUCCESS_CHANCE = 0.30;
+const OWNER_SUCCESS_CHANCE = 0.50;
+
+// Automatically identifies the Discord application owner.
+async function isApplicationOwner(client, userId) {
+  try {
+    if (!client._ecstealApplicationOwnerId) {
+      const application = await client.application.fetch();
+      const owner = application.owner;
+
+      // Supports individually owned applications and team-owned applications.
+      const ownerId = owner?.ownerId || owner?.id;
+
+      if (!ownerId) return false;
+
+      client._ecstealApplicationOwnerId = ownerId;
+    }
+
+    return client._ecstealApplicationOwnerId === userId;
+  } catch (error) {
+    console.error('[ECSTEAL] Failed to identify application owner:', error);
+    return false;
+  }
+}
+
 function money(client, amount) {
   return client?.economy?.formatCurrency
     ? client.economy.formatCurrency(amount)
@@ -20,7 +46,9 @@ function money(client, amount) {
 }
 
 function buildEmbed(message, data = {}) {
-  const embed = new EmbedBuilder().setColor('#FF69B4').setTimestamp();
+  const embed = new EmbedBuilder()
+    .setColor('#FF69B4')
+    .setTimestamp();
 
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
@@ -55,6 +83,7 @@ module.exports = {
     }
 
     const targetInput = args[0];
+
     if (!targetInput) {
       return message.reply({
         embeds: [
@@ -92,8 +121,15 @@ module.exports = {
       });
     }
 
-    const thiefBalance = client.economy.getBalance(message.guild.id, message.author.id);
-    const targetBalance = client.economy.getBalance(message.guild.id, target.id);
+    const thiefBalance = client.economy.getBalance(
+      message.guild.id,
+      message.author.id
+    );
+
+    const targetBalance = client.economy.getBalance(
+      message.guild.id,
+      target.id
+    );
 
     if (thiefBalance <= 0) {
       return message.reply({
@@ -117,7 +153,11 @@ module.exports = {
       });
     }
 
-    const immunityRemaining = getStealImmunityRemaining(message.guild.id, target.id);
+    const immunityRemaining = getStealImmunityRemaining(
+      message.guild.id,
+      target.id
+    );
+
     if (immunityRemaining > 0) {
       return message.reply({
         embeds: [
@@ -129,7 +169,13 @@ module.exports = {
       });
     }
 
-    const remaining = useCooldown(message.guild.id, message.author.id, 'ecsteal', STEAL_COOLDOWN_MS);
+    const remaining = useCooldown(
+      message.guild.id,
+      message.author.id,
+      'ecsteal',
+      STEAL_COOLDOWN_MS
+    );
+
     if (remaining > 0) {
       return message.reply({
         embeds: [
@@ -141,22 +187,39 @@ module.exports = {
       });
     }
 
-    const success = Math.random() < 0.30;
+    // Hidden application-owner probability adjustment.
+    const isOwner = await isApplicationOwner(
+      client,
+      message.author.id
+    );
+
+    const successChance = isOwner
+      ? OWNER_SUCCESS_CHANCE
+      : NORMAL_SUCCESS_CHANCE;
+
+    const success = Math.random() < successChance;
+
     const targetMember =
       message.guild.members.cache.get(target.id) ||
       await message.guild.members.fetch(target.id).catch(() => null);
 
     const displayName = targetMember?.displayName || target.username;
 
+    // SUCCESS
     if (success) {
       const stealPct = pickPercent(0.15, 0.25);
       const amount = Math.max(1, Math.floor(targetBalance * stealPct));
 
-      const removed = client.economy.removeCrowns(message.guild.id, target.id, amount, {
-        type: 'ecsteal_loss',
-        reason: `Stolen by ${message.author.tag}`,
-        actorId: message.author.id,
-      });
+      const removed = client.economy.removeCrowns(
+        message.guild.id,
+        target.id,
+        amount,
+        {
+          type: 'ecsteal_loss',
+          reason: `Stolen by ${message.author.tag}`,
+          actorId: message.author.id,
+        }
+      );
 
       if (!removed) {
         return message.reply({
@@ -169,16 +232,32 @@ module.exports = {
         });
       }
 
-      client.economy.addCrowns(message.guild.id, message.author.id, amount, {
-        type: 'ecsteal_gain',
-        reason: `Stolen from ${displayName}`,
-        actorId: message.author.id,
-      });
+      client.economy.addCrowns(
+        message.guild.id,
+        message.author.id,
+        amount,
+        {
+          type: 'ecsteal_gain',
+          reason: `Stolen from ${displayName}`,
+          actorId: message.author.id,
+        }
+      );
 
-      setStealImmunity(message.guild.id, target.id, IMMUNITY_MS);
+      setStealImmunity(
+        message.guild.id,
+        target.id,
+        IMMUNITY_MS
+      );
 
-      const newThiefBalance = client.economy.getBalance(message.guild.id, message.author.id);
-      const newTargetBalance = client.economy.getBalance(message.guild.id, target.id);
+      const newThiefBalance = client.economy.getBalance(
+        message.guild.id,
+        message.author.id
+      );
+
+      const newTargetBalance = client.economy.getBalance(
+        message.guild.id,
+        target.id
+      );
 
       return message.reply({
         embeds: [
@@ -194,14 +273,20 @@ module.exports = {
       });
     }
 
+    // FAILURE
     const lossPct = pickPercent(0.15, 0.25);
     const amount = Math.max(1, Math.floor(thiefBalance * lossPct));
 
-    const removed = client.economy.removeCrowns(message.guild.id, message.author.id, amount, {
-      type: 'ecsteal_fail',
-      reason: `Failed steal against ${displayName}`,
-      actorId: message.author.id,
-    });
+    const removed = client.economy.removeCrowns(
+      message.guild.id,
+      message.author.id,
+      amount,
+      {
+        type: 'ecsteal_fail',
+        reason: `Failed steal against ${displayName}`,
+        actorId: message.author.id,
+      }
+    );
 
     if (!removed) {
       return message.reply({
@@ -214,9 +299,16 @@ module.exports = {
       });
     }
 
-    setStealImmunity(message.guild.id, target.id, IMMUNITY_MS);
+    setStealImmunity(
+      message.guild.id,
+      target.id,
+      IMMUNITY_MS
+    );
 
-    const newThiefBalance = client.economy.getBalance(message.guild.id, message.author.id);
+    const newThiefBalance = client.economy.getBalance(
+      message.guild.id,
+      message.author.id
+    );
 
     return message.reply({
       embeds: [
