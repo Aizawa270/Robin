@@ -1,111 +1,175 @@
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const {
+  EmbedBuilder,
+  PermissionFlagsBits,
+} = require('discord.js');
+
+const COLOR = '#5865F2';
+
+function makeEmbed(title, description, color = COLOR) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setAuthor({
+      name: 'Automod • Soft blacklist',
+    })
+    .setTitle(title)
+    .setDescription(description)
+    .setTimestamp();
+}
 
 module.exports = {
   name: 'blacklistwordsoft',
   aliases: ['bwsoft'],
-  description: 'Add/remove/list soft blacklist words (silent delete).',
+  description: 'Add, remove, or list soft blacklist words.',
   category: 'automod',
   hidden: true,
   usage: '$blacklistwordsoft add|remove|list <word>',
+
   async execute(client, message, args) {
     if (!message.guild) return;
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return message.reply('Admins only.');
+
+    if (
+      !message.member?.permissions?.has(
+        PermissionFlagsBits.Administrator
+      )
+    ) {
+      return message.reply(
+        'You need the **Administrator** permission to manage the soft blacklist.'
+      );
     }
 
-    // Check if automod is initialized
     if (!client.automod) {
-      return message.reply('Automod system not initialized. Please restart the bot.');
+      return message.reply(
+        'Automod is not initialized. Please restart the bot.'
+      );
     }
 
-    const sub = (args.shift() || '').toLowerCase();
+    const sub = String(args.shift() || '').toLowerCase();
+
+    const prefix = client.getPrefix
+      ? client.getPrefix(message.guild.id)
+      : '$';
+
     if (!['add', 'remove', 'list'].includes(sub)) {
-      return message.reply('Usage: `$blacklistwordsoft add|remove|list <word>`');
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            'Soft blacklist usage',
+            [
+              `\`${prefix}blacklistwordsoft add <word>\``,
+              `\`${prefix}blacklistwordsoft remove <word>\``,
+              `\`${prefix}blacklistwordsoft list\``,
+            ].join('\n')
+          ),
+        ],
+      });
     }
-
-    // Get dynamic prefix
-    const prefix = client.getPrefix ? client.getPrefix(message.guild.id) : '$';
-
-    if (sub === 'list') {
-      try {
-        const words = client.automod.listSoftWords(message.guild.id);
-        
-        const embed = new EmbedBuilder()
-          .setColor('#f59e0b')
-          .setTitle('🔇 Soft Blacklist Words')
-          .setDescription(words.length ? 
-            `**Silent deletion (no timeout):**\n\`\`\`\n${words.join(', ')}\n\`\`\`` : 
-            'No soft blacklist words set.')
-          .setFooter({ text: `Use ${prefix}blacklistwordsoft add <word> to add words` })
-          .setTimestamp();
-
-        return message.reply({ embeds: [embed] });
-      } catch (error) {
-        console.error('Error listing soft words:', error);
-        return message.reply('Failed to list soft blacklist words.');
-      }
-    }
-
-    const word = args.join(' ').trim();
-    if (!word) return message.reply('Provide a word.');
 
     try {
-      if (sub === 'add') {
-        console.log(`[SoftWord] Adding "${word}" to guild ${message.guild.id}`);
-        const success = client.automod.addSoftWord(message.guild.id, word);
-        
-        if (!success) {
-          return message.reply('Failed to save word to database.');
+      if (sub === 'list') {
+        const words = client.automod.listSoftWords(
+          message.guild.id
+        );
+
+        if (!words.length) {
+          return message.reply({
+            embeds: [
+              makeEmbed(
+                'Soft blacklist',
+                'No soft blacklist entries are configured.'
+              ),
+            ],
+          });
         }
 
-        // Verify word was added
-        setTimeout(() => {
-          try {
-            const verifyWords = client.automod.listSoftWords(message.guild.id);
-            const wasAdded = verifyWords.some(w => w.toLowerCase() === word.toLowerCase());
-            console.log(`[SoftWord] Verification: "${word}" ${wasAdded ? 'WAS' : 'WAS NOT'} added to database`);
-          } catch (verifyError) {
-            console.error('[SoftWord] Verification error:', verifyError);
-          }
-        }, 500);
+        const content = words
+          .join('\n')
+          .replace(/```/g, "'''")
+          .slice(0, 3500);
 
-        const embed = new EmbedBuilder()
-          .setColor('#22c55e')
-          .setTitle('✅ Soft Word Added')
-          .setDescription(`\`${word}\` will now be silently deleted (no timeout).`)
-          .addFields(
-            { name: 'Word', value: `\`${word}\``, inline: true },
-            { name: 'Action', value: 'Silent deletion', inline: true }
-          )
-          .setTimestamp()
-          .setFooter({ text: `Added by ${message.author.tag}` });
-
-        return message.reply({ embeds: [embed] });
-
-      } else { // remove
-        console.log(`[SoftWord] Removing "${word}" from guild ${message.guild.id}`);
-        const success = client.automod.removeSoftWord(message.guild.id, word);
-        
-        if (!success) {
-          return message.reply('Failed to remove word from database.');
-        }
-
-        const embed = new EmbedBuilder()
-          .setColor('#ef4444')
-          .setTitle('❌ Soft Word Removed')
-          .setDescription(`\`${word}\` will no longer be silently deleted.`)
-          .addFields(
-            { name: 'Word', value: `\`${word}\``, inline: true },
-            { name: 'Action', value: 'Removed from blacklist', inline: true }
-          )
-          .setTimestamp()
-          .setFooter({ text: `Removed by ${message.author.tag}` });
-
-        return message.reply({ embeds: [embed] });
+        return message.reply({
+          embeds: [
+            makeEmbed(
+              `Soft blacklist · ${words.length}`,
+              [
+                'Messages containing these words are silently deleted without a timeout or staff alert.',
+                '',
+                `\`\`\`\n${content}\n\`\`\``,
+              ].join('\n')
+            ),
+          ],
+        });
       }
+
+      const word = args.join(' ').trim();
+
+      if (!word) {
+        return message.reply(
+          `Provide a word. Example: \`${prefix}blacklistwordsoft ${sub} example\``
+        );
+      }
+
+      if (sub === 'add') {
+        const success = client.automod.addSoftWord(
+          message.guild.id,
+          word
+        );
+
+        if (!success) {
+          return message.reply(
+            'The word could not be saved.'
+          );
+        }
+
+        return message.reply({
+          embeds: [
+            makeEmbed(
+              'Soft blacklist updated',
+              [
+                `**Entry:** \`${word.slice(0, 200)}\``,
+                '**Action:** Silent message deletion',
+                '**Timeout:** None',
+                '**Staff alert:** None',
+                '',
+                'This word is now monitored by automod.',
+              ].join('\n'),
+              '#3BA55D'
+            ),
+          ],
+        });
+      }
+
+      const success = client.automod.removeSoftWord(
+        message.guild.id,
+        word
+      );
+
+      if (!success) {
+        return message.reply(
+          'The word could not be removed.'
+        );
+      }
+
+      return message.reply({
+        embeds: [
+          makeEmbed(
+            'Soft blacklist updated',
+            [
+              `**Entry:** \`${word.slice(0, 200)}\``,
+              '**Status:** Removed',
+              '',
+              'This word will no longer trigger the soft blacklist.',
+            ].join('\n'),
+            '#ED4245'
+          ),
+        ],
+      });
+
     } catch (error) {
-      console.error(`Error ${sub}ing soft word:`, error);
-      return message.reply(`Failed to ${sub} soft blacklist word. Check console for details.`);
+      console.error('[Soft Blacklist] Command error:', error);
+
+      return message.reply(
+        'Something went wrong while updating the soft blacklist.'
+      );
     }
   },
 };
