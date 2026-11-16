@@ -1,11 +1,45 @@
+'use strict';
+
 const universalHelper = require('./universalHelper');
+const economy = require('./economy');
+
 const fs = require('fs');
 const path = require('path');
+
 const { Collection, EmbedBuilder } = require('discord.js');
 
 // ============================================================
+// ECONOMY REGISTRATION SETTINGS
+// ============================================================
+
+const ECONOMY_CATEGORIES = new Set([
+  'economy',
+  'gambling',
+  'casino',
+  'farm',
+  'farming',
+  'work',
+  'jobs',
+  'shop',
+  'bank',
+  'currency',
+  'clan',
+  'clans',
+]);
+
+function requiresEconomyRegistration(command) {
+  if (command?.requiresEconomyRegistration === false) return false;
+  if (command?.requiresEconomyRegistration === true) return true;
+
+  const category = String(command?.category || '')
+    .toLowerCase()
+    .trim();
+
+  return ECONOMY_CATEGORIES.has(category);
+}
+
+// ============================================================
 // STRIP REPLIED-TO USER FROM MENTIONS
-// Prevents reply mentions from being treated as normal mentions
 // ============================================================
 
 function stripReplyMentions(message) {
@@ -38,7 +72,6 @@ function loadCommands(client) {
 
   for (const entry of entries) {
     const entryPath = path.join(commandsPath, entry);
-
     let stat;
 
     try {
@@ -53,21 +86,18 @@ function loadCommands(client) {
         const command = require(entryPath);
         registerCommand(client, command, entryPath);
       } catch (error) {
-        client.brokenCommands.push({
-          file: entryPath,
-          error,
-        });
+        client.brokenCommands.push({ file: entryPath, error });
       }
-
       continue;
     }
 
     if (!stat.isDirectory()) continue;
 
     let files;
-
     try {
-      files = fs.readdirSync(entryPath).filter(file => file.endsWith('.js')).sort();
+      files = fs.readdirSync(entryPath)
+        .filter(file => file.endsWith('.js'))
+        .sort();
     } catch (error) {
       console.error(`[Commands] Could not read category: ${entryPath}`, error);
       continue;
@@ -75,15 +105,11 @@ function loadCommands(client) {
 
     for (const file of files) {
       const filePath = path.join(entryPath, file);
-
       try {
         const command = require(filePath);
         registerCommand(client, command, filePath);
       } catch (error) {
-        client.brokenCommands.push({
-          file: filePath,
-          error,
-        });
+        client.brokenCommands.push({ file: filePath, error });
       }
     }
   }
@@ -100,9 +126,7 @@ function loadCommands(client) {
     for (const broken of client.brokenCommands) {
       console.error(`\n[Broken Command] ${broken.file}`);
       console.error(
-        broken.error?.stack ||
-        broken.error?.message ||
-        broken.error
+        broken.error?.stack || broken.error?.message || broken.error
       );
     }
   }
@@ -162,7 +186,8 @@ function registerCommand(client, command, filePath) {
 // ============================================================
 
 function getCurrentPrefix(client, guildId) {
-  return client.getPrefix(guildId) || '$';
+  if (!guildId) return '$';
+  return client.getPrefix?.(guildId) || '$';
 }
 
 // ============================================================
@@ -170,9 +195,7 @@ function getCurrentPrefix(client, guildId) {
 // ============================================================
 
 async function checkBotBlacklist(client, message) {
-  if (!client.botBlacklist?.has(message.author.id)) {
-    return false;
-  }
+  if (!client.botBlacklist?.has(message.author.id)) return false;
 
   const embed = new EmbedBuilder()
     .setColor('#ff0000')
@@ -181,6 +204,78 @@ async function checkBotBlacklist(client, message) {
     .setFooter({
       text: 'Contact the server owner if you think this is a mistake.',
     });
+
+  await message.reply({ embeds: [embed] }).catch(() => {});
+  return true;
+}
+
+// ============================================================
+// ECONOMY REGISTRATION CHECK
+// ============================================================
+
+async function checkEconomyRegistration(client, message, command) {
+  if (!message.guild) return false;
+
+  // Registration must always remain available.
+  if (String(command?.name || '').toLowerCase() === 'register') {
+    return false;
+  }
+
+  if (!requiresEconomyRegistration(command)) return false;
+
+  const economySystem = client.economy || economy;
+
+  if (typeof economySystem.isRegistered !== 'function') {
+    const embed = new EmbedBuilder()
+      .setColor('#5b0000')
+      .setTitle('Economy Unavailable')
+      .setDescription(
+        'The economy system is currently unavailable. Please try again later.'
+      );
+
+    await message.reply({ embeds: [embed] }).catch(() => {});
+    return true;
+  }
+
+  let registered = false;
+  try {
+    registered = economySystem.isRegistered(
+      message.guild.id,
+      message.author.id
+    );
+  } catch (error) {
+    console.error('[Economy Registration] Lookup failed:', error);
+
+    await message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor('#5b0000')
+          .setTitle('Economy Unavailable')
+          .setDescription(
+            'I could not check your economy registration. Please try again later.'
+          ),
+      ],
+    }).catch(() => {});
+
+    return true;
+  }
+
+  if (registered) return false;
+
+  const prefix = message.prefix || getCurrentPrefix(
+    client,
+    message.guild.id
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor('#5b0000')
+    .setTitle('Registration Required')
+    .setDescription(
+      `You haven't registered for the economy yet!\n\n` +
+      `Register to get started with **\`${prefix}register\`** and receive **5,000 Crowns**.`
+    )
+    .setThumbnail(message.author.displayAvatarURL({ size: 256 }))
+    .setTimestamp();
 
   await message.reply({ embeds: [embed] }).catch(() => {});
   return true;
@@ -196,10 +291,14 @@ function prepareMessage(client, message, command) {
   message.prefix = prefix;
   message.commandName = command.name;
 
-  message.createEmbed = (opts) => universalHelper.createEmbed(client, message, opts);
+  message.createEmbed = opts =>
+    universalHelper.createEmbed(client, message, opts);
 
-  message.resolveUser = (input) => universalHelper.resolveUser(client, message, input);
-  message.resolveMember = (input) => universalHelper.resolveMember(client, message, input);
+  message.resolveUser = input =>
+    universalHelper.resolveUser(client, message, input);
+
+  message.resolveMember = input =>
+    universalHelper.resolveMember(client, message, input);
 
   universalHelper.patchMessageReply(message);
 }
@@ -212,11 +311,21 @@ async function executeCommand(client, message, command, args) {
   prepareMessage(client, message, command);
 
   try {
+    const blocked = await checkEconomyRegistration(
+      client,
+      message,
+      command
+    );
+
+    if (blocked) return;
+
     await command.execute(client, message, args);
   } catch (error) {
     console.error(`[Command Error] ${command.name}`, error);
 
-    await message.reply('Something went wrong while running that command.').catch(() => {});
+    await message.reply(
+      'Something went wrong while running that command.'
+    ).catch(() => {});
   }
 }
 
@@ -225,7 +334,7 @@ async function executeCommand(client, message, command, args) {
 // ============================================================
 
 async function handleMessage(client, message) {
-  if (message.author.bot) return;
+  if (!message?.author || message.author.bot) return;
 
   stripReplyMentions(message);
 
@@ -233,16 +342,17 @@ async function handleMessage(client, message) {
   if (!content) return;
 
   const prefix = getCurrentPrefix(client, message.guild?.id);
-  const isPrefixed = content.startsWith(prefix);
+  const isPrefixed = Boolean(prefix) && content.startsWith(prefix);
 
-  const isPrefixless =
+  const isPrefixless = Boolean(
     message.guild &&
     !isPrefixed &&
     (
       typeof client.isPrefixless === 'function'
         ? client.isPrefixless(message.guild.id, message.author.id)
         : client.prefixless?.has(message.author.id)
-    );
+    )
+  );
 
   if (isPrefixless) {
     const parts = content.split(/\s+/);
@@ -283,5 +393,7 @@ module.exports = {
   loadCommands,
   handleMessage,
   prepareMessage,
-  executeCommand
+  executeCommand,
+  requiresEconomyRegistration,
+  checkEconomyRegistration,
 };
