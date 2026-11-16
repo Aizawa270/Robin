@@ -1,4 +1,3 @@
-
 'use strict';
 
 const path = require('path');
@@ -17,9 +16,14 @@ const clan = require('../../handlers/clanService');
 const invites = require('../../handlers/clanInvites');
 const economy = require('../../handlers/economy');
 const CFG = require('../../handlers/clanConfig');
+const clanTags = require('../../handlers/clanTags');
 
 const RED = CFG.COLOR || '#5b0000';
 const ICON = key => String(CFG.ICONS?.[key] || '').trim();
+
+// ============================================================
+// HELPERS
+// ============================================================
 
 function prefixFor(client, guildId) {
   try {
@@ -31,25 +35,63 @@ function prefixFor(client, guildId) {
   }
 }
 
-// ------------------------------------------------------------
-// General embeds for normal clan commands.
-// Clan info deliberately uses its own direct EmbedBuilder below.
-// ------------------------------------------------------------
+async function syncTagMember(client, guildId, userId) {
+  try {
+    await clanTags.syncMember(
+      client,
+      guildId,
+      userId
+    );
+  } catch (error) {
+    console.error(
+      '[Clan] Member tag synchronization failed:',
+      error
+    );
+  }
+}
+
+async function syncTagClan(client, guildId, clanId) {
+  try {
+    await clanTags.syncClan(
+      client,
+      guildId,
+      clanId
+    );
+  } catch (error) {
+    console.error(
+      '[Clan] Clan tag synchronization failed:',
+      error
+    );
+  }
+}
+
+// ============================================================
+// GENERAL EMBEDS
+// ============================================================
 
 function baseEmbed(message, title, description) {
   const embed = new EmbedBuilder()
     .setColor(RED)
     .setTimestamp();
 
-  if (title) embed.setTitle(title);
-  if (description) embed.setDescription(description);
+  if (title) {
+    embed.setTitle(title);
+  }
+
+  if (description) {
+    embed.setDescription(description);
+  }
 
   if (message.guild?.iconURL()) {
-    embed.setThumbnail(message.guild.iconURL({ size: 256 }));
+    embed.setThumbnail(
+      message.guild.iconURL({ size: 256 })
+    );
   }
 
   const footer = {
-    text: `${message.guild?.name || 'Vanessa'} • Requested by ${message.author?.username || 'user'}`,
+    text:
+      `${message.guild?.name || 'Vanessa'} • ` +
+      `Requested by ${message.author?.username || 'user'}`,
   };
 
   const avatar = message.author?.displayAvatarURL?.();
@@ -65,13 +107,17 @@ function baseEmbed(message, title, description) {
 
 function replyEmbed(message, title, description, extra = {}) {
   return message.reply({
-    embeds: [baseEmbed(message, title, description)],
+    embeds: [
+      baseEmbed(message, title, description),
+    ],
     ...extra,
   });
 }
 
 function money(amount) {
-  return economy.formatCurrency(Number(amount || 0));
+  return economy.formatCurrency(
+    Number(amount || 0)
+  );
 }
 
 function shortMoney(amount) {
@@ -95,16 +141,26 @@ function shortMoney(amount) {
 function progressBar(percent, size = 16) {
   const filled = Math.max(
     0,
-    Math.min(size, Math.round((Number(percent) || 0) / 100 * size))
+    Math.min(
+      size,
+      Math.round(
+        (Number(percent) || 0) / 100 * size
+      )
+    )
   );
 
-  return `${'█'.repeat(filled)}${'░'.repeat(size - filled)}`;
+  return (
+    '█'.repeat(filled) +
+    '░'.repeat(size - filled)
+  );
 }
 
 function parseUserId(message, raw) {
   const mentioned = message.mentions?.users?.first?.();
 
-  if (mentioned) return mentioned.id;
+  if (mentioned) {
+    return mentioned.id;
+  }
 
   const text = String(raw || '').trim();
 
@@ -118,39 +174,50 @@ function parseUserId(message, raw) {
 async function resolveTarget(message, raw) {
   const id = parseUserId(message, raw);
 
-  if (!id) return null;
+  if (!id) {
+    return null;
+  }
 
   return message.guild.members.fetch(id).catch(() => null);
 }
 
 function getClanMembers(clanId) {
   return economy.db.prepare(`
-    SELECT user_id, rank_no, total_deposited, joined_at, last_deposit_at
+    SELECT
+      user_id,
+      rank_no,
+      total_deposited,
+      joined_at,
+      last_deposit_at
+
     FROM clan_members
+
     WHERE clan_id = ?
-    ORDER BY rank_no DESC, joined_at ASC, user_id ASC
+
+    ORDER BY
+      rank_no DESC,
+      joined_at ASC,
+      user_id ASC
   `).all(Number(clanId));
 }
 
-// ------------------------------------------------------------
-// Clan logo
-//
-// Uploaded logo: attachment URL used as thumbnail.
-// Custom emoji: Discord CDN URL used as thumbnail.
-// Unicode emoji: no image URL, so no emoji text is added
-// to the clan name.
-// ------------------------------------------------------------
+// ============================================================
+// CLAN LOGO
+// ============================================================
 
 function clanLogo(clanRow) {
   if (clanRow.logo_file) {
-    const filePath = clan.mediaPath(clanRow.logo_file);
+    const filePath = clan.mediaPath(
+      clanRow.logo_file
+    );
 
     if (filePath) {
       const fileName = path.basename(filePath);
 
-      const file = new AttachmentBuilder(filePath, {
-        name: fileName,
-      });
+      const file = new AttachmentBuilder(
+        filePath,
+        { name: fileName }
+      );
 
       return {
         file,
@@ -160,7 +227,9 @@ function clanLogo(clanRow) {
   }
 
   if (clanRow.logo_emoji) {
-    const parsed = clan.parseEmoji(clanRow.logo_emoji);
+    const parsed = clan.parseEmoji(
+      clanRow.logo_emoji
+    );
 
     if (parsed?.url) {
       return {
@@ -176,32 +245,31 @@ function clanLogo(clanRow) {
   };
 }
 
-// ------------------------------------------------------------
-// Clan info embed colour
-//
-// This does NOT use baseEmbed(), message.createEmbed(),
-// universalHelper, or the patched message.reply() method.
-//
-// It reads the saved colour directly from economy.sqlite
-// and converts it to a numeric Discord Embed colour.
-// ------------------------------------------------------------
+// ============================================================
+// CLAN INFO EMBED COLOUR
+// ============================================================
 
 function getClanEmbedColor(clanId, guildId) {
   const row = economy.db.prepare(`
     SELECT embed_color
     FROM clans
-    WHERE id = ? AND guild_id = ?
+    WHERE id = ?
+      AND guild_id = ?
     LIMIT 1
   `).get(
     Number(clanId),
     String(guildId)
   );
 
-  const saved = String(row?.embed_color || '').trim();
+  const saved = String(
+    row?.embed_color || ''
+  ).trim();
 
   if (/^#?[0-9a-fA-F]{6}$/.test(saved)) {
-    const normalized = saved.replace(/^#/, '');
-    return Number.parseInt(normalized, 16);
+    return Number.parseInt(
+      saved.replace(/^#/, ''),
+      16
+    );
   }
 
   const fallback = String(RED).trim();
@@ -216,17 +284,16 @@ function getClanEmbedColor(clanId, guildId) {
   return 0x5b0000;
 }
 
-// ------------------------------------------------------------
-// Clan info
-// ------------------------------------------------------------
+// ============================================================
+// CLAN INFO
+// ============================================================
 
 async function sendClanInfo(message, clanRow) {
-  // Always fetch the latest saved clan data.
-  // This prevents an old clan object from showing an old hex.
   const latestClan = economy.db.prepare(`
     SELECT *
     FROM clans
-    WHERE id = ? AND guild_id = ?
+    WHERE id = ?
+      AND guild_id = ?
     LIMIT 1
   `).get(
     Number(clanRow.id),
@@ -245,11 +312,15 @@ async function sendClanInfo(message, clanRow) {
   const logo = clanLogo(data.clan);
 
   const embed = new EmbedBuilder()
-    .setColor(getClanEmbedColor(data.clan.id, message.guild.id))
+    .setColor(
+      getClanEmbedColor(
+        data.clan.id,
+        message.guild.id
+      )
+    )
     .setTitle(data.clan.name)
     .setTimestamp();
 
-  // Top-right clan logo thumbnail.
   if (logo.thumbnailURL) {
     embed.setThumbnail(logo.thumbnailURL);
   } else if (message.guild?.iconURL()) {
@@ -264,23 +335,30 @@ async function sendClanInfo(message, clanRow) {
     files.push(logo.file);
   }
 
-  const members = getClanMembers(data.clan.id);
+  const members = getClanMembers(
+    data.clan.id
+  );
 
-  const byRank = rank =>
-    members
-      .filter(member => Number(member.rank_no) === rank)
-      .map(member => `<@${member.user_id}>`);
+  const byRank = rank => members
+    .filter(member => Number(member.rank_no) === rank)
+    .map(member => `<@${member.user_id}>`);
 
   const roster = byRank(clan.RANK.MEMBER);
 
   const rosterText = roster.length
-    ? `${roster.slice(0, 18).join('\n')}${roster.length > 18 ? `\n*+${roster.length - 18} more*` : ''}`
+    ? (
+        `${roster.slice(0, 18).join('\n')}` +
+        `${roster.length > 18
+          ? `\n*+${roster.length - 18} more*`
+          : ''}`
+      )
     : '—';
 
   const donorText = data.donors.length
     ? data.donors
         .map((donor, index) =>
-          `**${index + 1}.** <@${donor.user_id}> — **${money(donor.total_deposited)}**`
+          `**${index + 1}.** <@${donor.user_id}> — ` +
+          `**${money(donor.total_deposited)}**`
         )
         .join('\n')
     : 'No donors yet.';
@@ -318,7 +396,9 @@ async function sendClanInfo(message, clanRow) {
       inline: true,
     },
     {
-      name: `${ICON('members')} Members (${data.memberCount}/${data.capacity})`,
+      name:
+        `${ICON('members')} Members ` +
+        `(${data.memberCount}/${data.capacity})`,
       value: rosterText,
       inline: true,
     },
@@ -328,10 +408,16 @@ async function sendClanInfo(message, clanRow) {
       inline: false,
     },
     {
-      name: `${ICON('level')} Clan Level ${data.clan.level}`,
-      value: data.clan.level >= CFG.MAX_LEVEL
-        ? '**MAX LEVEL**'
-        : `**${pct}%**  ${progressBar(pct)}\n${xp.toLocaleString('en-US')} / ${needed.toLocaleString('en-US')} XP`,
+      name:
+        `${ICON('level')} Clan Level ${data.clan.level}`,
+      value:
+        data.clan.level >= CFG.MAX_LEVEL
+          ? '**MAX LEVEL**'
+          : (
+              `**${pct}%**  ${progressBar(pct)}\n` +
+              `${xp.toLocaleString('en-US')} / ` +
+              `${needed.toLocaleString('en-US')} XP`
+            ),
       inline: false,
     }
   );
@@ -347,21 +433,24 @@ async function sendClanInfo(message, clanRow) {
     });
   }
 
-  // Banner remains the large image at the bottom.
-  // It is separate from the top-right clan logo thumbnail.
   if (data.clan.banner_file) {
-    const bannerPath = clan.mediaPath(data.clan.banner_file);
+    const bannerPath = clan.mediaPath(
+      data.clan.banner_file
+    );
 
     if (bannerPath) {
       const bannerName = path.basename(bannerPath);
 
       files.push(
-        new AttachmentBuilder(bannerPath, {
-          name: bannerName,
-        })
+        new AttachmentBuilder(
+          bannerPath,
+          { name: bannerName }
+        )
       );
 
-      embed.setImage(`attachment://${bannerName}`);
+      embed.setImage(
+        `attachment://${bannerName}`
+      );
     }
   }
 
@@ -371,7 +460,8 @@ async function sendClanInfo(message, clanRow) {
       `Requested by ${message.author.username}`,
   };
 
-  const requesterAvatar = message.author.displayAvatarURL?.();
+  const requesterAvatar =
+    message.author.displayAvatarURL?.();
 
   if (requesterAvatar) {
     footer.iconURL = requesterAvatar;
@@ -379,7 +469,6 @@ async function sendClanInfo(message, clanRow) {
 
   embed.setFooter(footer);
 
-  // Send directly through the channel to bypass patched message.reply.
   return message.channel.send({
     embeds: [embed],
     files,
@@ -390,9 +479,9 @@ async function sendClanInfo(message, clanRow) {
   });
 }
 
-// ------------------------------------------------------------
-// Clan profile
-// ------------------------------------------------------------
+// ============================================================
+// CLAN PROFILE
+// ============================================================
 
 async function sendProfile(message) {
   const found = clan.getMembership(
@@ -415,10 +504,8 @@ async function sendProfile(message) {
   const description =
     `${ICON('clan')} **Clan**\n` +
     `↳ ${found.clan.name}\n\n` +
-
     `${ICON('rank')} **Rank**\n` +
     `↳ ${clan.RANK_NAMES[found.member.rank_no]}\n\n` +
-
     `${ICON('contributions')} **Contributions**\n` +
     `↳ ${money(found.member.total_deposited)}`;
 
@@ -435,31 +522,18 @@ async function sendProfile(message) {
   });
 }
 
-// ------------------------------------------------------------
-// Clan user profile reset
-//
-// Clears only the selected member's personal clan data.
-//
-// Preserved:
-// - Membership
-// - Rank
-// - Joined date
-// - Clan vault
-// - Clan XP and level
-// - Clan upgrades
-// - Already completed shared quest rewards
-//
-// Reset:
-// - Member contribution total
-// - Member donor leaderboard entry
-// - Member deposit history
-// - Member daily activity
-// - Member quest actor records
-// ------------------------------------------------------------
+// ============================================================
+// CLAN DAY KEY
+// ============================================================
 
 function clanDayKey(timestamp = Date.now()) {
-  const offset = Number(CFG.TZ_OFFSET_MS || 0);
-  const date = new Date(timestamp + offset);
+  const offset = Number(
+    CFG.TZ_OFFSET_MS || 0
+  );
+
+  const date = new Date(
+    timestamp + offset
+  );
 
   return (
     `${date.getUTCFullYear()}-` +
@@ -467,6 +541,10 @@ function clanDayKey(timestamp = Date.now()) {
     `${String(date.getUTCDate()).padStart(2, '0')}`
   );
 }
+
+// ============================================================
+// RESET USER PROFILE
+// ============================================================
 
 const resetClanUserTx = economy.db.transaction(
   (guildId, userId, now) => {
@@ -476,12 +554,20 @@ const resetClanUserTx = economy.db.transaction(
       SELECT
         m.*,
         c.name AS clan_name
+
       FROM clan_members m
-      JOIN clans c ON c.id = m.clan_id
+
+      JOIN clans c
+        ON c.id = m.clan_id
+
       WHERE m.guild_id = ?
         AND m.user_id = ?
+
       LIMIT 1
-    `).get(guildId, userId);
+    `).get(
+      guildId,
+      userId
+    );
 
     if (!member) {
       throw new clan.ClanError(
@@ -490,45 +576,63 @@ const resetClanUserTx = economy.db.transaction(
     }
 
     const clanId = Number(member.clan_id);
-    const oldContribution = Number(member.total_deposited || 0);
+    const oldContribution = Number(
+      member.total_deposited || 0
+    );
 
     const deposits = db.prepare(`
       DELETE FROM clan_deposits
       WHERE clan_id = ?
         AND guild_id = ?
         AND user_id = ?
-    `).run(clanId, guildId, userId);
+    `).run(
+      clanId,
+      guildId,
+      userId
+    );
 
     const donors = db.prepare(`
       DELETE FROM clan_donors
       WHERE clan_id = ?
         AND user_id = ?
-    `).run(clanId, userId);
+    `).run(
+      clanId,
+      userId
+    );
 
     const activity = db.prepare(`
       DELETE FROM clan_daily_stats
       WHERE clan_id = ?
         AND user_id = ?
-    `).run(clanId, userId);
+    `).run(
+      clanId,
+      userId
+    );
 
     const questActors = db.prepare(`
       DELETE FROM clan_quest_actors
       WHERE clan_id = ?
         AND user_id = ?
-    `).run(clanId, userId);
+    `).run(
+      clanId,
+      userId
+    );
 
-    // Keep clan_id, rank_no and joined_at exactly as they are.
-    // Reset last_deposit_at to now to prevent an immediate
-    // inactivity kick after an administrative profile reset.
     const memberUpdate = db.prepare(`
       UPDATE clan_members
       SET
         total_deposited = 0,
         last_deposit_at = ?
+
       WHERE guild_id = ?
         AND user_id = ?
         AND clan_id = ?
-    `).run(now, guildId, userId, clanId);
+    `).run(
+      now,
+      guildId,
+      userId,
+      clanId
+    );
 
     if (memberUpdate.changes !== 1) {
       throw new Error(
@@ -536,8 +640,6 @@ const resetClanUserTx = economy.db.transaction(
       );
     }
 
-    // Recalculate today's unfinished quests using the remaining
-    // members' activity. Completed shared rewards are not reversed.
     const dayKey = clanDayKey(now);
 
     const openQuests = db.prepare(`
@@ -546,7 +648,10 @@ const resetClanUserTx = economy.db.transaction(
       WHERE clan_id = ?
         AND day_key = ?
         AND done = 0
-    `).all(clanId, dayKey);
+    `).all(
+      clanId,
+      dayKey
+    );
 
     const getSum = db.prepare(`
       SELECT COALESCE(SUM(value), 0) AS n
@@ -579,9 +684,13 @@ const resetClanUserTx = economy.db.transaction(
         item => item.id === quest.kind
       );
 
-      if (!definition) continue;
+      if (!definition) {
+        continue;
+      }
 
-      let progress = Number(quest.progress || 0);
+      let progress = Number(
+        quest.progress || 0
+      );
 
       if (definition.type === 'sum') {
         progress = Number(
@@ -601,8 +710,6 @@ const resetClanUserTx = economy.db.transaction(
           ).n || 0
         );
       } else if (definition.type === 'streak') {
-        // Streaks are stored at clan/game level, not per-user.
-        // Do not erase a clan-wide streak when resetting one member.
         continue;
       }
 
@@ -640,9 +747,9 @@ function resetClanUserProfile(guildId, userId) {
   );
 }
 
-// ------------------------------------------------------------
-// Clan user reset confirmation
-// ------------------------------------------------------------
+// ============================================================
+// RESET CONFIRMATION
+// ============================================================
 
 async function confirmClanUserReset(message, target) {
   const guildId = String(message.guild.id);
@@ -662,6 +769,7 @@ async function confirmClanUserReset(message, target) {
   }
 
   const clanName = found.clan.name;
+
   const contribution = Number(
     found.member.total_deposited || 0
   );
@@ -741,7 +849,9 @@ async function confirmClanUserReset(message, target) {
       return;
     }
 
-    if (interaction.customId !== confirmId) return;
+    if (interaction.customId !== confirmId) {
+      return;
+    }
 
     try {
       const result = resetClanUserProfile(
@@ -769,7 +879,10 @@ async function confirmClanUserReset(message, target) {
       }).catch(() => {});
 
     } catch (error) {
-      console.error('[Clan] User profile reset failed:', error);
+      console.error(
+        '[Clan] User profile reset failed:',
+        error
+      );
 
       collector.stop('completed');
 
@@ -788,7 +901,9 @@ async function confirmClanUserReset(message, target) {
   });
 
   collector.on('end', async (_collected, reason) => {
-    if (reason === 'completed') return;
+    if (reason === 'completed') {
+      return;
+    }
 
     const expired = baseEmbed(
       message,
@@ -805,14 +920,9 @@ async function confirmClanUserReset(message, target) {
   return prompt;
 }
 
-// ------------------------------------------------------------
-// Clan leadership transfer
-//
-// The active clan Owner becomes a Co-owner.
-// The selected existing clan member becomes the new Owner.
-//
-// The transaction verifies ownership again at confirmation time.
-// ------------------------------------------------------------
+// ============================================================
+// LEADERSHIP TRANSFER
+// ============================================================
 
 const transferClanLeadershipTx = economy.db.transaction(
   (guildId, actorId, targetId) => {
@@ -824,12 +934,20 @@ const transferClanLeadershipTx = economy.db.transaction(
         m.rank_no,
         c.name AS clan_name,
         c.owner_id
+
       FROM clan_members m
-      JOIN clans c ON c.id = m.clan_id
+
+      JOIN clans c
+        ON c.id = m.clan_id
+
       WHERE m.guild_id = ?
         AND m.user_id = ?
+
       LIMIT 1
-    `).get(guildId, actorId);
+    `).get(
+      guildId,
+      actorId
+    );
 
     if (
       !currentOwner ||
@@ -856,7 +974,11 @@ const transferClanLeadershipTx = economy.db.transaction(
         AND user_id = ?
         AND clan_id = ?
       LIMIT 1
-    `).get(guildId, targetId, clanId);
+    `).get(
+      guildId,
+      targetId,
+      clanId
+    );
 
     if (!target) {
       throw new clan.ClanError(
@@ -881,11 +1003,12 @@ const transferClanLeadershipTx = economy.db.transaction(
         FROM clan_members
         WHERE clan_id = ?
           AND rank_no = ?
-      `).get(clanId, clan.RANK.COOWNER)?.n || 0
+      `).get(
+        clanId,
+        clan.RANK.COOWNER
+      )?.n || 0
     );
 
-    // The outgoing Owner becomes a Co-owner. If the target is not
-    // already a Co-owner, make sure this will not exceed the limit.
     if (
       Number(target.rank_no) !== clan.RANK.COOWNER &&
       coOwnerCount >= maxCoOwners
@@ -967,9 +1090,9 @@ function transferClanLeadership(guildId, actorId, targetId) {
   );
 }
 
-// ------------------------------------------------------------
-// Clan leadership transfer confirmation
-// ------------------------------------------------------------
+// ============================================================
+// LEADERSHIP TRANSFER CONFIRMATION
+// ============================================================
 
 async function confirmClanTransfer(message, target, clanRow) {
   const guildId = String(message.guild.id);
@@ -1042,7 +1165,9 @@ async function confirmClanTransfer(message, target, clanRow) {
       return;
     }
 
-    if (interaction.customId !== confirmId) return;
+    if (interaction.customId !== confirmId) {
+      return;
+    }
 
     try {
       const result = transferClanLeadership(
@@ -1069,7 +1194,10 @@ async function confirmClanTransfer(message, target, clanRow) {
       }).catch(() => {});
 
     } catch (error) {
-      console.error('[Clan] Leadership transfer failed:', error);
+      console.error(
+        '[Clan] Leadership transfer failed:',
+        error
+      );
 
       collector.stop('completed');
 
@@ -1089,7 +1217,9 @@ async function confirmClanTransfer(message, target, clanRow) {
   });
 
   collector.on('end', async (_collected, reason) => {
-    if (reason === 'completed') return;
+    if (reason === 'completed') {
+      return;
+    }
 
     const expired = baseEmbed(
       message,
@@ -1106,9 +1236,9 @@ async function confirmClanTransfer(message, target, clanRow) {
   return prompt;
 }
 
-// ------------------------------------------------------------
-// Clan delete confirmation
-// ------------------------------------------------------------
+// ============================================================
+// CLAN DELETION CONFIRMATION
+// ============================================================
 
 async function confirmClanDeletion(message, gid, uid, clanRow) {
   const embed = baseEmbed(
@@ -1171,47 +1301,65 @@ async function confirmClanDeletion(message, gid, uid, clanRow) {
       }).catch(() => {});
 
       collector.stop('completed');
+
       return;
     }
 
-    if (interaction.customId === 'clandelete:confirm') {
-      try {
-        const deleted = clan.deleteClan(gid, uid);
+    if (interaction.customId !== 'clandelete:confirm') {
+      return;
+    }
 
-        const success = baseEmbed(
-          message,
-          'Clan Deleted',
-          `**${deleted.name}** has been permanently deleted.`
-        );
+    try {
+      const deleted = clan.deleteClan(gid, uid);
 
-        success.setColor('#B91C1C');
+      // Restore the nicknames of tracked clan members.
+      await syncTagClan(
+        message.client,
+        gid,
+        deleted.id
+      );
 
-        await interaction.update({
-          embeds: [success],
-          components: [],
-        }).catch(() => {});
+      const success = baseEmbed(
+        message,
+        'Clan Deleted',
+        `**${deleted.name}** has been permanently deleted.`
+      );
 
-      } catch (error) {
-        const failure = baseEmbed(
-          message,
-          'Clan Deletion Failed',
-          error?.name === 'ClanError'
-            ? error.message
-            : 'The clan could not be deleted. Please try again.'
-        );
+      success.setColor('#B91C1C');
 
-        await interaction.update({
-          embeds: [failure],
-          components: [],
-        }).catch(() => {});
-      }
+      await interaction.update({
+        embeds: [success],
+        components: [],
+      }).catch(() => {});
 
+    } catch (error) {
+      console.error(
+        '[Clan] Deletion failed:',
+        error
+      );
+
+      const failure = baseEmbed(
+        message,
+        'Clan Deletion Failed',
+        error?.name === 'ClanError'
+          ? error.message
+          : 'The clan could not be deleted. Please try again.'
+      );
+
+      await interaction.update({
+        embeds: [failure],
+        components: [],
+      }).catch(() => {});
+
+    } finally {
       collector.stop('completed');
     }
   });
 
   collector.on('end', async (_collected, reason) => {
-    if (reason === 'completed') return;
+    if (reason === 'completed') {
+      return;
+    }
 
     await prompt.edit({
       components: [],
@@ -1221,9 +1369,9 @@ async function confirmClanDeletion(message, gid, uid, clanRow) {
   return prompt;
 }
 
-// ------------------------------------------------------------
-// Clan quests
-// ------------------------------------------------------------
+// ============================================================
+// CLAN QUESTS
+// ============================================================
 
 async function sendQuestBoard(message) {
   const board = clan.getQuestBoard(
@@ -1233,7 +1381,10 @@ async function sendQuestBoard(message) {
 
   const lines = board.quests.map(q => {
     const percent = q.target > 0
-      ? Math.min(100, Math.floor(q.progress / q.target * 100))
+      ? Math.min(
+          100,
+          Math.floor(q.progress / q.target * 100)
+        )
       : 100;
 
     const mark = q.done ? '✅' : '◆';
@@ -1241,7 +1392,8 @@ async function sendQuestBoard(message) {
 
     return (
       `${mark} **${label}**  ` +
-      `[${q.progress.toLocaleString('en-US')}/${q.target.toLocaleString('en-US')}]\n` +
+      `[${q.progress.toLocaleString('en-US')}/` +
+      `${q.target.toLocaleString('en-US')}]\n` +
       `└ ${q.tier} • ${money(q.reward_coins)} • ` +
       `${q.reward_xp} XP • ${progressBar(percent, 10)}`
     );
@@ -1253,7 +1405,9 @@ async function sendQuestBoard(message) {
     `Complete the daily quests with your clan!\n\n` +
     `${lines.join('\n\n')}\n\n` +
     `${ICON('trophy')} **Complete all four quests for ${board.bonusXp.toLocaleString('en-US')} bonus XP!**` +
-    (board.bonusClaimed ? '\n✅ Daily bonus already claimed.' : '') +
+    (board.bonusClaimed
+      ? '\n✅ Daily bonus already claimed.'
+      : '') +
     (board.boost
       ? `\n\nActive XP bonus: **+${Math.round(board.boost * 100)}%**`
       : '')
@@ -1264,9 +1418,9 @@ async function sendQuestBoard(message) {
   });
 }
 
-// ------------------------------------------------------------
-// Clan leaderboard
-// ------------------------------------------------------------
+// ============================================================
+// CLAN LEADERBOARD
+// ============================================================
 
 async function sendLeaderboard(message, pageRaw) {
   const page = Math.max(
@@ -1300,7 +1454,8 @@ async function sendLeaderboard(message, pageRaw) {
 
     return (
       `${mark} **${row.name}**\n` +
-      `Vault: **${shortMoney(row.vault)}** • Level **${row.level}**`
+      `Vault: **${shortMoney(row.vault)}** • ` +
+      `Level **${row.level}**`
     );
   }).join('\n\n');
 
@@ -1309,11 +1464,13 @@ async function sendLeaderboard(message, pageRaw) {
     'Clan Leaderboard',
     `${text}\n\n` +
     `${ICON('stats')} **Total Clans:** ${result.total}\n` +
-    `${ICON('crown')} Use \`${prefixFor(message.client, message.guild.id)}clan info <name>\` to view a clan.`
+    `${ICON('crown')} Use \`${prefixFor(message.client, message.guild.id)}clan info\` to view a clan.`
   );
 
   embed.setFooter({
-    text: `Page ${result.page + 1}/${result.pages} • Ranked by vault balance`,
+    text:
+      `Page ${result.page + 1}/${result.pages} • ` +
+      `Ranked by vault balance`,
   });
 
   return message.reply({
@@ -1321,9 +1478,9 @@ async function sendLeaderboard(message, pageRaw) {
   });
 }
 
-// ------------------------------------------------------------
-// Upgrades
-// ------------------------------------------------------------
+// ============================================================
+// CLAN UPGRADES
+// ============================================================
 
 async function sendUpgradeView(message) {
   const view = clan.upgradeView(
@@ -1349,6 +1506,11 @@ async function sendUpgradeView(message) {
     ? `Active: **Tier ${view.booster.tier}** until <t:${Math.floor(view.booster.until / 1000)}:R>`
     : 'No XP Booster is currently active.';
 
+  const prefix = prefixFor(
+    message.client,
+    message.guild.id
+  );
+
   const embed = baseEmbed(
     message,
     `${view.clan.name} — Clan Upgrades`,
@@ -1357,8 +1519,8 @@ async function sendUpgradeView(message) {
     `${active}\n\n` +
     `**XP Boosters**\n${xpLines}\n\n` +
     `**Member Capacity**\n${capLines}\n\n` +
-    `Buy with \`${prefixFor(message.client, message.guild.id)}clan upgrade xp <tier>\` ` +
-    `or \`${prefixFor(message.client, message.guild.id)}clan upgrade capacity\`. ` +
+    `Buy with \`${prefix}clan upgrade xp <tier>\` ` +
+    `or \`${prefix}clan upgrade capacity\`.\n` +
     `Only Co-owner+ can purchase upgrades.`
   );
 
@@ -1367,16 +1529,20 @@ async function sendUpgradeView(message) {
   });
 }
 
-// ------------------------------------------------------------
-// Errors
-// ------------------------------------------------------------
+// ============================================================
+// ERROR HANDLER
+// ============================================================
 
 function handleError(message, error) {
-  console.error('[Clan] Command failed:', error);
+  console.error(
+    '[Clan] Command failed:',
+    error
+  );
 
-  const description = error?.name === 'ClanError'
-    ? error.message
-    : 'The clan system hit an unexpected error. Check the console logs and try again.';
+  const description =
+    error?.name === 'ClanError'
+      ? error.message
+      : 'The clan system hit an unexpected error. Check the console logs and try again.';
 
   return replyEmbed(
     message,
@@ -1385,16 +1551,23 @@ function handleError(message, error) {
   ).catch(() => null);
 }
 
-// ------------------------------------------------------------
-// Button interactions
-// ------------------------------------------------------------
+// ============================================================
+// BUTTON INTERACTIONS
+// ============================================================
 
 async function handleInteraction(client, interaction) {
-  if (!interaction.isButton?.()) return false;
+  if (!interaction.isButton?.()) {
+    return false;
+  }
 
-  const parts = String(interaction.customId || '').split(':');
+  const parts = String(
+    interaction.customId || ''
+  ).split(':');
 
-  if (parts[0] !== 'claninvite' || parts.length !== 3) {
+  if (
+    parts[0] !== 'claninvite' ||
+    parts.length !== 3
+  ) {
     return false;
   }
 
@@ -1402,11 +1575,12 @@ async function handleInteraction(client, interaction) {
   const token = parts[2];
 
   try {
-    const result = action === 'accept'
-      ? invites.accept(token, interaction.user.id)
-      : action === 'reject'
-        ? invites.reject(token, interaction.user.id)
-        : null;
+    const result =
+      action === 'accept'
+        ? invites.accept(token, interaction.user.id)
+        : action === 'reject'
+          ? invites.reject(token, interaction.user.id)
+          : null;
 
     if (!result) {
       await interaction.reply({
@@ -1426,7 +1600,8 @@ async function handleInteraction(client, interaction) {
       };
 
       await interaction.reply({
-        content: messages[result.code] ||
+        content:
+          messages[result.code] ||
           'This invitation is no longer available.',
         ephemeral: true,
       });
@@ -1435,12 +1610,19 @@ async function handleInteraction(client, interaction) {
     }
 
     if (!result.rejected && result.notes) {
-      await clan.announce(interaction.channel, result.notes);
+      await clan.announce(
+        interaction.channel,
+        result.notes
+      );
     }
 
     const embed = new EmbedBuilder()
       .setColor(RED)
-      .setTitle(result.rejected ? 'Invitation Rejected' : 'Clan Joined')
+      .setTitle(
+        result.rejected
+          ? 'Invitation Rejected'
+          : 'Clan Joined'
+      )
       .setDescription(
         result.rejected
           ? 'You rejected the clan invitation.'
@@ -1454,14 +1636,30 @@ async function handleInteraction(client, interaction) {
       content: '',
     });
 
+    // Apply the nickname tag immediately after joining.
+    if (
+      !result.rejected &&
+      interaction.guildId
+    ) {
+      await syncTagMember(
+        client,
+        interaction.guildId,
+        interaction.user.id
+      );
+    }
+
     return true;
 
   } catch (error) {
-    console.error('[Clan] Invitation interaction failed:', error);
+    console.error(
+      '[Clan] Invitation interaction failed:',
+      error
+    );
 
-    const text = error?.name === 'ClanError'
-      ? error.message
-      : 'The invitation could not be processed.';
+    const text =
+      error?.name === 'ClanError'
+        ? error.message
+        : 'The invitation could not be processed.';
 
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
@@ -1474,9 +1672,9 @@ async function handleInteraction(client, interaction) {
   }
 }
 
-// ------------------------------------------------------------
-// Main command
-// ------------------------------------------------------------
+// ============================================================
+// MAIN COMMAND
+// ============================================================
 
 module.exports = {
   name: 'clan',
@@ -1487,24 +1685,39 @@ module.exports = {
   handleInteraction,
 
   async execute(client, message, args) {
-    if (!message.guild) return;
+    if (!message.guild) {
+      return;
+    }
 
-    const sub = String(args[0] || 'help').toLowerCase();
+    // Safe to call repeatedly; clanTags.init prevents duplicates.
+    try {
+      clanTags.init(client);
+    } catch (error) {
+      console.error(
+        '[Clan] Tag initialization failed:',
+        error
+      );
+    }
+
+    const sub = String(
+      args[0] || 'help'
+    ).toLowerCase();
+
     const gid = message.guild.id;
     const uid = message.author.id;
     const prefix = prefixFor(client, gid);
 
     try {
-      // ------------------------------------------------------
-      // Help
-      // ------------------------------------------------------
+      // ======================================================
+      // HELP
+      // ======================================================
 
       if (sub === 'help') {
         const e = baseEmbed(
           message,
           'Clan Commands',
           `**Create / join**\n` +
-          `\`${prefix}shop\` → buy Clan Creation (8,000,000 Crowns)\n` +
+          `\`${prefix}shop\` → buy Clan Creation\n` +
           `\`${prefix}clan name <name>\`\n` +
           `\`${prefix}clan join <name>\`\n` +
           `\`${prefix}clan leave\`\n\n` +
@@ -1515,7 +1728,7 @@ module.exports = {
           `\`${prefix}clan setmanager <@user>\` • \`${prefix}clan removemanager <@user>\`\n` +
           `\`${prefix}clan setsenior <@user>\` • \`${prefix}clan removesenior <@user>\`\n` +
           `\`${prefix}clan resetuser <@user/ID>\` — Reset a member's clan profile (Admin only)\n` +
-          `\`${prefix}clan transfer <@user/ID>\` — Transfer clan leadership (Owner only)\n\n` +
+          `\`${prefix}clan transfer <@user/ID>\` — Transfer leadership (Owner only)\n\n` +
 
           `**Vault & progression**\n` +
           `\`${prefix}clan deposit <amount|all>\` • \`${prefix}clan deposit history [page]\`\n` +
@@ -1528,7 +1741,13 @@ module.exports = {
           `\`${prefix}clan banner\` with an image attachment\n` +
           `\`${prefix}clan sethex #RRGGBB\` (Owner and Co-owner)\n` +
           `\`${prefix}clan privacy <on|off>\` (Owner only)\n` +
-          `\`${prefix}clan delete\` (Owner only)`
+          `\`${prefix}clan delete\` (Owner only)\n\n` +
+
+          `**Clan identity tags**\n` +
+          `\`${prefix}clan tag on\` — Enable tags (Owner only)\n` +
+          `\`${prefix}clan tag off\` — Disable tags (Owner only)\n` +
+          `\`${prefix}clan tag alias <3 letters>\` — Set an alias (Owner only)\n` +
+          `\`${prefix}clan tag alias reset\` — Remove alias (Owner only)`
         );
 
         return message.reply({
@@ -1536,10 +1755,97 @@ module.exports = {
         });
       }
 
-      // ------------------------------------------------------
-      // Reset user clan profile
-      // Server Owner or Administrator only.
-      // ------------------------------------------------------
+      // ======================================================
+      // CLAN TAG SETTINGS
+      // ======================================================
+
+      if (sub === 'tag') {
+        const action = String(
+          args[1] || ''
+        ).toLowerCase();
+
+        if (action === 'on' || action === 'off') {
+          const enabled = action === 'on';
+
+          const updated = clanTags.setEnabled(
+            gid,
+            uid,
+            enabled
+          );
+
+          await syncTagClan(
+            client,
+            gid,
+            updated.id
+          );
+
+          return replyEmbed(
+            message,
+            'Clan Tags Updated',
+            `Clan tags for **${updated.name}** are now **${enabled ? 'ON' : 'OFF'}**.\n\n` +
+            (
+              enabled
+                ? 'All current members will receive the clan tag.'
+                : 'Existing clan tags will be removed and original nicknames restored.'
+            )
+          );
+        }
+
+        if (action === 'alias') {
+          const rawAlias = String(
+            args.slice(2).join(' ') || ''
+          ).trim();
+
+          if (!rawAlias) {
+            return replyEmbed(
+              message,
+              'Clan Tag Alias',
+              `Use \`${prefix}clan tag alias <3 letters>\`.\n` +
+              `Example: \`${prefix}clan tag alias Aby\`\n\n` +
+              `Every alias letter must exist in your clan name.\n` +
+              `Use \`${prefix}clan tag alias reset\` to remove your alias.`
+            );
+          }
+
+          const updated = clanTags.setAlias(
+            gid,
+            uid,
+            rawAlias.toLowerCase() === 'reset'
+              ? null
+              : rawAlias
+          );
+
+          await syncTagClan(
+            client,
+            gid,
+            updated.id
+          );
+
+          return replyEmbed(
+            message,
+            'Clan Tag Alias Updated',
+            updated.tag_alias
+              ? `The tag alias for **${updated.name}** is now **${updated.tag_alias}**.`
+              : `The custom alias for **${updated.name}** has been removed.\nThe full clan name will be used instead.`
+          );
+        }
+
+        return replyEmbed(
+          message,
+          'Clan Tags',
+          `**Settings**\n` +
+          `\`${prefix}clan tag on\` — Enable clan tags.\n` +
+          `\`${prefix}clan tag off\` — Disable clan tags.\n\n` +
+          `**Alias**\n` +
+          `\`${prefix}clan tag alias <3 letters>\` — Set an alias.\n` +
+          `\`${prefix}clan tag alias reset\` — Remove the alias.\n\n` +
+          `Only the actual clan Owner can change these settings.`
+        );
+      }
+
+      // ======================================================
+      // RESET USER CLAN PROFILE
+      // ======================================================
 
       if (sub === 'resetuser') {
         const isServerOwner =
@@ -1558,7 +1864,10 @@ module.exports = {
           );
         }
 
-        const target = await resolveTarget(message, args[1]);
+        const target = await resolveTarget(
+          message,
+          args[1]
+        );
 
         if (!target) {
           return replyEmbed(
@@ -1595,13 +1904,9 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Transfer clan leadership
-      //
-      // IMPORTANT:
-      // Non-owners get absolutely no response from this branch.
-      // A clan must exist and the caller must be its actual Owner.
-      // ------------------------------------------------------
+      // ======================================================
+      // TRANSFER CLAN LEADERSHIP
+      // ======================================================
 
       if (sub === 'transfer') {
         const found = clan.getMembership(
@@ -1663,8 +1968,6 @@ module.exports = {
           );
         }
 
-        // Check the Co-owner cap before presenting the prompt.
-        // The database transaction checks it again on confirmation.
         const targetIsCoOwner =
           Number(targetMembership.member.rank_no) === clan.RANK.COOWNER;
 
@@ -1704,9 +2007,9 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Create
-      // ------------------------------------------------------
+      // ======================================================
+      // CREATE CLAN
+      // ======================================================
 
       if (sub === 'name') {
         const name = args.slice(1).join(' ').trim();
@@ -1725,6 +2028,13 @@ module.exports = {
           name
         );
 
+        // New clans have tags enabled by default.
+        await syncTagMember(
+          client,
+          gid,
+          uid
+        );
+
         return replyEmbed(
           message,
           'Clan Created',
@@ -1733,9 +2043,9 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Join
-      // ------------------------------------------------------
+      // ======================================================
+      // JOIN CLAN
+      // ======================================================
 
       if (sub === 'join') {
         const name = args.slice(1).join(' ').trim();
@@ -1754,6 +2064,13 @@ module.exports = {
           name
         );
 
+        // Apply tag immediately after joining.
+        await syncTagMember(
+          client,
+          gid,
+          uid
+        );
+
         await clan.announce(
           message.channel,
           joined.notes
@@ -1766,12 +2083,19 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Leave
-      // ------------------------------------------------------
+      // ======================================================
+      // LEAVE CLAN
+      // ======================================================
 
       if (sub === 'leave') {
         const left = clan.leaveClan(
+          gid,
+          uid
+        );
+
+        // Restore original nickname after leaving.
+        await syncTagMember(
+          client,
           gid,
           uid
         );
@@ -1783,9 +2107,9 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Rename
-      // ------------------------------------------------------
+      // ======================================================
+      // RENAME CLAN
+      // ======================================================
 
       if (sub === 'rename') {
         const name = args.slice(1).join(' ').trim();
@@ -1805,6 +2129,13 @@ module.exports = {
           name
         );
 
+        // Update all member tags after the clan name changes.
+        await syncTagClan(
+          client,
+          gid,
+          result.clan.id
+        );
+
         return replyEmbed(
           message,
           'Clan Renamed',
@@ -1812,6 +2143,10 @@ module.exports = {
           `Cost: ${money(result.cost)}.`
         );
       }
+
+      // ======================================================
+      // LEGACY JOINID
+      // ======================================================
 
       if (sub === 'joinid') {
         return replyEmbed(
@@ -1821,9 +2156,9 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Delete — owner only
-      // ------------------------------------------------------
+      // ======================================================
+      // DELETE CLAN
+      // ======================================================
 
       if (sub === 'delete') {
         const found = clan.getMembership(
@@ -1841,7 +2176,7 @@ module.exports = {
 
         if (
           found.member.rank_no !== clan.RANK.OWNER ||
-          String(found.clan.owner_id) !== uid
+          String(found.clan.owner_id) !== String(uid)
         ) {
           throw new clan.ClanError(
             'Only the clan Owner can delete the clan.'
@@ -1856,12 +2191,14 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Set hex colour — owner and co-owner
-      // ------------------------------------------------------
+      // ======================================================
+      // SET HEX COLOUR
+      // ======================================================
 
       if (sub === 'sethex') {
-        const hex = String(args[1] || '').trim();
+        const hex = String(
+          args[1] || ''
+        ).trim();
 
         if (!hex) {
           return replyEmbed(
@@ -1885,9 +2222,9 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Invite
-      // ------------------------------------------------------
+      // ======================================================
+      // INVITE
+      // ======================================================
 
       if (sub === 'invite') {
         const target = await resolveTarget(
@@ -1958,9 +2295,9 @@ module.exports = {
         return;
       }
 
-      // ------------------------------------------------------
-      // Kick
-      // ------------------------------------------------------
+      // ======================================================
+      // KICK
+      // ======================================================
 
       if (sub === 'kick') {
         const target = await resolveTarget(
@@ -1982,6 +2319,13 @@ module.exports = {
           target.id
         );
 
+        // Restore nickname after membership removal.
+        await syncTagMember(
+          client,
+          gid,
+          target.id
+        );
+
         return replyEmbed(
           message,
           'Member Kicked',
@@ -1989,9 +2333,9 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Rank actions
-      // ------------------------------------------------------
+      // ======================================================
+      // RANK ACTIONS
+      // ======================================================
 
       const rankActions = {
         'setco-owner': {
@@ -2055,9 +2399,10 @@ module.exports = {
           spec.expected
         );
 
-        const outcome = spec.rank === clan.RANK.MEMBER
-          ? `Their ${spec.label} rank was removed; they are now a Member.`
-          : `They have been appointed as ${spec.label}.`;
+        const outcome =
+          spec.rank === clan.RANK.MEMBER
+            ? `Their ${spec.label} rank was removed; they are now a Member.`
+            : `They have been appointed as ${spec.label}.`;
 
         return replyEmbed(
           message,
@@ -2066,12 +2411,14 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Privacy
-      // ------------------------------------------------------
+      // ======================================================
+      // PRIVACY
+      // ======================================================
 
       if (sub === 'privacy') {
-        const value = String(args[1] || '').toLowerCase();
+        const value = String(
+          args[1] || ''
+        ).toLowerCase();
 
         if (!['on', 'off'].includes(value)) {
           return replyEmbed(
@@ -2105,16 +2452,21 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Deposit and deposit history
-      // ------------------------------------------------------
+      // ======================================================
+      // DEPOSIT AND HISTORY
+      // ======================================================
 
       if (sub === 'deposit') {
-        if (String(args[1] || '').toLowerCase() === 'history') {
+        if (
+          String(args[1] || '').toLowerCase() === 'history'
+        ) {
           const history = clan.depositHistory(
             gid,
             uid,
-            Math.max(0, (Number.parseInt(args[2], 10) || 1) - 1)
+            Math.max(
+              0,
+              (Number.parseInt(args[2], 10) || 1) - 1
+            )
           );
 
           if (!history.rows.length) {
@@ -2137,7 +2489,9 @@ module.exports = {
           );
 
           e.setFooter({
-            text: `Page ${history.page + 1}/${history.pages} • Last ${history.days} days`,
+            text:
+              `Page ${history.page + 1}/${history.pages} • ` +
+              `Last ${history.days} days`,
           });
 
           return message.reply({
@@ -2165,37 +2519,62 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Leaderboard and quests
-      // ------------------------------------------------------
+      // ======================================================
+      // LEADERBOARD
+      // ======================================================
 
-      if (sub === 'lb' || sub === 'leaderboard') {
+      if (
+        sub === 'lb' ||
+        sub === 'leaderboard'
+      ) {
         return sendLeaderboard(
           message,
           args[1]
         );
       }
 
-      if (sub === 'quest' || sub === 'quests') {
+      // ======================================================
+      // QUESTS
+      // ======================================================
+
+      if (
+        sub === 'quest' ||
+        sub === 'quests'
+      ) {
         return sendQuestBoard(message);
       }
 
-      // ------------------------------------------------------
-      // Upgrades
-      // ------------------------------------------------------
+      // ======================================================
+      // UPGRADES
+      // ======================================================
 
-      if (sub === 'upgrade' || sub === 'upgrades') {
+      if (
+        sub === 'upgrade' ||
+        sub === 'upgrades'
+      ) {
         if (!args[1]) {
           return sendUpgradeView(message);
         }
 
-        const kind = String(args[1]).toLowerCase();
+        const kind = String(
+          args[1]
+        ).toLowerCase();
 
-        const result = kind === 'capacity'
-          ? clan.buyUpgrade(gid, uid, 'capacity')
-          : kind === 'xp'
-            ? clan.buyUpgrade(gid, uid, 'xp', args[2])
-            : null;
+        const result =
+          kind === 'capacity'
+            ? clan.buyUpgrade(
+                gid,
+                uid,
+                'capacity'
+              )
+            : kind === 'xp'
+              ? clan.buyUpgrade(
+                  gid,
+                  uid,
+                  'xp',
+                  args[2]
+                )
+              : null;
 
         if (!result) {
           return replyEmbed(
@@ -2212,21 +2591,23 @@ module.exports = {
           result.notes
         );
 
-        const detail = result.kind === 'capacity'
-          ? `Member capacity is now **${result.capacity}**.`
-          : `XP Booster **Tier ${result.tier}** is active until <t:${Math.floor(result.until / 1000)}:R>.`;
+        const detail =
+          result.kind === 'capacity'
+            ? `Member capacity is now **${result.capacity}**.`
+            : `XP Booster **Tier ${result.tier}** is active until <t:${Math.floor(result.until / 1000)}:R>.`;
 
         return replyEmbed(
           message,
           'Upgrade Purchased',
-          `${detail}\nCost: ${money(result.cost)}\n` +
+          `${detail}\n` +
+          `Cost: ${money(result.cost)}\n` +
           `Clan XP gained: ${result.xp.toLocaleString('en-US')}.`
         );
       }
 
-      // ------------------------------------------------------
-      // Clan info
-      // ------------------------------------------------------
+      // ======================================================
+      // CLAN INFO
+      // ======================================================
 
       if (sub === 'info') {
         const name = args.slice(1).join(' ').trim();
@@ -2251,22 +2632,29 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Profile
-      // ------------------------------------------------------
+      // ======================================================
+      // PROFILE
+      // ======================================================
 
       if (sub === 'profile') {
         return sendProfile(message);
       }
 
-      // ------------------------------------------------------
-      // Logo and banner
-      // ------------------------------------------------------
+      // ======================================================
+      // LOGO AND BANNER
+      // ======================================================
 
-      if (sub === 'logo' || sub === 'banner') {
-        const attachment = message.attachments?.first?.();
+      if (
+        sub === 'logo' ||
+        sub === 'banner'
+      ) {
+        const attachment =
+          message.attachments?.first?.();
 
-        if (sub === 'logo' && !attachment) {
+        if (
+          sub === 'logo' &&
+          !attachment
+        ) {
           const emojiText = args.slice(1).join(' ').trim();
 
           if (!emojiText) {
@@ -2313,9 +2701,9 @@ module.exports = {
         );
       }
 
-      // ------------------------------------------------------
-      // Unknown command
-      // ------------------------------------------------------
+      // ======================================================
+      // UNKNOWN COMMAND
+      // ======================================================
 
       return replyEmbed(
         message,
