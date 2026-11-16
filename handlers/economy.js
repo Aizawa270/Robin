@@ -1,3 +1,5 @@
+'use strict';
+
 const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
@@ -17,6 +19,9 @@ const WEEKLY_TAX_RATE = 0.08;
 const MONTHLY_GROSS_REWARDS = [200000, 150000, 100000];
 const MONTHLY_TAX_RATE = 0.12;
 
+const REGISTRATION_STARTING_BONUS = 5000;
+const REGISTRATION_MIGRATION_KEY = 'grandfather_existing_economy_users_v1';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TZ_OFFSET_MS = 6 * 60 * 60 * 1000; // UTC+6
 
@@ -33,11 +38,40 @@ const BUILTIN_JOBS = [
 ];
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, 'economy.sqlite'));
 db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 5000');
+
+// ============================================================
+// DATABASE SCHEMA + SAFE MIGRATIONS
+// ============================================================
+
+function addColumn(table, columnSql) {
+  try {
+    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${columnSql}`).run();
+    return true;
+  } catch (error) {
+    // SQLite reports a duplicate-column error when the migration has
+    // already been applied. Do not hide unrelated database errors.
+    if (/duplicate column name/i.test(String(error?.message || error))) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function tableExists(tableName) {
+  return Boolean(
+    db.prepare(`
+      SELECT 1
+      FROM sqlite_master
+      WHERE type = 'table' AND name = ?
+      LIMIT 1
+    `).get(String(tableName))
+  );
+}
 
 function ensureSchema() {
   db.prepare(`
@@ -62,12 +96,6 @@ function ensureSchema() {
       PRIMARY KEY (guild_id, user_id)
     )
   `).run();
-
-  const addColumn = (table, columnSql) => {
-    try {
-      db.prepare(`ALTER TABLE ${table} ADD COLUMN ${columnSql}`).run();
-    } catch {}
-  };
 
   addColumn('economy_users', 'lifetime_tax_paid INTEGER NOT NULL DEFAULT 0');
   addColumn('economy_users', 'current_job_id TEXT');
@@ -160,9 +188,88 @@ function ensureSchema() {
       PRIMARY KEY (guild_id, job_id)
     )
   `).run();
+
+  // Registration is deliberately separate from economy_users.
+  // ensureUser() is used by existing systems and can create a wallet row;
+  // a wallet row alone must never count as registration.
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS economy_registrations (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      registered_at INTEGER NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS economy_registration_migrations (
+      migration_key TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    )
+  `).run();
 }
 
 ensureSchema();
+
+// One-time grandfather migration. Existing wallet accounts and existing
+// clan members keep access without needing to run the new register command.
+// The migration marker prevents accounts created later by background tasks
+// from being silently registered on every restart.
+const migrateExistingRegistrations = db.transaction(() => {
+  const alreadyApplied = db.prepare(`
+    SELECT 1
+    FROM economy_registration_migrations
+    WHERE migration_key = ?
+  `).get(REGISTRATION_MIGRATION_KEY);
+
+  if (alreadyApplied) return { applied: false, economyUsers: 0, clanMembers: 0 };
+
+  const usersResult = db.prepare(`
+    INSERT OR IGNORE INTO economy_registrations
+      (guild_id, user_id, registered_at)
+    SELECT guild_id, user_id, ?
+    FROM economy_users
+  `).run(Date.now());
+
+  let clanResult = { changes: 0 };
+
+  // clanService stores clan membership in the same economy.sqlite file.
+  // Check for the table because a server without the clan feature may not
+  // have created it yet.
+  if (tableExists('clan_members')) {
+    clanResult = db.prepare(`
+      INSERT OR IGNORE INTO economy_registrations
+        (guild_id, user_id, registered_at)
+      SELECT guild_id, user_id, ?
+      FROM clan_members
+    `).run(Date.now());
+  }
+
+  db.prepare(`
+    INSERT INTO economy_registration_migrations
+      (migration_key, applied_at)
+    VALUES (?, ?)
+  `).run(REGISTRATION_MIGRATION_KEY, Date.now());
+
+  return {
+    applied: true,
+    economyUsers: usersResult.changes,
+    clanMembers: clanResult.changes,
+  };
+});
+
+const registrationMigration = migrateExistingRegistrations();
+if (registrationMigration.applied) {
+  console.log(
+    `[Economy] Registration migration complete: ` +
+    `${registrationMigration.economyUsers} existing economy account(s), ` +
+    `${registrationMigration.clanMembers} existing clan member(s) grandfathered.`
+  );
+}
+
+// ============================================================
+// PREPARED STATEMENTS
+// ============================================================
 
 const insertUser = db.prepare(`
   INSERT OR IGNORE INTO economy_users (
@@ -290,7 +397,8 @@ const getRankStmt = db.prepare(`
 `);
 
 const ensureBank = db.prepare(`
-  INSERT OR IGNORE INTO economy_server_banks (guild_id, balance, total_tax_collected, updated_at)
+  INSERT OR IGNORE INTO economy_server_banks
+    (guild_id, balance, total_tax_collected, updated_at)
   VALUES (?, 0, 0, ?)
 `);
 
@@ -323,7 +431,8 @@ const insertTaxHistory = db.prepare(`
 
 const insertJob = db.prepare(`
   INSERT INTO economy_jobs (
-    guild_id, job_id, enabled, required_role_id, shift_pay, weekly_bonus, works_per_day, cooldown_ms, updated_by, updated_at
+    guild_id, job_id, enabled, required_role_id, shift_pay, weekly_bonus,
+    works_per_day, cooldown_ms, updated_by, updated_at
   )
   VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(guild_id, job_id) DO UPDATE SET
@@ -360,6 +469,113 @@ const getJobsStmt = db.prepare(`
   WHERE guild_id = ?
   ORDER BY CAST(job_id AS INTEGER) ASC
 `);
+
+const getRegistrationStmt = db.prepare(`
+  SELECT guild_id, user_id, registered_at
+  FROM economy_registrations
+  WHERE guild_id = ? AND user_id = ?
+`);
+
+const insertRegistrationStmt = db.prepare(`
+  INSERT OR IGNORE INTO economy_registrations
+    (guild_id, user_id, registered_at)
+  VALUES (?, ?, ?)
+`);
+
+// ============================================================
+// REGISTRATION API
+// ============================================================
+
+function isRegistered(guildId, userId) {
+  if (!guildId || !userId) return false;
+
+  return Boolean(
+    getRegistrationStmt.get(String(guildId), String(userId))
+  );
+}
+
+function getRegistration(guildId, userId) {
+  if (!guildId || !userId) return null;
+
+  return getRegistrationStmt.get(
+    String(guildId),
+    String(userId)
+  ) || null;
+}
+
+const registerUserTx = db.transaction((guildId, userId, startingBonus, now) => {
+  const gid = String(guildId);
+  const uid = String(userId);
+
+  if (getRegistrationStmt.get(gid, uid)) {
+    return {
+      ok: false,
+      code: 'already_registered',
+      user: getUser.get(gid, uid) || null,
+    };
+  }
+
+  // Creates a wallet only when necessary. Existing wallet data is untouched.
+  insertUser.run(gid, uid, now);
+
+  const registration = insertRegistrationStmt.run(gid, uid, now);
+  if (registration.changes !== 1) {
+    return {
+      ok: false,
+      code: 'already_registered',
+      user: getUser.get(gid, uid) || null,
+    };
+  }
+
+  if (startingBonus > 0) {
+    updateAdd.run(startingBonus, startingBonus, gid, uid);
+
+    insertTx.run(
+      gid,
+      uid,
+      uid,
+      'registration_bonus',
+      startingBonus,
+      'Economy registration starting bonus',
+      now
+    );
+  }
+
+  return {
+    ok: true,
+    code: 'registered',
+    amount: startingBonus,
+    registeredAt: now,
+    user: getUser.get(gid, uid),
+  };
+});
+
+function registerUser(guildId, userId, startingBonus = REGISTRATION_STARTING_BONUS, now = Date.now()) {
+  if (!guildId || !userId) {
+    return { ok: false, code: 'invalid_user' };
+  }
+
+  const bonus = Math.floor(Number(startingBonus));
+  const timestamp = Number(now);
+
+  if (
+    !Number.isSafeInteger(bonus) || bonus < 0 ||
+    !Number.isSafeInteger(timestamp) || timestamp < 0
+  ) {
+    return { ok: false, code: 'invalid_registration_data' };
+  }
+
+  return registerUserTx(
+    String(guildId),
+    String(userId),
+    bonus,
+    timestamp
+  );
+}
+
+// ============================================================
+// DATE + CURRENCY FORMATTING
+// ============================================================
 
 function normalizeDateKey(ts = Date.now()) {
   const d = new Date(ts + TZ_OFFSET_MS);
@@ -403,6 +619,10 @@ function formatDuration(ms) {
   return parts.join(' ');
 }
 
+// ============================================================
+// USER + WALLET FUNCTIONS
+// ============================================================
+
 function ensureUser(guildId, userId, ts = Date.now()) {
   insertUser.run(String(guildId), String(userId), Number(ts));
   return getUser.get(String(guildId), String(userId));
@@ -432,12 +652,12 @@ function getUserStats(guildId, userId) {
 }
 
 function getBalance(guildId, userId) {
-  return getUserStats(guildId, userId).balance || 0;
+  return Number(getUserStats(guildId, userId).balance || 0);
 }
 
 function addCrowns(guildId, userId, amount, meta = {}) {
   amount = Math.floor(Number(amount));
-  if (!Number.isFinite(amount) || amount <= 0) return null;
+  if (!Number.isSafeInteger(amount) || amount <= 0) return null;
 
   const gid = String(guildId);
   const uid = String(userId);
@@ -461,7 +681,7 @@ function addCrowns(guildId, userId, amount, meta = {}) {
 
 function removeCrowns(guildId, userId, amount, meta = {}) {
   amount = Math.floor(Number(amount));
-  if (!Number.isFinite(amount) || amount <= 0) return null;
+  if (!Number.isSafeInteger(amount) || amount <= 0) return null;
 
   const gid = String(guildId);
   const uid = String(userId);
@@ -486,25 +706,28 @@ function removeCrowns(guildId, userId, amount, meta = {}) {
   return getUserStats(gid, uid);
 }
 
+// ============================================================
+// PASSIVE REWARDS + LEADERBOARDS
+// ============================================================
+
 function getPassiveMultiplier(guildId, userId, now = Date.now()) {
   deleteExpiredBoosts.run(now);
 
   const boost = getBoost.get(String(guildId), String(userId));
   if (!boost) return 1;
-
-  if (boost.expires_at <= now) return 1;
+  if (Number(boost.expires_at) <= now) return 1;
   return Math.max(1, Number(boost.multiplier) || 1);
 }
 
-// Intentionally disabled.
-// Keep this function for compatibility with existing handlers, but never
-// award currency for messages or other passive activity.
+// Intentionally disabled. Kept for compatibility with older handlers.
 function rewardPassiveMessage(client, message, timestamp = Date.now()) {
   return 0;
 }
 
 function getLeaderboard(guildId, limit = 10, offset = 0) {
-  return getTopBalances.all(String(guildId), Number(limit), Number(offset));
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 10)));
+  const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+  return getTopBalances.all(String(guildId), safeLimit, safeOffset);
 }
 
 function getRank(guildId, userId) {
@@ -520,6 +743,10 @@ function getEconomySummary(guildId) {
   return countPositiveBalances.get(String(guildId)) || { count: 0 };
 }
 
+// ============================================================
+// SERVER BANK + TAX
+// ============================================================
+
 function getServerBank(guildId) {
   const gid = String(guildId);
   ensureBank.run(gid, Date.now());
@@ -533,7 +760,7 @@ function getServerBank(guildId) {
 
 function addServerBank(guildId, amount, meta = {}) {
   amount = Math.floor(Number(amount));
-  if (!Number.isFinite(amount) || amount <= 0) return null;
+  if (!Number.isSafeInteger(amount) || amount <= 0) return null;
 
   const gid = String(guildId);
   const now = Number(meta.timestamp ?? Date.now());
@@ -545,7 +772,7 @@ function addServerBank(guildId, amount, meta = {}) {
 
 function removeServerBank(guildId, amount) {
   amount = Math.floor(Number(amount));
-  if (!Number.isFinite(amount) || amount <= 0) return null;
+  if (!Number.isSafeInteger(amount) || amount <= 0) return null;
 
   const gid = String(guildId);
   const now = Date.now();
@@ -559,6 +786,7 @@ function recordTax(guildId, userId, source, gross, tax, net, bankAdded, note, ti
   const gid = String(guildId);
   const uid = userId ? String(userId) : null;
   const ts = Number(timestamp);
+  const added = Math.max(0, Math.floor(Number(bankAdded) || 0));
 
   insertTaxHistory.run(
     gid,
@@ -567,18 +795,37 @@ function recordTax(guildId, userId, source, gross, tax, net, bankAdded, note, ti
     Number(gross) || 0,
     Number(tax) || 0,
     Number(net) || 0,
-    Number(bankAdded) || 0,
+    added,
     note || null,
     ts
   );
 
-  if (bankAdded > 0) addServerBank(gid, bankAdded, { timestamp: ts });
+  // recordTax owns the bank credit. Do not also call addServerBank for the
+  // same tax amount, otherwise the server bank would receive it twice.
+  if (added > 0) addServerBank(gid, added, { timestamp: ts });
 }
+
+function getTaxHistory(guildId, limit = 10, offset = 0) {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 10)));
+  const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+
+  return db.prepare(`
+    SELECT *
+    FROM economy_tax_history
+    WHERE guild_id = ?
+    ORDER BY timestamp DESC, id DESC
+    LIMIT ? OFFSET ?
+  `).all(String(guildId), safeLimit, safeOffset);
+}
+
+// ============================================================
+// BOOSTS
+// ============================================================
 
 function setBoost(guildId, userId, durationMs = 0, multiplier = BOOST_MULTIPLIER) {
   const now = Date.now();
   const expiresAt = now + Math.max(0, Number(durationMs) || 0);
-  const cooldownUntil = expiresAt + 5 * 24 * 60 * 60 * 1000;
+  const cooldownUntil = expiresAt + 5 * DAY_MS;
 
   insertBoost.run(
     String(guildId),
@@ -597,6 +844,10 @@ function getBoostStatus(guildId, userId) {
   return getBoost.get(String(guildId), String(userId)) || null;
 }
 
+// ============================================================
+// JOB HELPERS
+// ============================================================
+
 function normalizeJobId(jobId) {
   const raw = String(jobId || '').trim();
   const digits = raw.replace(/\D/g, '');
@@ -607,7 +858,7 @@ function normalizeJobId(jobId) {
 function getBuiltinJob(jobId) {
   const id = normalizeJobId(jobId);
   if (!id) return null;
-  return BUILTIN_JOBS.find(j => j.id === id) || null;
+  return BUILTIN_JOBS.find(job => job.id === id) || null;
 }
 
 function getJobConfig(guildId, jobId) {
@@ -617,7 +868,7 @@ function getJobConfig(guildId, jobId) {
   const row = getJobStmt.get(String(guildId), base.id);
   return {
     ...base,
-    configured: !!row && Number(row.enabled) === 1,
+    configured: Boolean(row) && Number(row.enabled) === 1,
     enabled: row ? Number(row.enabled) === 1 : false,
     required_role_id: row?.required_role_id || null,
     shift_pay: row ? Number(row.shift_pay || 0) : 0,
@@ -632,13 +883,15 @@ function getJobConfig(guildId, jobId) {
 function listJobs(guildId) {
   const gid = String(guildId);
   const configured = getJobsStmt.all(gid);
-  const map = new Map(configured.map(j => [String(j.job_id).padStart(2, '0'), j]));
+  const map = new Map(
+    configured.map(job => [String(job.job_id).padStart(2, '0'), job])
+  );
 
   return BUILTIN_JOBS.map(job => {
     const row = map.get(job.id);
     return {
       ...job,
-      configured: !!row && Number(row.enabled) === 1,
+      configured: Boolean(row) && Number(row.enabled) === 1,
       enabled: row ? Number(row.enabled) === 1 : false,
       required_role_id: row?.required_role_id || null,
       shift_pay: row ? Number(row.shift_pay || 0) : 0,
@@ -745,11 +998,11 @@ function startJob(guildId, userId, jobId, options = {}) {
 
   if (current.current_job_id && current.last_job_switch_at) {
     const elapsed = now - Number(current.last_job_switch_at || 0);
-    if (elapsed < 24 * 60 * 60 * 1000) {
+    if (elapsed < DAY_MS) {
       return {
         ok: false,
         code: 'switch_cooldown',
-        message: `You can switch jobs again in **${formatDuration(24 * 60 * 60 * 1000 - elapsed)}**.`,
+        message: `You can switch jobs again in **${formatDuration(DAY_MS - elapsed)}**.`,
       };
     }
   }
@@ -776,10 +1029,7 @@ function canWorkToday(userRow, jobRow, now = Date.now()) {
   const todayKey = normalizeDateKey(now);
   const currentCount = Number(userRow.today_work_count || 0);
 
-  if (userRow.today_work_day_key !== todayKey) {
-    return true;
-  }
-
+  if (userRow.today_work_day_key !== todayKey) return true;
   return currentCount < Number(jobRow.works_per_day || 1);
 }
 
@@ -834,11 +1084,7 @@ function workShift(client, guildId, userId, member, now = Date.now()) {
   const sameDay = user.today_work_day_key === todayKey;
 
   if (!sameDay) {
-    if (user.last_work_day_key === yesterdayKey) {
-      streak += 1;
-    } else {
-      streak = 1;
-    }
+    streak = user.last_work_day_key === yesterdayKey ? streak + 1 : 1;
   }
 
   const grossShift = Number(job.shift_pay || 0);
@@ -862,83 +1108,69 @@ function workShift(client, guildId, userId, member, now = Date.now()) {
   const newTodayCount = sameDay ? Number(user.today_work_count || 0) + 1 : 1;
   const nextStreak = streakBonusTriggered ? 0 : streak;
 
-  db.transaction(() => {
+  // Payout and work state are committed together. Tax bank credits are
+  // written by recordTax() once, avoiding the old double-credit bug.
+  const applyWorkTx = db.transaction(() => {
     addCrowns(gid, uid, shiftNet, {
       type: 'job_work',
       reason: `${job.name} shift payout`,
       timestamp: now,
     });
 
-    updateAddTaxAndState(gid, uid, shiftTax, shiftNet, false);
-  })();
+    updateWorkState.run(
+      user.current_job_id,
+      nextStreak,
+      todayKey,
+      todayKey,
+      newTodayCount,
+      1,
+      now,
+      gid,
+      uid
+    );
 
-  return performWorkUpdate({
-    guildId: gid,
-    userId: uid,
-    job,
-    now,
-    user,
-    todayKey,
-    yesterdayKey,
-    streak,
-    streakBonusTriggered,
-    grossShift,
-    shiftTax,
-    shiftNet,
-    grossBonus,
-    bonusTax,
-    bonusNet,
-    newTodayCount,
-    nextStreak,
+    if (shiftTax > 0) {
+      updateTaxPaid.run(shiftTax, gid, uid);
+      recordTax(
+        gid,
+        uid,
+        'work_tax',
+        grossShift,
+        shiftTax,
+        shiftNet,
+        shiftTax,
+        `${job.name} shift tax`,
+        now
+      );
+    }
+
+    if (streakBonusTriggered && grossBonus > 0) {
+      addCrowns(gid, uid, bonusNet, {
+        type: 'job_weekly_bonus',
+        reason: `${job.name} 7-day streak bonus`,
+        timestamp: now,
+      });
+
+      if (bonusTax > 0) {
+        updateTaxPaid.run(bonusTax, gid, uid);
+        recordTax(
+          gid,
+          uid,
+          'weekly_streak_bonus',
+          grossBonus,
+          bonusTax,
+          bonusNet,
+          bonusTax,
+          `${job.name} 7-day bonus tax`,
+          now
+        );
+      }
+    }
   });
-}
 
-function performWorkUpdate({
-  guildId,
-  userId,
-  job,
-  now,
-  user,
-  todayKey,
-  streakBonusTriggered,
-  grossShift,
-  shiftTax,
-  shiftNet,
-  grossBonus,
-  bonusTax,
-  bonusNet,
-  newTodayCount,
-  nextStreak,
-}) {
-  // Keep the transaction small and explicit.
-  updateWorkState.run(
-    user.current_job_id,
-    nextStreak,
-    todayKey,
-    todayKey,
-    newTodayCount,
-    1,
-    now,
-    guildId,
-    userId
-  );
+  applyWorkTx();
 
-  updateTaxPaid.run(shiftTax + bonusTax, guildId, userId);
-
-  addServerBank(guildId, shiftTax, { timestamp: now });
-  recordTax(
-    guildId,
-    userId,
-    'work_tax',
-    grossShift,
-    shiftTax,
-    shiftNet,
-    shiftTax,
-    `${job.name} shift tax`,
-    now
-  );
-
-  const result = {
+  return {
     ok: true,
     job,
     grossShift,
@@ -950,37 +1182,8 @@ function performWorkUpdate({
     streak: nextStreak,
     todayCount: newTodayCount,
     streakBonusTriggered,
-    user: getUserStats(guildId, userId),
+    user: getUserStats(gid, uid),
   };
-
-  if (streakBonusTriggered && grossBonus > 0) {
-    addCrowns(guildId, userId, bonusNet, {
-      type: 'job_weekly_bonus',
-      reason: `${job.name} 7-day streak bonus`,
-      timestamp: now,
-    });
-
-    addServerBank(guildId, bonusTax, { timestamp: now });
-    recordTax(
-      guildId,
-      userId,
-      'weekly_streak_bonus',
-      grossBonus,
-      bonusTax,
-      bonusNet,
-      bonusTax,
-      `${job.name} 7-day bonus tax`,
-      now
-    );
-  }
-
-  return result;
-}
-
-function updateAddTaxAndState(guildId, userId, shiftTax, shiftNet, shiftBonus = false) {
-  void shiftTax;
-  void shiftNet;
-  void shiftBonus;
 }
 
 function getSalaryInfo(guildId, userId) {
@@ -989,34 +1192,28 @@ function getSalaryInfo(guildId, userId) {
   return getJobConfig(guildId, user.current_job_id);
 }
 
-function getTaxHistory(guildId, limit = 10, offset = 0) {
-  return db.prepare(`
-    SELECT *
-    FROM economy_tax_history
-    WHERE guild_id = ?
-    ORDER BY timestamp DESC, id DESC
-    LIMIT ? OFFSET ?
-  `).all(String(guildId), Number(limit), Number(offset));
-}
+// ============================================================
+// MESSAGE LEADERBOARD PAYOUTS
+// ============================================================
 
 function maybePayoutLeaderboard(client, guildId, scope, periodKey) {
   const normalizedScope = String(scope).toLowerCase();
-  const rewards =
-    normalizedScope === 'weekly'
-      ? WEEKLY_GROSS_REWARDS
-      : normalizedScope === 'monthly'
-        ? MONTHLY_GROSS_REWARDS
-        : null;
+  const rewards = normalizedScope === 'weekly'
+    ? WEEKLY_GROSS_REWARDS
+    : normalizedScope === 'monthly'
+      ? MONTHLY_GROSS_REWARDS
+      : null;
 
-  const taxRate =
-    normalizedScope === 'weekly'
-      ? WEEKLY_TAX_RATE
-      : normalizedScope === 'monthly'
-        ? MONTHLY_TAX_RATE
-        : 0;
+  const taxRate = normalizedScope === 'weekly'
+    ? WEEKLY_TAX_RATE
+    : normalizedScope === 'monthly'
+      ? MONTHLY_TAX_RATE
+      : 0;
 
   if (!rewards) return [];
 
+  // Scope is selected from a fixed allowlist above, so it is safe to insert
+  // into the SQL identifier position.
   const rows = db.prepare(`
     SELECT user_id, ${normalizedScope} AS score
     FROM message_stats
@@ -1030,7 +1227,7 @@ function maybePayoutLeaderboard(client, guildId, scope, periodKey) {
   const createdAt = Date.now();
   const payouts = [];
 
-  db.transaction(() => {
+  const payoutTx = db.transaction(() => {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const gross = Number(rewards[i] || 0);
@@ -1039,13 +1236,11 @@ function maybePayoutLeaderboard(client, guildId, scope, periodKey) {
       const tax = Math.round(gross * taxRate);
       const net = gross - tax;
 
-      if (client?.economy?.addCrowns) {
-        client.economy.addCrowns(guildId, row.user_id, net, {
-          type: `${normalizedScope}_leaderboard_payout`,
-          reason: `${normalizedScope} leaderboard payout`,
-          timestamp: createdAt,
-        });
-      }
+      addCrowns(guildId, row.user_id, net, {
+        type: `${normalizedScope}_leaderboard_payout`,
+        reason: `${normalizedScope} leaderboard payout`,
+        timestamp: createdAt,
+      });
 
       recordTax(
         guildId,
@@ -1061,7 +1256,8 @@ function maybePayoutLeaderboard(client, guildId, scope, periodKey) {
 
       db.prepare(`
         INSERT OR IGNORE INTO message_tracker_history (
-          guild_id, scope, period_key, user_id, placement, gross_payout, tax_amount, net_payout, created_at
+          guild_id, scope, period_key, user_id, placement,
+          gross_payout, tax_amount, net_payout, created_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
@@ -1084,13 +1280,22 @@ function maybePayoutLeaderboard(client, guildId, scope, periodKey) {
         net,
       });
     }
-  })();
+  });
 
+  payoutTx();
   return payouts;
 }
 
+// ============================================================
+// INITIALIZATION
+// ============================================================
+
 function init(client) {
-  if (client._economyReady) return module.exports;
+  if (client._economyReady) {
+    client.economy = module.exports;
+    client.economyDB = db;
+    return module.exports;
+  }
 
   client._economyReady = true;
   client.economyDB = db;
@@ -1102,40 +1307,64 @@ function init(client) {
 module.exports = {
   init,
   db,
+
+  // Registration
+  REGISTRATION_STARTING_BONUS,
+  isRegistered,
+  getRegistration,
+  registerUser,
+
+  // Economy constants
   BUILTIN_JOBS,
   BASE_PASSIVE_REWARD,
   PASSIVE_COOLDOWN_MS,
+
+  // User + wallet
+  ensureUser,
+  getUserStats,
+  getBalance,
   addCrowns,
   removeCrowns,
-  getBalance,
-  getUserStats,
-  getUserJobState,
+
+  // Leaderboards + passive rewards
   getLeaderboard,
   getRank,
   getEconomySummary,
   rewardPassiveMessage,
   getPassiveMultiplier,
+
+  // Boosts
   setBoost,
   getBoostStatus,
-  maybePayoutLeaderboard,
-  formatCurrency,
-  currencyName,
-  currencyEmoji,
+
+  // Tax + bank
   getServerBank,
   addServerBank,
   removeServerBank,
   recordTax,
   getTaxHistory,
+
+  // Jobs
+  getUserJobState,
   getBuiltinJob,
   getJobConfig,
   listJobs,
   setupJob,
   disableJob,
   resetJob,
+  setCurrentJob,
   startJob,
   quitJob,
   workShift,
   getSalaryInfo,
   normalizeJobId,
+
+  // Formatting + payouts
+  maybePayoutLeaderboard,
+  formatCurrency,
+  currencyName,
+  currencyEmoji,
   formatDuration,
+  normalizeDateKey,
+  previousDateKey,
 };
