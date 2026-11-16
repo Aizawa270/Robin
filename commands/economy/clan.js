@@ -1374,14 +1374,14 @@ async function confirmClanDeletion(message, gid, uid, clanRow) {
 // CLAN QUESTS
 // ============================================================
 
+
 async function sendQuestBoard(message) {
   const board = clan.getQuestBoard(
     message.guild.id,
     message.author.id
   );
 
-  // Use the configured custom GreenTick emoji.
-  const tick = ICON('tick') || '✅';
+  const tick = '<:GreenTick:1571944819561988136>';
 
   const lines = board.quests.map(q => {
     const percent = q.target > 0
@@ -1425,6 +1425,7 @@ async function sendQuestBoard(message) {
     embeds: [embed],
   });
 }
+
 
 // ============================================================
 // CLAN LEADERBOARD
