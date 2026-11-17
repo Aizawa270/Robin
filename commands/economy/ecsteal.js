@@ -11,7 +11,7 @@ const {
   getStealImmunityRemaining,
 } = require('../../handlers/gamblingHelpers');
 
-const STEAL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const STEAL_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const IMMUNITY_MS = 24 * 60 * 60 * 1000;
 
 const NORMAL_SUCCESS_CHANCE = 0.30;
