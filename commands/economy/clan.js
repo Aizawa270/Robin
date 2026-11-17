@@ -203,6 +203,40 @@ function getClanMembers(clanId) {
 }
 
 // ============================================================
+// MEMBER DISPLAY NAMES
+// Used by the clan info embed.
+// Names are fetched from the server and never pinged.
+// ============================================================
+
+async function resolveGuildDisplayName(guild, userId) {
+  const id = String(userId || '');
+
+  if (!id) {
+    return 'Unknown user';
+  }
+
+  let member = guild.members.cache.get(id);
+
+  if (!member) {
+    member = await guild.members.fetch(id).catch(() => null);
+  }
+
+  return (
+    member?.displayName ||
+    member?.user?.username ||
+    'Unknown user'
+  );
+}
+
+function formatInlineName(name) {
+  const safeName = String(name || 'Unknown user')
+    .replace(/`/g, 'ˋ')
+    .replace(/\n/g, ' ');
+
+  return `\`${safeName}\``;
+}
+
+// ============================================================
 // CLAN LOGO
 // ============================================================
 
@@ -340,9 +374,41 @@ async function sendClanInfo(message, clanRow) {
     data.clan.id
   );
 
+  // Resolve every relevant user once.
+  // This uses server display names instead of Discord mentions.
+  const userIds = [
+    ...members.map(member => member.user_id),
+    ...data.donors.map(donor => donor.user_id),
+    data.owner,
+  ]
+    .filter(Boolean)
+    .map(String);
+
+  const uniqueUserIds = [
+    ...new Set(userIds),
+  ];
+
+  const displayNameEntries = await Promise.all(
+    uniqueUserIds.map(async userId => [
+      userId,
+      await resolveGuildDisplayName(
+        message.guild,
+        userId
+      ),
+    ])
+  );
+
+  const displayNames = new Map(
+    displayNameEntries
+  );
+
+  const nameFor = userId => formatInlineName(
+    displayNames.get(String(userId)) || 'Unknown user'
+  );
+
   const byRank = rank => members
     .filter(member => Number(member.rank_no) === rank)
-    .map(member => `<@${member.user_id}>`);
+    .map(member => nameFor(member.user_id));
 
   const roster = byRank(clan.RANK.MEMBER);
 
@@ -358,7 +424,7 @@ async function sendClanInfo(message, clanRow) {
   const donorText = data.donors.length
     ? data.donors
         .map((donor, index) =>
-          `**${index + 1}.** <@${donor.user_id}> — ` +
+          `**${index + 1}.** ${nameFor(donor.user_id)} — ` +
           `**${money(donor.total_deposited)}**`
         )
         .join('\n')
@@ -378,7 +444,7 @@ async function sendClanInfo(message, clanRow) {
     },
     {
       name: `${ICON('owner')} Owner`,
-      value: `<@${data.owner}>`,
+      value: nameFor(data.owner),
       inline: true,
     },
     {
@@ -1374,7 +1440,6 @@ async function confirmClanDeletion(message, gid, uid, clanRow) {
 // CLAN QUESTS
 // ============================================================
 
-
 async function sendQuestBoard(message) {
   const board = clan.getQuestBoard(
     message.guild.id,
@@ -1425,7 +1490,6 @@ async function sendQuestBoard(message) {
     embeds: [embed],
   });
 }
-
 
 // ============================================================
 // CLAN LEADERBOARD
