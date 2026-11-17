@@ -1,3 +1,5 @@
+'use strict';
+
 const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
@@ -8,6 +10,93 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = new Database(path.join(DATA_DIR, 'gambling.sqlite'));
 db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 5000');
+
+// ============================================================
+// SHARED GAMBLING LOCKS
+// One active gambling command per user, per server.
+// ============================================================
+
+const activeGamblingLocks = new Map();
+const GAMBLING_BUSY_MESSAGE =
+  'You must finish your current gambling command before starting another.';
+
+function gamblingLockKey(guildId, userId) {
+  return `${String(guildId)}:${String(userId)}`;
+}
+
+function acquireGamblingLocks(guildId, userIds, command) {
+  const ids = [...new Set(
+    (Array.isArray(userIds) ? userIds : [userIds])
+      .filter(Boolean)
+      .map(String)
+  )];
+
+  if (!ids.length) return false;
+
+  const keys = ids.map(id => gamblingLockKey(guildId, id));
+  if (keys.some(key => activeGamblingLocks.has(key))) return false;
+
+  const lock = {
+    command: String(command),
+    startedAt: Date.now(),
+  };
+
+  for (const key of keys) activeGamblingLocks.set(key, lock);
+  return true;
+}
+
+function releaseGamblingLocks(guildId, userIds, command) {
+  const ids = [...new Set(
+    (Array.isArray(userIds) ? userIds : [userIds])
+      .filter(Boolean)
+      .map(String)
+  )];
+
+  for (const id of ids) {
+    const key = gamblingLockKey(guildId, id);
+    const lock = activeGamblingLocks.get(key);
+    if (!lock) continue;
+    if (command && lock.command !== String(command)) continue;
+    activeGamblingLocks.delete(key);
+  }
+}
+
+function getActiveGamblingCommand(guildId, userId) {
+  return activeGamblingLocks.get(
+    gamblingLockKey(guildId, userId)
+  )?.command || null;
+}
+
+function withGamblingLock(command, handler) {
+  if (typeof handler !== 'function') {
+    throw new TypeError('withGamblingLock requires a handler function.');
+  }
+
+  return async function lockedGamblingCommand(client, message, args) {
+    if (!message?.guild) return;
+
+    const guildId = message.guild.id;
+    const userId = message.author.id;
+    const acquired = acquireGamblingLocks(guildId, [userId], command);
+
+    if (!acquired) {
+      return message.reply({
+        content: GAMBLING_BUSY_MESSAGE,
+        allowedMentions: { repliedUser: false },
+      }).catch(() => null);
+    }
+
+    try {
+      return await handler(client, message, args);
+    } finally {
+      releaseGamblingLocks(guildId, [userId], command);
+    }
+  };
+}
+
+// ============================================================
+// DATABASE SCHEMA (existing data is preserved)
+// ============================================================
 
 function ensureSchema() {
   db.prepare(`
@@ -80,30 +169,46 @@ function formatDuration(ms) {
 }
 
 function getCooldownRemaining(guildId, userId, command, cooldownMs) {
-  const row = getCooldownRow.get(String(guildId), String(userId), String(command));
+  const row = getCooldownRow.get(
+    String(guildId),
+    String(userId),
+    String(command)
+  );
   if (!row) return 0;
 
   const elapsed = Date.now() - Number(row.last_used || 0);
   if (elapsed >= cooldownMs) return 0;
-
   return cooldownMs - elapsed;
 }
 
 function useCooldown(guildId, userId, command, cooldownMs) {
-  const remaining = getCooldownRemaining(guildId, userId, command, cooldownMs);
+  const remaining = getCooldownRemaining(
+    guildId,
+    userId,
+    command,
+    cooldownMs
+  );
   if (remaining > 0) return remaining;
 
-  upsertCooldown.run(String(guildId), String(userId), String(command), Date.now());
+  upsertCooldown.run(
+    String(guildId),
+    String(userId),
+    String(command),
+    Date.now()
+  );
   return 0;
 }
 
 function getBoostMultiplier(client, guildId, userId) {
   if (!client?.economy?.getBoostStatus) return 1;
 
-  const boost = client.economy.getBoostStatus(String(guildId), String(userId));
+  const boost = client.economy.getBoostStatus(
+    String(guildId),
+    String(userId)
+  );
   if (!boost) return 1;
-
   if (Number(boost.expires_at || 0) <= Date.now()) return 1;
+
   return Math.max(1, Number(boost.multiplier) || 1);
 }
 
@@ -120,7 +225,6 @@ function setStealImmunity(guildId, userId, durationMs) {
 
 function getStealImmunityRemaining(guildId, userId) {
   deleteExpiredImmunity.run(Date.now());
-
   const row = getStealImmunity.get(String(guildId), String(userId));
   if (!row) return 0;
 
@@ -138,4 +242,9 @@ module.exports = {
   boostProfit,
   setStealImmunity,
   getStealImmunityRemaining,
+  acquireGamblingLocks,
+  releaseGamblingLocks,
+  getActiveGamblingCommand,
+  withGamblingLock,
+  GAMBLING_BUSY_MESSAGE,
 };
