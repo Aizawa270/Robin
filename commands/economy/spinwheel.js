@@ -1,5 +1,10 @@
+'use strict';
+
 const path = require('path');
-const { EmbedBuilder, AttachmentBuilder } = require('discord.js');
+const {
+  EmbedBuilder,
+  AttachmentBuilder,
+} = require('discord.js');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { GIFEncoder, quantize, applyPalette } = require('gifenc');
 const { randomInt } = require('crypto');
@@ -8,20 +13,19 @@ const {
   formatDuration,
   useCooldown,
   boostProfit,
+  withGamblingLock,
 } = require('../../handlers/gamblingHelpers');
 
-// ============================================
+// ============================================================
 // CONFIGURATION
-// ============================================
+// ============================================================
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
 
-// Wheel assets.
 const WHEEL_IMAGE_PATH = path.join(__dirname, '../../assets/spinwheel.png');
 const POINTER_IMAGE_PATH = path.join(__dirname, '../../assets/spinwheel-pointer.png');
 
-// GIF settings.
 const GIF_SIZE = 320;
 const GIF_FRAMES = 90;
 const GIF_FRAME_DELAY_MS = 40;
@@ -29,11 +33,9 @@ const FULL_TURNS = 3;
 const SPIN_MS = GIF_FRAMES * GIF_FRAME_DELAY_MS;
 const LOAD_BUFFER_MS = 1200;
 
-// Exact centre of the wheel inside the image.
 const CENTER_X = 0.4994;
 const CENTER_Y = 0.5079;
 
-// 9 equal segments, clockwise starting just right of the pointer.
 const SEGMENTS = [
   { label: 'x2', multiplier: 2 },
   { label: 'Lost', multiplier: 0 },
@@ -47,18 +49,13 @@ const SEGMENTS = [
 ];
 
 const SEGMENT_ANGLE = (Math.PI * 2) / SEGMENTS.length;
-
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const activeSpins = new Set();
-
 const spinKey = (guildId, userId) => `${guildId}:${userId}`;
 
-// Connects completed games to the existing clan quest tracker.
-// true = win, false = loss, null = push/draw.
 async function trackClanGame(client, message, game, result) {
   try {
     const tracker = client?.clanSystem?.trackGame;
-
     if (typeof tracker === 'function') {
       await tracker(message, game, result);
     }
@@ -67,9 +64,9 @@ async function trackClanGame(client, message, game, result) {
   }
 }
 
-// ============================================
+// ============================================================
 // EMBEDS
-// ============================================
+// ============================================================
 
 function buildEmbed(message, data = {}) {
   let embed;
@@ -88,7 +85,6 @@ function buildEmbed(message, data = {}) {
 
     if (data.title) embed.setTitle(data.title);
     if (data.description) embed.setDescription(data.description);
-
     embed.setThumbnail(message.author.displayAvatarURL({ size: 256 }));
     embed.setFooter({
       text: `Requested by ${message.author.username}`,
@@ -98,7 +94,6 @@ function buildEmbed(message, data = {}) {
   if (data.image && typeof embed.setImage === 'function') {
     embed.setImage(data.image);
   }
-
   if (data.color && typeof embed.setColor === 'function') {
     embed.setColor(data.color);
   }
@@ -121,9 +116,9 @@ function createWheelEmbed(message, title, description, imageName) {
   });
 }
 
-// ============================================
+// ============================================================
 // WHEEL RENDERING
-// ============================================
+// ============================================================
 
 let assetsPromise = null;
 
@@ -139,7 +134,11 @@ async function loadAssets() {
         w: wheel.width,
         h: wheel.height,
       };
-    })();
+    })().catch(error => {
+      // Allow another command to retry loading if an asset read failed.
+      assetsPromise = null;
+      throw error;
+    });
   }
 
   return assetsPromise;
@@ -147,7 +146,6 @@ async function loadAssets() {
 
 function renderFrame(assets, rotation, size = GIF_SIZE) {
   const { wheel, pointer, w, h } = assets;
-
   const canvas = createCanvas(size, size);
   const ctx = canvas.getContext('2d');
 
@@ -160,7 +158,6 @@ function renderFrame(assets, rotation, size = GIF_SIZE) {
   ctx.fillStyle = '#1e1f22';
   ctx.fillRect(0, 0, size, size);
 
-  // Spinning wheel.
   ctx.save();
   ctx.translate(
     ox + drawW * CENTER_X,
@@ -176,18 +173,15 @@ function renderFrame(assets, rotation, size = GIF_SIZE) {
   );
   ctx.restore();
 
-  // Fixed pointer on top.
+  // The pointer stays stationary above the rotating wheel.
   ctx.drawImage(pointer, ox, oy, drawW, drawH);
-
   return canvas;
 }
 
 const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
 
-// Rotation that puts the selected segment under the pointer.
 function getTargetRotation(index) {
   const jitter = randomInt(-35, 36) / 100;
-
   return (
     Math.PI * 2 * FULL_TURNS -
     (index + 0.5 + jitter) * SEGMENT_ANGLE
@@ -197,9 +191,8 @@ function getTargetRotation(index) {
 function buildSpinGif(assets, targetRotation) {
   const gif = GIFEncoder();
 
-  for (let f = 0; f < GIF_FRAMES; f++) {
-    const t = f / (GIF_FRAMES - 1);
-
+  for (let frame = 0; frame < GIF_FRAMES; frame++) {
+    const t = frame / (GIF_FRAMES - 1);
     const canvas = renderFrame(
       assets,
       targetRotation * easeOutCubic(t)
@@ -220,13 +213,12 @@ function buildSpinGif(assets, targetRotation) {
   }
 
   gif.finish();
-
   return Buffer.from(gif.bytes());
 }
 
-// ============================================
+// ============================================================
 // COMMAND
-// ============================================
+// ============================================================
 
 module.exports = {
   name: 'spinwheel',
@@ -235,7 +227,7 @@ module.exports = {
   category: 'economy',
   usage: '$spinwheel <amount>',
 
-  async execute(client, message, args) {
+  execute: withGamblingLock('spinwheel', async function execute(client, message, args) {
     if (!message.guild) return;
 
     if (
@@ -245,51 +237,41 @@ module.exports = {
       typeof client.economy.addCrowns !== 'function'
     ) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: '⚠️ Economy Unavailable',
-            description: 'The economy system is not ready.',
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: '⚠️ Economy Unavailable',
+          description: 'The economy system is not ready.',
+        })],
       });
     }
 
     const amountText = String(args[0] ?? '').trim();
-
     if (!/^\d+$/.test(amountText)) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: '🎡 Spinwheel',
-            description:
-              `**Usage:** \`${client.getPrefix ? client.getPrefix(message.guild.id) : '$'}spinwheel <amount>\`\n\n` +
-              `Enter a whole-number bet between **1** and **${money(client, MAX_BET)}**.`,
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: '🎡 Spinwheel',
+          description:
+            `**Usage:** \`${client.getPrefix ? client.getPrefix(message.guild.id) : '$'}spinwheel <amount>\`\n\n` +
+            `Enter a whole-number bet between **1** and **${money(client, MAX_BET)}**.`,
+        })],
       });
     }
 
     const amount = Number(amountText);
-
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: '🎡 Invalid Bet',
-            description: 'Your bet must be a positive whole number.',
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: '🎡 Invalid Bet',
+          description: 'Your bet must be a positive whole number.',
+        })],
       });
     }
 
     if (amount > MAX_BET) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: '🎡 Bet Too High',
-            description: `The maximum bet is **${money(client, MAX_BET)}**.`,
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: '🎡 Bet Too High',
+          description: `The maximum bet is **${money(client, MAX_BET)}**.`,
+        })],
       });
     }
 
@@ -299,27 +281,22 @@ module.exports = {
 
     if (activeSpins.has(key)) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: '🎡 Already Spinning',
-            description: 'Wait for your current spin to finish.',
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: '🎡 Already Spinning',
+          description: 'Wait for your current spin to finish.',
+        })],
       });
     }
 
     const currentBalance = client.economy.getBalance(guildId, userId);
-
     if (currentBalance < amount) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: '💸 Insufficient Crowns',
-            description:
-              `**Your balance:** ${money(client, currentBalance)}\n` +
-              `**Your bet:** ${money(client, amount)}`,
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: '💸 Insufficient Crowns',
+          description:
+            `**Your balance:** ${money(client, currentBalance)}\n` +
+            `**Your bet:** ${money(client, amount)}`,
+        })],
       });
     }
 
@@ -332,19 +309,20 @@ module.exports = {
 
     if (remaining > 0) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: '⏳ Spinwheel Cooldown',
-            description: `You can spin again in **${formatDuration(remaining)}**.`,
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: '⏳ Spinwheel Cooldown',
+          description: `You can spin again in **${formatDuration(remaining)}**.`,
+        })],
       });
     }
 
     activeSpins.add(key);
 
+    let betRemoved = false;
+    let gameSettled = false;
+
     try {
-      // Load the assets before collecting the bet.
+      // Load all visual assets before collecting the bet.
       const assets = await loadAssets();
 
       const removed = client.economy.removeCrowns(
@@ -360,16 +338,15 @@ module.exports = {
 
       if (!removed) {
         return message.reply({
-          embeds: [
-            buildEmbed(message, {
-              title: '💸 Bet Failed',
-              description: 'Your balance changed before the bet could be collected. Please try again.',
-            }),
-          ],
+          embeds: [buildEmbed(message, {
+            title: '💸 Bet Failed',
+            description: 'Your balance changed before the bet could be collected. Please try again.',
+          })],
         });
       }
+      betRemoved = true;
 
-      // Pick the result first, then build the animation that lands on it.
+      // Decide the result before rendering or sending the animation.
       const selectedIndex = randomInt(0, SEGMENTS.length);
       const selected = SEGMENTS[selectedIndex];
       const targetRotation = getTargetRotation(selectedIndex);
@@ -380,16 +357,12 @@ module.exports = {
 
       if (selected.multiplier > 0) {
         baseProfit = amount * (selected.multiplier - 1);
-
         boostedProfit = Math.max(
           0,
-          Math.floor(
-            Number(
-              boostProfit(client, guildId, userId, baseProfit)
-            ) || 0
-          )
+          Math.floor(Number(
+            boostProfit(client, guildId, userId, baseProfit)
+          ) || 0)
         );
-
         payout = amount + boostedProfit;
 
         client.economy.addCrowns(
@@ -404,54 +377,41 @@ module.exports = {
         );
       }
 
+      // A Lost result is also a completed settlement: the wager is lost.
+      gameSettled = true;
       const balanceAfter = client.economy.getBalance(guildId, userId);
 
-      // x2/x3 = win, Lost = loss, x1 = push (stake returned).
       const clanResult = selected.multiplier === 0
         ? false
         : selected.multiplier === 1
           ? null
           : true;
 
-      // Track once after the spin result and wallet settlement.
-      // Tracking occurs before GIF rendering, so display failures
-      // won't prevent this completed game from counting.
-      await trackClanGame(
-        client,
-        message,
-        'spinwheel',
-        clanResult
-      );
+      await trackClanGame(client, message, 'spinwheel', clanResult);
 
-      // Render the GIF and matching final still.
+      // Render only after the wallet and clan quest result are settled.
       const gifBuffer = buildSpinGif(assets, targetRotation);
-
       const finalBuffer = renderFrame(
         assets,
         targetRotation
       ).toBuffer('image/png');
 
-      // Send one message with the spinning GIF.
       const sentMessage = await message.reply({
-        embeds: [
-          createWheelEmbed(
-            message,
-            '🔴 Spinwheel • Spinning',
-            `**Bet:** ${money(client, amount)}\n\n*The wheel is spinning. Where will it land?*`,
-            'spinwheel.gif'
-          ),
-        ],
-        files: [
-          new AttachmentBuilder(gifBuffer, {
-            name: 'spinwheel.gif',
-          }),
-        ],
+        embeds: [createWheelEmbed(
+          message,
+          '🔴 Spinwheel • Spinning',
+          `**Bet:** ${money(client, amount)}\n\n*The wheel is spinning. Where will it land?*`,
+          'spinwheel.gif'
+        )],
+        files: [new AttachmentBuilder(gifBuffer, {
+          name: 'spinwheel.gif',
+        })],
+        allowedMentions: { repliedUser: false },
       });
 
       await sleep(SPIN_MS + LOAD_BUFFER_MS);
 
       let description;
-
       if (selected.multiplier === 0) {
         description =
           `**Bet:** ${money(client, amount)}\n\n` +
@@ -468,43 +428,51 @@ module.exports = {
           `**Balance:** ${money(client, balanceAfter)}`;
       }
 
-      // Replace the GIF with the still of the final frame.
       await sentMessage.edit({
-        embeds: [
-          createWheelEmbed(
-            message,
-            '🎡 Spinwheel • Result',
-            description,
-            'result.png'
-          ),
-        ],
+        embeds: [createWheelEmbed(
+          message,
+          '🎡 Spinwheel • Result',
+          description,
+          'result.png'
+        )],
         attachments: [],
-        files: [
-          new AttachmentBuilder(finalBuffer, {
-            name: 'result.png',
-          }),
-        ],
+        files: [new AttachmentBuilder(finalBuffer, {
+          name: 'result.png',
+        })],
       });
     } catch (error) {
       console.error('[Spinwheel] Error:', error);
 
+      // Refund only when the wager was removed but the actual result
+      // had not yet been settled. Never refund after a completed result.
+      if (betRemoved && !gameSettled) {
+        try {
+          client.economy.addCrowns(guildId, userId, amount, {
+            type: 'spinwheel_refund',
+            reason: 'Spinwheel failed before settlement',
+            actorId: userId,
+          });
+          betRemoved = false;
+        } catch (refundError) {
+          console.error('[Spinwheel] Refund failed:', refundError);
+        }
+      }
+
       try {
         await message.reply({
-          embeds: [
-            buildEmbed(message, {
-              title: '⚠️ Spinwheel Error',
-              description: 'Something went wrong while running the wheel. Check the bot console for details.',
-            }),
-          ],
+          embeds: [buildEmbed(message, {
+            title: '⚠️ Spinwheel Error',
+            description: gameSettled
+              ? 'The spin was already settled, but its animation or result display failed. Your wallet result has been applied.'
+              : 'Something went wrong before the spin was settled. Your bet was refunded when possible.',
+          })],
+          allowedMentions: { repliedUser: false },
         });
       } catch (replyError) {
-        console.error(
-          '[Spinwheel] Failed to send error message:',
-          replyError
-        );
+        console.error('[Spinwheel] Failed to send error message:', replyError);
       }
     } finally {
       activeSpins.delete(key);
     }
-  },
+  }),
 };
