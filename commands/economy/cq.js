@@ -1,3 +1,4 @@
+
 'use strict';
 
 const { EmbedBuilder } = require('discord.js');
@@ -9,6 +10,9 @@ const CFG = require('../../handlers/clanConfig');
 const COLOR = CFG.COLOR || '#5b0000';
 
 const ICON = key => String(CFG.ICONS?.[key] || '').trim();
+
+// Custom quest completion emoji from clanConfig.js
+const TICK = ICON('tick') || '◆';
 
 function money(amount) {
   return economy.formatCurrency(Number(amount || 0));
@@ -90,10 +94,7 @@ module.exports = {
     }
 
     try {
-      // ================================================
       // GET QUEST BOARD
-      // ================================================
-
       const board = clan.getQuestBoard(
         message.guild.id,
         message.author.id
@@ -105,10 +106,7 @@ module.exports = {
         );
       }
 
-      // ================================================
       // BUILD QUESTS
-      // ================================================
-
       const quests = Array.isArray(board.quests)
         ? board.quests
         : [];
@@ -136,7 +134,7 @@ module.exports = {
 
         const completed = Boolean(quest.done);
 
-        const mark = completed ? '✅' : '◆';
+        const mark = completed ? TICK : '◆';
 
         const label = clan.questText(quest);
 
@@ -148,10 +146,7 @@ module.exports = {
         ].join('\n');
       });
 
-      // ================================================
       // BUILD EMBED
-      // ================================================
-
       const description = [
         'Complete daily quests together with your clan!',
         '',
@@ -160,7 +155,7 @@ module.exports = {
         `${ICON('trophy')} **Daily Completion Bonus**`,
         `Complete all ${CFG.QUEST_COUNT} quests for **${Number(board.bonusXp || 0).toLocaleString('en-US')} bonus XP!**`,
         board.bonusClaimed
-          ? '✅ Your clan has already claimed today\'s bonus.'
+          ? `${TICK} Your clan has already claimed today's bonus.`
           : '',
         board.boost
           ? `\n✨ Active Clan XP Booster: **+${Math.round(board.boost * 100)}%**`
@@ -173,10 +168,7 @@ module.exports = {
         description
       );
 
-      // ================================================
       // SEND RESULT
-      // ================================================
-
       return message.reply({
         embeds: [embed],
         allowedMentions: {
