@@ -1,3 +1,4 @@
+'use strict';
 
 const { EmbedBuilder } = require('discord.js');
 
@@ -5,6 +6,7 @@ const {
   formatDuration,
   useCooldown,
   boostProfit,
+  withGamblingLock,
 } = require('../../handlers/gamblingHelpers');
 
 const MAX_BET = 25_000;
@@ -32,15 +34,13 @@ function buildEmbed(message, data = {}) {
     });
 
     if (data.thumbnail) embed.setThumbnail(data.thumbnail);
-
     if (data.footer) {
-      if (typeof data.footer === 'string') {
-        embed.setFooter({ text: data.footer });
-      } else {
-        embed.setFooter(data.footer);
-      }
+      embed.setFooter(
+        typeof data.footer === 'string'
+          ? { text: data.footer }
+          : data.footer
+      );
     }
-
     return embed;
   }
 
@@ -51,15 +51,13 @@ function buildEmbed(message, data = {}) {
   if (data.title) embed.setTitle(data.title);
   if (data.description) embed.setDescription(data.description);
   if (data.thumbnail) embed.setThumbnail(data.thumbnail);
-
   if (data.footer) {
-    if (typeof data.footer === 'string') {
-      embed.setFooter({ text: data.footer });
-    } else {
-      embed.setFooter(data.footer);
-    }
+    embed.setFooter(
+      typeof data.footer === 'string'
+        ? { text: data.footer }
+        : data.footer
+    );
   }
-
   return embed;
 }
 
@@ -71,10 +69,8 @@ function money(client, amount) {
 
 function parseChoice(raw) {
   const value = String(raw || '').toLowerCase();
-
   if (['h', 'head', 'heads'].includes(value)) return 'heads';
   if (['t', 'tail', 'tails'].includes(value)) return 'tails';
-
   return null;
 }
 
@@ -89,137 +85,131 @@ module.exports = {
   category: 'economy',
   usage: '$coinflip <amount> <h/t>',
 
-  async execute(client, message, args) {
+  execute: withGamblingLock('coinflip', async function execute(client, message, args) {
     if (!message.guild) return;
 
     if (!client.economy) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Economy Unavailable',
-            description: 'The economy system is not ready.',
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: 'Economy Unavailable',
+          description: 'The economy system is not ready.',
+        })],
       });
     }
 
-    const amount = parseInt(args[0], 10);
+    const amountText = String(args[0] ?? '').trim();
+    const amount = /^\d+$/.test(amountText) ? Number(amountText) : NaN;
     const choice = parseChoice(args[1]);
 
-    if (!Number.isInteger(amount) || amount <= 0 || !choice) {
+    if (!Number.isSafeInteger(amount) || amount <= 0 || !choice) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Coin Flip',
-            description: 'Use: `$coinflip <amount> <h/t>`',
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: 'Coin Flip',
+          description: 'Use: `$coinflip <amount> <h/t>`',
+        })],
       });
     }
 
     if (amount > MAX_BET) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Coin Flip',
-            description: `Maximum bet is **${money(client, MAX_BET)}**.`,
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: 'Coin Flip',
+          description: `Maximum bet is **${money(client, MAX_BET)}**.`,
+        })],
       });
     }
 
-    const balance = client.economy.getBalance(
-      message.guild.id,
-      message.author.id
-    );
+    const guildId = message.guild.id;
+    const userId = message.author.id;
+    const balance = client.economy.getBalance(guildId, userId);
 
     if (balance < amount) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Coin Flip',
-            description: `You only have **${money(client, balance)}**.`,
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: 'Coin Flip',
+          description: `You only have **${money(client, balance)}**.`,
+        })],
       });
     }
 
     const remaining = useCooldown(
-      message.guild.id,
-      message.author.id,
+      guildId,
+      userId,
       'coinflip',
       COOLDOWN_MS
     );
 
     if (remaining > 0) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Coin Flip',
-            description: `You are on cooldown for **${formatDuration(remaining)}**.`,
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: 'Coin Flip',
+          description: `You are on cooldown for **${formatDuration(remaining)}**.`,
+        })],
       });
     }
 
     const removed = client.economy.removeCrowns(
-      message.guild.id,
-      message.author.id,
+      guildId,
+      userId,
       amount,
       {
         type: 'coinflip_bet',
         reason: 'Coin flip bet',
-        actorId: message.author.id,
+        actorId: userId,
       }
     );
 
     if (!removed) {
       return message.reply({
-        embeds: [
-          buildEmbed(message, {
-            title: 'Coin Flip',
-            description: 'You do not have enough Crowns.',
-          }),
-        ],
+        embeds: [buildEmbed(message, {
+          title: 'Coin Flip',
+          description: 'You do not have enough Crowns.',
+        })],
       });
     }
 
-    // Determine and settle the actual result before the animation.
+    // Resolve and settle the wager once. The shared lock remains held
+    // until the animation/result message has finished.
     const flip = Math.random() < 0.495 ? 'heads' : 'tails';
     const won = choice === flip;
-
     let winnings = 0;
 
-    if (won) {
-      const baseProfit = amount;
+    try {
+      if (won) {
+        const boostedProfit = boostProfit(
+          client,
+          guildId,
+          userId,
+          amount
+        );
+        winnings = amount + boostedProfit;
 
-      const boostedProfit = boostProfit(
-        client,
-        message.guild.id,
-        message.author.id,
-        baseProfit
-      );
+        client.economy.addCrowns(
+          guildId,
+          userId,
+          winnings,
+          {
+            type: 'coinflip_win',
+            reason: 'Coin flip winnings',
+            actorId: userId,
+          }
+        );
+      }
+    } catch (error) {
+      console.error('[Coinflip] Settlement failed:', error);
+      client.economy.addCrowns(guildId, userId, amount, {
+        type: 'coinflip_refund',
+        reason: 'Coin flip settlement error refund',
+        actorId: userId,
+      });
 
-      winnings = amount + boostedProfit;
-
-      client.economy.addCrowns(
-        message.guild.id,
-        message.author.id,
-        winnings,
-        {
-          type: 'coinflip_win',
-          reason: 'Coin flip winnings',
-          actorId: message.author.id,
-        }
-      );
+      return message.reply({
+        content: 'Something went wrong settling the coin flip. Your bet was refunded.',
+        allowedMentions: { repliedUser: false },
+      }).catch(() => null);
     }
 
-    const newBalance = client.economy.getBalance(
-      message.guild.id,
-      message.author.id
-    );
-
-    // Track once after the result and wallet settlement are complete.
+    const newBalance = client.economy.getBalance(guildId, userId);
     await trackClanGame(client, message, 'coinflip', won);
 
     const resultText = won
@@ -227,43 +217,50 @@ module.exports = {
       : `Wrong guess, it was **${flip}**.\nYou lost **${money(client, amount)}**.`;
 
     const animationFrames = ['◉', '◐', '○', '◑', '◉'];
+    const makeAnimationEmbed = frame => buildEmbed(message, {
+      title: '🎲 Coin Flip',
+      description:
+        `**Flipping...**\n\n` +
+        `\`${frame}\`\n\n` +
+        `**Choice:** ${choice}\n` +
+        `**Balance:** ${money(client, balance - amount)}`,
+      thumbnail: message.author.displayAvatarURL({ size: 256 }),
+      footer: `Requested by ${message.author.username}`,
+    });
 
-    // Send one message and edit it for each animation frame.
-    const sentMessage = await message.reply({
-      embeds: [
-        buildEmbed(message, {
-          title: '🎲 Coin Flip',
+    let sentMessage;
+    try {
+      sentMessage = await message.reply({
+        embeds: [makeAnimationEmbed(animationFrames[0])],
+        allowedMentions: { repliedUser: false },
+      });
+    } catch (error) {
+      console.error('[Coinflip] Could not send animation:', error?.message || error);
+      return message.channel.send({
+        embeds: [buildEmbed(message, {
+          title: '🎲 Coin Flip Result',
           description:
-            `**Flipping...**\n\n` +
-            `\`${animationFrames[0]}\`\n\n` +
+            `${resultText}\n\n` +
             `**Choice:** ${choice}\n` +
-            `**Balance:** ${money(client, balance - amount)}`,
+            `**Balance:** ${money(client, newBalance)}`,
           thumbnail: message.author.displayAvatarURL({ size: 256 }),
           footer: `Requested by ${message.author.username}`,
-        }),
-      ],
-    });
+        })],
+      }).catch(() => null);
+    }
 
     for (let i = 1; i < animationFrames.length; i++) {
       await delay(ANIMATION_DELAY_MS);
-
-      const animatedEmbed = buildEmbed(message, {
-        title: '🎲 Coin Flip',
-        description:
-          `**Flipping...**\n\n` +
-          `\`${animationFrames[i]}\`\n\n` +
-          `**Choice:** ${choice}\n` +
-          `**Balance:** ${money(client, balance - amount)}`,
-        thumbnail: message.author.displayAvatarURL({ size: 256 }),
-        footer: `Requested by ${message.author.username}`,
-      });
-
-      await sentMessage.edit({
-        embeds: [animatedEmbed],
-      });
+      try {
+        await sentMessage.edit({
+          embeds: [makeAnimationEmbed(animationFrames[i])],
+        });
+      } catch (error) {
+        console.error('[Coinflip] Animation edit failed:', error?.message || error);
+        break;
+      }
     }
 
-    // Reveal the result in the same message.
     const finalEmbed = buildEmbed(message, {
       title: '🎲 Coin Flip',
       description:
@@ -274,8 +271,11 @@ module.exports = {
       footer: `Requested by ${message.author.username}`,
     });
 
-    return sentMessage.edit({
-      embeds: [finalEmbed],
-    });
-  },
+    try {
+      return await sentMessage.edit({ embeds: [finalEmbed] });
+    } catch (error) {
+      console.error('[Coinflip] Final message edit failed:', error?.message || error);
+      return message.channel.send({ embeds: [finalEmbed] }).catch(() => null);
+    }
+  }),
 };
