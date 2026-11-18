@@ -3,13 +3,13 @@
 const service = require('./pokemonService');
 
 const API_BASE = 'https://pokeapi.co/api/v2';
-const SPECIES_LIMIT = 809; // National Pokédex species through Generation VII.
+const SPECIES_LIMIT = 1025; // National Pokédex species through Generation IX.
 const CONCURRENCY = 5;
 const REQUEST_TIMEOUT_MS = 15000;
 
 // These species are deliberately assigned the Rare game tier. All species
 // flagged legendary or mythical by PokéAPI are assigned the Mythical game tier.
-// Every other Generation I-VII species defaults to Common. Edit this list to
+// Every other Generation I-IX species defaults to Common. Edit this list to
 // tune the server's card economy without changing already-created cards.
 const RARE_SPECIES_IDS = new Set([
   // Kanto
@@ -38,6 +38,11 @@ const RARE_SPECIES_IDS = new Set([
   // Alola
   724, 727, 730, 733, 735, 738, 740, 743, 745, 748, 750, 752, 754, 758,
   760, 763, 765, 766, 768, 773, 778, 781, 784, 787, 788, 791, 792,
+  // Galar / Hisui
+  815, 818, 823, 826, 839, 849, 858, 861, 865, 869, 879, 887, 898,
+  // Paldea
+  911, 914, 923, 934, 936, 937, 941, 949, 950, 959, 966, 977, 983,
+  998, 1000,
 ]);
 
 const GENERATION_NUMBER = Object.freeze({
@@ -48,6 +53,8 @@ const GENERATION_NUMBER = Object.freeze({
   'generation-v': 5,
   'generation-vi': 6,
   'generation-vii': 7,
+  'generation-viii': 8,
+  'generation-ix': 9,
 });
 
 function speciesRarity(species) {
@@ -109,12 +116,19 @@ async function syncSpecies(options = {}) {
     throw new Error(`PokéAPI returned ${listing.results?.length || 0} species; expected at least ${SPECIES_LIMIT}.`);
   }
 
-  const existing = new Set(
-    service.db.prepare('SELECT species_id FROM pokemon_species').all().map(row => Number(row.species_id))
-  );
+  const existingRows = service.db.prepare(
+    'SELECT species_id, types FROM pokemon_species'
+  ).all();
+  const existing = new Map(existingRows.map(row => [
+    Number(row.species_id),
+    String(row.types || '[]'),
+  ]));
   const queue = listing.results.slice(0, SPECIES_LIMIT).filter(item => {
     const id = extractId(item.url);
-    return id && id <= SPECIES_LIMIT && (force || !existing.has(id));
+    if (!id || id > SPECIES_LIMIT) return false;
+    if (force || !existing.has(id)) return true;
+    // Backfill type data for species cached by the previous version.
+    return !existing.get(id) || existing.get(id) === '[]';
   });
 
   let completed = 0;
@@ -123,8 +137,8 @@ async function syncSpecies(options = {}) {
   const upsert = service.db.prepare(`
     INSERT INTO pokemon_species (
       species_id,name,generation,rarity,is_legendary,is_mythical,
-      pokemon_id,artwork_url,api_url,updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?)
+      pokemon_id,artwork_url,types,api_url,updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(species_id) DO UPDATE SET
       name=excluded.name,
       generation=excluded.generation,
@@ -133,6 +147,7 @@ async function syncSpecies(options = {}) {
       is_mythical=excluded.is_mythical,
       pokemon_id=excluded.pokemon_id,
       artwork_url=excluded.artwork_url,
+      types=excluded.types,
       api_url=excluded.api_url,
       updated_at=excluded.updated_at
   `);
@@ -143,7 +158,7 @@ async function syncSpecies(options = {}) {
     const defaultPokemonUrl = species.varieties?.find(v => v.is_default)?.pokemon?.url;
     const pokemonId = extractId(defaultPokemonUrl) || speciesId;
     const generation = GENERATION_NUMBER[species.generation?.name];
-    if (!generation || generation > 7 || speciesId < 1 || speciesId > SPECIES_LIMIT) {
+    if (!generation || generation > 9 || speciesId < 1 || speciesId > SPECIES_LIMIT) {
       throw new Error(`Unsupported species/generation data for ID ${speciesId}.`);
     }
     const englishName = species.name
@@ -151,6 +166,22 @@ async function syncSpecies(options = {}) {
       .map(part => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ');
     const artworkUrl = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${pokemonId}.png`;
+
+    // The Pokémon endpoint includes its primary form's type(s), used for card themes.
+    // If this secondary request fails, keep the species syncable and use the rarity colour.
+    let types = [];
+    if (defaultPokemonUrl) {
+      try {
+        const pokemonData = await fetchJson(defaultPokemonUrl);
+        types = (pokemonData.types || [])
+          .map(entry => String(entry?.type?.name || '').toLowerCase())
+          .filter(Boolean)
+          .slice(0, 2);
+      } catch (typeError) {
+        // Type data is cosmetic; a failed type lookup must not block Pokédex sync.
+      }
+    }
+
     upsert.run(
       speciesId,
       englishName,
@@ -160,6 +191,7 @@ async function syncSpecies(options = {}) {
       species.is_mythical ? 1 : 0,
       pokemonId,
       artworkUrl,
+      JSON.stringify(types),
       item.url,
       Date.now() || now,
     );
