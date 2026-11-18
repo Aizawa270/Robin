@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -17,6 +18,7 @@ const {
 const messageTracker = require('./handlers/messageTracker');
 const economy = require('./handlers/economy');
 const shopSystem = require('./handlers/shopSystem');
+const pokemonSystem = require('./handlers/pokemonService');
 
 // ===== CLAN SYSTEM =====
 const clanService = require('./handlers/clanService');
@@ -843,6 +845,10 @@ client.once('ready', async () => {
   economy.init(client);
   shopSystem.init(client);
 
+  // ===== POKÉMON SYSTEM INITIALIZATION =====
+  pokemonSystem.init(client);
+  console.log('[Pokémon] System initialized');
+
   // ===== CLAN SYSTEM INITIALIZATION =====
   clanService.init(client);
   console.log('[Clan] Clan system initialized');
@@ -1416,6 +1422,14 @@ function closeDatabases() {
       '[Shutdown] Error closing databases:',
       error
     );
+  }
+
+  // ===== POKÉMON DATABASE CLEANUP =====
+  try {
+    pokemonSystem.close();
+    console.log('[Pokémon] Database closed successfully');
+  } catch (error) {
+    console.error('[Pokémon] Shutdown cleanup failed:', error);
   }
 
   process.exit(0);
