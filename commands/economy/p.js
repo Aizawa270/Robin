@@ -12,6 +12,7 @@ const {
   rarityInfo,
 } = require('../../handlers/pokemonEmbeds');
 const { canManageShop } = require('../../handlers/shopSystem');
+const { emoji } = require('../../handlers/pokemonEmojis');
 
 const THEME = '#3B82F6';
 
@@ -37,9 +38,9 @@ function error(message, title, description) {
 
 function formatPackBalances(balances) {
   return [
-    `**${balances.common}x** Common Packs`,
-    `**${balances.rare}x** Rare Packs`,
-    `**${balances.mythical}x** Mythical Packs`,
+    `${emoji('pack_common')}**${balances.common}x** Common Packs`,
+    `${emoji('pack_rare')}**${balances.rare}x** Rare Packs`,
+    `${emoji('pack_mythical')}**${balances.mythical}x** Mythical Packs`,
   ].join('\n');
 }
 
@@ -47,12 +48,12 @@ async function showHelp(message) {
   const embed = new EmbedBuilder()
     .setColor(THEME)
     .setTitle('Vanessa Pokémon')
-    .setDescription('Collect Pokémon cards from Generations I–VII, build collections and complete your Pokédex.')
+    .setDescription('Collect Pokémon cards from Generations I–IX, build collections and complete your Pokédex.')
     .addFields(
       { name: 'Packs', value: '`$p packs`\n`$p pack <common|rare|mythic>`\n`$p pack <rarity> 10` (show all 10)\n`$p daily`', inline: true },
       { name: 'Cards', value: '`$p inventory [rarity] [page] [search]`\n`$p view <card ID>`\n`$p gift @user <IDs>`\n`$p burn <IDs>`', inline: true },
       { name: 'Collections', value: '`$p create collection <name>`\n`$p collections [@user]`\n`$p display [@user] <name>`\n`$p add <ID> <name>`\n`$p remove <ID> <name>`\n`$p sethex <name> <hex>`\n`$p delete collection <name>`' },
-      { name: 'Progress', value: '`$p pokedex [generation 1-7]`\n`$p stats [@user]`\n`$p quests`\n`$p claim <quest ID>`\n`$p leaderboard [cards|mythical|unique|collections]`' },
+      { name: 'Progress', value: '`$p pokedex [1-9|gen1-gen9] [page]`\n`$p stats [@user]`\n`$p quests`\n`$p claim <quest ID>`\n`$p leaderboard [cards|mythical|unique|collections]`' },
       { name: 'Server events', value: '`$p event reward @user <rarity> [amount]`\n`$p setup sync`' },
       { name: 'EC shop', value: 'View `$ecshop` and purchase packs with `$ecbuy <item ID>`. Only EC shop products configured as Pokémon packs can be bought with this command.' },
     )
@@ -150,7 +151,7 @@ async function commandGift(message, args) {
     if (result.code === 'card_not_owned') return error(message, 'Card not available', 'One or more IDs are invalid or are not in your inventory. No cards were transferred.');
     return error(message, 'Gift failed', 'Provide between 1 and 25 unique card IDs.');
   }
-  return message.reply({ embeds: [buildSimpleEmbed('Cards gifted', `Transferred **${result.count}** card(s) to **${recipient.username}**. Cards are removed from any collection before transfer.`)] });
+  return message.reply({ embeds: [buildSimpleEmbed(`${emoji('gift')}Cards gifted`, `Transferred **${result.count}** card(s) to **${recipient.username}**. Cards are removed from any collection before transfer.`)] });
 }
 
 async function commandBurn(message, args) {
@@ -188,14 +189,16 @@ async function commandDisplay(message, args) {
 async function commandPokedex(message, args) {
   const rest = cleanArgs(args);
   const first = String(rest[0] || '').toLowerCase();
-  const hasGeneration = /^gen(?:eration)?[1-7]$/.test(first) || /^[1-7]$/.test(first);
-  const generation = hasGeneration ? Number(first.replace(/\D/g, '')) : null;
-  const pageToken = hasGeneration ? rest[1] : (first === 'all' ? rest[1] : first);
+  const separateGeneration = first === 'gen' || first === 'generation';
+  const generationToken = separateGeneration ? String(rest[1] || '') : first;
+  const hasGeneration = /^gen(?:eration)?[1-9]$/.test(generationToken) || /^[1-9]$/.test(generationToken);
+  const generation = hasGeneration ? Number(generationToken.replace(/\D/g, '')) : null;
+  const pageToken = hasGeneration ? rest[separateGeneration ? 2 : 1] : (first === 'all' ? rest[1] : first);
   const page = Math.max(1, Number(pageToken) || 1);
   const status = api.getSyncStatus();
   if (!status.ready) return error(message, 'Pokédex not initialized', `Run **$p setup sync** first. Cached species: **${status.total}/${status.expected}**.`);
   const result = pokemon.getPokedex(message.guild.id, message.author.id, generation, page, 20);
-  const lines = result.rows.map(row => `${row.discovered ? '✅' : '▫️'} **#${String(row.species_id).padStart(3, '0')} ${row.name}** • ${rarityName(row.rarity)}`);
+  const lines = result.rows.map(row => `${emoji(row.discovered ? 'discovered' : 'undiscovered', row.discovered ? '●' : '○')}${emoji('pokemon', '◈')}**#${String(row.species_id).padStart(3, '0')} ${row.name}** • ${emoji(row.rarity)}${rarityName(row.rarity)}`);
   const percentage = result.total ? ((result.found / result.total) * 100).toFixed(1) : '0.0';
   const embed = buildSimpleEmbed(`Pokédex${generation ? ` • Generation ${generation}` : ''}`, `**${result.found}/${result.total} discovered (${percentage}%)**\n\n${lines.join('\n') || 'No species found.'}`)
     .setFooter({ text: `Page ${result.page}/${result.pages} • First discovery counts once; duplicates do not increase progress.` });
@@ -224,10 +227,10 @@ async function commandStats(client, message) {
 async function commandQuests(message) {
   const quests = pokemon.getQuests(message.guild.id, message.author.id);
   const lines = quests.map(quest => {
-    const status = quest.claimed ? '✅ Claimed' : quest.completed ? '🎁 Ready to claim' : `${quest.progress}/${quest.target}`;
-    return `**${quest.title}** · [1m${quest.id}[0m\n${quest.description}\nProgress: **${status}** • Reward: **${quest.rewardAmount}x ${rarityName(quest.rewardType)} Pack**`;
+    const status = quest.claimed ? `${emoji('discovered', '●')}Claimed` : quest.completed ? `${emoji('quest_ready')}Ready to claim` : `${quest.progress}/${quest.target}`;
+    return `**${quest.title}** · \`${quest.id}\`\n${quest.description}\nProgress: **${status}** • Reward: **${quest.rewardAmount}x ${rarityName(quest.rewardType)} Pack**`;
   });
-  return message.reply({ embeds: [buildSimpleEmbed('Pokémon Quests', lines.join('\n\n') + '\n\nClaim completed quests with `$p claim <quest ID>`.')] });
+  return message.reply({ embeds: [buildSimpleEmbed(`${emoji('quest')}Pokémon Quests`, lines.join('\n\n') + '\n\nClaim completed quests with `$p claim <quest ID>`.')] });
 }
 
 async function commandClaim(message, args) {
@@ -242,13 +245,13 @@ async function commandClaim(message, args) {
     }[result.code] || 'The reward could not be claimed.';
     return error(message, 'Quest reward unavailable', text);
   }
-  return message.reply({ embeds: [buildSimpleEmbed('Quest completed!', `You received **${result.quest.rewardAmount}x ${rarityName(result.quest.rewardType)} Pack**.`)] });
+  return message.reply({ embeds: [buildSimpleEmbed(`${emoji('quest_ready')}Quest completed!`, `You received **${result.quest.rewardAmount}x ${rarityName(result.quest.rewardType)} Pack**.`)] });
 }
 
 async function commandDaily(message) {
   const result = pokemon.claimDaily(message.guild.id, message.author.id);
   if (!result.ok) return error(message, 'Daily reward claimed', 'You have already claimed today\'s Pokémon reward. The daily reset follows UTC+6.');
-  return message.reply({ embeds: [buildSimpleEmbed('Daily Pokémon Reward', `You received **${result.reward.amount}x ${rarityName(result.reward.type)} Pack**!\n\n${formatPackBalances(result.balances)}`)] });
+  return message.reply({ embeds: [buildSimpleEmbed(`${emoji('daily')}Daily Pokémon Reward`, `You received **${result.reward.amount}x ${rarityName(result.reward.type)} Pack**!\n\n${formatPackBalances(result.balances)}`)] });
 }
 
 async function commandLeaderboard(client, message, args) {
@@ -268,7 +271,7 @@ async function commandLeaderboard(client, message, args) {
 async function commandSetup(message, args) {
   if (!canManage(message)) return error(message, 'Access denied', 'Only the server owner, bot owner or members with Manage Server can run Pokémon setup.');
   const sub = String(args[0] || '').toLowerCase();
-  if (sub !== 'sync') return error(message, 'Pokémon setup', 'Use `$p setup sync` to download and cache the first 809 species from PokéAPI.');
+  if (sub !== 'sync') return error(message, 'Pokémon setup', 'Use `$p setup sync` to download and cache all 1,025 National Pokédex species from Generations I–IX.');
   const statusMessage = await message.reply({ embeds: [buildSimpleEmbed('Pokémon data sync', 'Connecting to PokéAPI and caching species information. This is normally a one-time setup task.')] });
   try {
     const result = await api.syncSpecies({
@@ -280,7 +283,7 @@ async function commandSetup(message, args) {
     });
     const genLines = result.byGeneration.map(row => `Gen ${row.generation}: ${row.count}`).join('\n');
     const rarityLines = result.byRarity.map(row => `${rarityName(row.rarity)}: ${row.count}`).join('\n');
-    const description = `Cached **${result.totalCached}/809** species.\n\n**Generations**\n${genLines}\n\n**Species rarity registry**\n${rarityLines}` + (result.failures.length ? `\n\n**${result.failures.length} request(s) failed.** Run sync again to retry missing species.` : '');
+    const description = `Cached **${result.totalCached}/1,025** species.\n\n**Generations**\n${genLines}\n\n**Species rarity registry**\n${rarityLines}` + (result.failures.length ? `\n\n**${result.failures.length} request(s) failed.** Run sync again to retry missing species.` : '');
     return statusMessage.edit({ embeds: [buildSimpleEmbed(result.ok ? 'Pokémon data ready' : 'Pokémon sync incomplete', description, result.ok ? 0x16A34A : 0xF59E0B)] });
   } catch (error) {
     console.error('[Pokémon API] Sync failed:', error);
@@ -302,7 +305,8 @@ async function commandEvent(message, args) {
 
 async function execute(client, message, args) {
   if (!message.guild) return;
-  const sub = String(args[0] || 'help').toLowerCase();
+  if (!Array.isArray(args) || args.length === 0) return;
+  const sub = String(args[0] || '').toLowerCase();
   const rest = args.slice(1);
   switch (sub) {
     case 'help': return showHelp(message);
@@ -365,7 +369,7 @@ async function execute(client, message, args) {
     case 'setup': return commandSetup(message, rest);
     case 'event': return commandEvent(message, rest);
     case 'shop': return message.reply('Pokémon packs are sold in the EC shop. Use `$ecshop` to view them.');
-    default: return showHelp(message);
+    default: return error(message, 'Unknown Pokémon command', 'Use `$p help` to see the command list.');
   }
 }
 
