@@ -45,7 +45,6 @@ db.pragma('foreign_keys = ON');
 db.pragma('synchronous = NORMAL');
 
 const PACK_TYPES = Object.freeze(['common', 'rare', 'mythical']);
-
 const CARD_RARITY = Object.freeze({
   common: { label: 'Common', color: 0x9CA3AF },
   rare: { label: 'Rare', color: 0x3B82F6 },
@@ -141,7 +140,6 @@ const QUESTS = Object.freeze([
 
 function normalizePackType(value) {
   const type = String(value || '').trim().toLowerCase();
-
   // Accept the shorter spelling in commands while keeping one canonical DB value.
   return type === 'mythic' ? 'mythical' : type;
 }
@@ -157,6 +155,7 @@ function ensureSchema() {
       is_mythical INTEGER NOT NULL DEFAULT 0,
       pokemon_id INTEGER NOT NULL,
       artwork_url TEXT NOT NULL,
+      types TEXT NOT NULL DEFAULT '[]',
       api_url TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -285,8 +284,12 @@ function ensureSchema() {
   `);
 
   // Migrate databases created by earlier versions of this service.
-  const statsColumns = db.prepare('PRAGMA table_info(pokemon_player_stats)').all();
+  const speciesColumns = db.prepare('PRAGMA table_info(pokemon_species)').all();
+  if (!speciesColumns.some(column => column.name === 'types')) {
+    db.exec("ALTER TABLE pokemon_species ADD COLUMN types TEXT NOT NULL DEFAULT '[]'");
+  }
 
+  const statsColumns = db.prepare('PRAGMA table_info(pokemon_player_stats)').all();
   if (!statsColumns.some(column => column.name === 'collections_created')) {
     db.exec(`
       ALTER TABLE pokemon_player_stats
@@ -348,7 +351,8 @@ const stmt = {
       c.*,
       s.name AS pokemon_name,
       s.generation,
-      s.artwork_url
+      s.artwork_url,
+      s.types
     FROM pokemon_cards c
     JOIN pokemon_species s ON s.species_id = c.species_id
     WHERE c.card_id = ? AND c.guild_id = ?
@@ -385,11 +389,9 @@ function ensurePlayer(guildId, userId, now = Date.now()) {
 
 function getPackBalances(guildId, userId) {
   const { gid, uid } = normalizeGuildUser(guildId, userId);
-
   ensurePlayer(gid, uid);
 
   const rows = stmt.getPacks.all(gid, uid);
-
   const output = {
     common: 0,
     rare: 0,
@@ -443,7 +445,6 @@ function randomCardId() {
 function makeUniqueCardId() {
   for (let attempt = 0; attempt < 100; attempt++) {
     const id = randomCardId();
-
     const exists = db.prepare(
       'SELECT 1 FROM pokemon_cards WHERE card_id = ?'
     ).get(id);
@@ -515,13 +516,11 @@ function chooseRarity(packType) {
 
   if (roll < rates[0]) return 'common';
   if (roll < rates[1]) return 'rare';
-
   return 'mythical';
 }
 
 function pickSpecies(rarity) {
   const pool = stmt.getSpeciesByRarity.all(rarity);
-
   if (!pool.length) return null;
 
   return pool[crypto.randomInt(pool.length)];
@@ -529,7 +528,6 @@ function pickSpecies(rarity) {
 
 function pickAvailableSpecies(requestedRarity) {
   const preferred = pickSpecies(requestedRarity);
-
   if (preferred) {
     return {
       species: preferred,
@@ -541,7 +539,6 @@ function pickAvailableSpecies(requestedRarity) {
   // and use that species' actual rarity rather than mislabelling the card.
   for (const fallback of ['common', 'rare', 'mythical']) {
     const species = pickSpecies(fallback);
-
     if (species) {
       return {
         species,
@@ -685,6 +682,7 @@ function openPack(guildId, userId, packType, now = Date.now()) {
           generation: item.species.generation,
           rarity: item.rarity,
           artwork_url: item.species.artwork_url,
+          types: item.species.types || '[]',
         });
       }
 
@@ -716,7 +714,6 @@ function openPack(guildId, userId, packType, now = Date.now()) {
 
     try {
       const cards = openTransaction();
-
       const counts = {
         common: 0,
         rare: 0,
@@ -757,22 +754,18 @@ function getInventory(guildId, userId, options = {}) {
   const { gid, uid } = normalizeGuildUser(guildId, userId);
   const page = Math.max(1, Math.floor(Number(options.page) || 1));
   const limit = Math.max(1, Math.min(20, Math.floor(Number(options.limit) || 10)));
-
   const rarityValue = options.rarity
     ? normalizePackType(options.rarity)
     : null;
-
   const rarity = rarityValue && PACK_TYPES.includes(rarityValue)
     ? rarityValue
     : null;
-
   const search = String(options.search || '').trim().toLowerCase();
 
   const where = [
     'c.guild_id = ?',
     'c.user_id = ?',
   ];
-
   const params = [gid, uid];
 
   if (rarity) {
@@ -804,7 +797,8 @@ function getInventory(guildId, userId, options = {}) {
       c.acquired_at,
       s.name AS pokemon_name,
       s.generation,
-      s.artwork_url
+      s.artwork_url,
+      s.types
     FROM pokemon_cards c
     JOIN pokemon_species s ON s.species_id = c.species_id
     WHERE ${whereSql}
@@ -838,7 +832,6 @@ function giftCards(guildId, senderId, recipientId, cardIds, now = Date.now()) {
   const gid = String(guildId || '');
   const sender = String(senderId || '');
   const recipient = String(recipientId || '');
-
   const ids = [...new Set((cardIds || []).map(id => String(id).trim()))];
 
   if (!gid || !sender || !recipient) {
@@ -922,7 +915,6 @@ function giftCards(guildId, senderId, recipientId, cardIds, now = Date.now()) {
 
     addQuestProgress(gid, recipient, 'cards_collected', cards.length, now);
     addQuestProgress(gid, recipient, 'unique_discovered', newDiscoveries, now);
-
     addQuestProgress(
       gid,
       recipient,
@@ -954,7 +946,6 @@ function giftCards(guildId, senderId, recipientId, cardIds, now = Date.now()) {
 function burnCards(guildId, userId, cardIds) {
   const gid = String(guildId || '');
   const uid = String(userId || '');
-
   const ids = [...new Set((cardIds || []).map(id => String(id).trim()))];
 
   if (!gid || !uid) {
@@ -1203,7 +1194,6 @@ function setCollectionHex(guildId, userId, collectionName, hex) {
 
 function getCollectionDisplay(guildId, userId, collectionName) {
   const collection = getCollection(guildId, userId, collectionName);
-
   if (!collection) return null;
 
   const cards = db.prepare(`
@@ -1213,7 +1203,8 @@ function getCollectionDisplay(guildId, userId, collectionName) {
       c.species_id,
       s.name AS pokemon_name,
       s.generation,
-      s.artwork_url
+      s.artwork_url,
+      s.types
     FROM pokemon_collection_cards cc
     JOIN pokemon_cards c ON c.card_id = cc.card_id
     JOIN pokemon_species s ON s.species_id = c.species_id
@@ -1232,16 +1223,14 @@ function getPokedex(guildId, userId, generation = null, page = 1, limit = 25) {
   const uid = String(userId || '');
   const safePage = Math.max(1, Math.floor(Number(page) || 1));
   const safeLimit = Math.max(1, Math.min(25, Math.floor(Number(limit) || 25)));
-
   const generationNumber = Number(generation);
-
   const hasGeneration =
     generation !== null &&
     generation !== undefined &&
     generation !== '' &&
     Number.isInteger(generationNumber) &&
     generationNumber >= 1 &&
-    generationNumber <= 7;
+    generationNumber <= 9;
 
   const speciesWhere = hasGeneration ? ' WHERE generation = ?' : '';
   const speciesParams = hasGeneration ? [generationNumber] : [];
@@ -1271,6 +1260,7 @@ function getPokedex(guildId, userId, generation = null, page = 1, limit = 25) {
       s.generation,
       s.rarity,
       s.artwork_url,
+      s.types,
       CASE WHEN p.species_id IS NULL THEN 0 ELSE 1 END AS discovered
     FROM pokemon_species s
     LEFT JOIN pokemon_pokedex p
@@ -1373,7 +1363,6 @@ function getLeaderboard(guildId, type = 'cards', limit = 10) {
   };
 
   const sql = queries[type] || queries.cards;
-
   return db.prepare(sql).all(gid, safeLimit);
 }
 
@@ -1384,7 +1373,6 @@ function getQuests(guildId, userId, now = Date.now()) {
 
   return QUESTS.map(quest => {
     const key = periodKey(quest.scope, now);
-
     const row = db.prepare(`
       SELECT progress, claimed_at
       FROM pokemon_quest_progress
@@ -1404,7 +1392,6 @@ function getQuests(guildId, userId, now = Date.now()) {
 
 function claimQuest(guildId, userId, questId, now = Date.now()) {
   const { gid, uid } = normalizeGuildUser(guildId, userId);
-
   const quest = QUESTS.find(item => item.id === String(questId));
 
   if (!quest) {
@@ -1466,7 +1453,6 @@ function claimDaily(guildId, userId, now = Date.now()) {
   ensurePlayer(gid, uid, now);
 
   const day = dateKeyUTC6(now);
-
   const rewards = [
     { type: 'common', amount: 1, weight: 70 },
     { type: 'common', amount: 2, weight: 10 },
@@ -1560,7 +1546,6 @@ function getShopProduct(guildId, itemId) {
 
 function getShopProductByType(guildId, packType) {
   const type = normalizePackType(packType);
-
   if (!PACK_TYPES.includes(type)) return null;
 
   return db.prepare(`
@@ -1572,14 +1557,8 @@ function getShopProductByType(guildId, packType) {
 
 function replaceShopProductMappings(guildId, mappings) {
   const gid = String(guildId || '');
-
-  if (!gid) {
-    throw new Error('A server is required to map Pokémon shop products.');
-  }
-
-  if (!Array.isArray(mappings)) {
-    throw new TypeError('Shop product mappings must be an array.');
-  }
+  if (!gid) throw new Error('A server is required to map Pokémon shop products.');
+  if (!Array.isArray(mappings)) throw new TypeError('Shop product mappings must be an array.');
 
   const transaction = db.transaction(() => {
     db.prepare(`
@@ -1606,7 +1585,6 @@ function replaceShopProductMappings(guildId, mappings) {
   });
 
   transaction();
-
   return true;
 }
 
@@ -1699,7 +1677,6 @@ function init(client) {
     if (!interaction.isButton()) return;
 
     const customId = String(interaction.customId || '');
-
     if (!customId.startsWith('pokemon:pack:')) return;
 
     const parts = customId.split(':');
@@ -1721,7 +1698,6 @@ function init(client) {
         content: 'Only the player who opened this pack in this server can use these buttons.',
         ephemeral: true,
       }).catch(() => {});
-
       return;
     }
 
@@ -1736,7 +1712,6 @@ function init(client) {
         content: 'That pack button is not valid.',
         ephemeral: true,
       }).catch(() => {});
-
       return;
     }
 
