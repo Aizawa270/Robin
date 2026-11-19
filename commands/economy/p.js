@@ -217,7 +217,7 @@ async function commandDisplay(message, args) {
 
   const embed = buildCollectionSummary(display.collection, display.cards, target.username);
   try {
-    const gallery = await buildCollectionGallery(display.cards);
+    const gallery = await buildCollectionGallery(display.cards, display.collection, target.username);
     if (gallery) {
       embed.setFields([]);
       embed.setImage('attachment://pokemon-collection.png');
