@@ -64,6 +64,7 @@ const CARD_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456
 
 const activeOpenings = new Set();
 const sessions = new Map();
+const browseSessions = new Map();
 
 const QUESTS = Object.freeze([
   {
@@ -1661,6 +1662,136 @@ function buildExpiredSessionReply(interaction) {
   }).catch(() => {});
 }
 
+async function handleBrowseInteraction(interaction, customId) {
+  const parts = customId.split(':');
+  const sessionId = parts[2];
+  const action = parts[3];
+  const session = browseSessions.get(sessionId);
+
+  if (!session || Date.now() > session.expiresAt) {
+    browseSessions.delete(sessionId);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'This Pokémon page has expired. Run the command again to open a fresh one.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  if (
+    String(interaction.user.id) !== session.userId ||
+    String(interaction.guildId || '') !== session.guildId
+  ) {
+    await interaction.reply({
+      content: 'Only the player who opened this Pokémon display can use these buttons.',
+      ephemeral: true,
+    }).catch(() => {});
+    return;
+  }
+
+  if (action === 'close') {
+    browseSessions.delete(sessionId);
+    await interaction.update({ components: [] }).catch(() => {});
+    return;
+  }
+
+  if (!['first', 'prev', 'next', 'last'].includes(action)) {
+    await interaction.reply({
+      content: 'That pagination button is not valid.',
+      ephemeral: true,
+    }).catch(() => {});
+    return;
+  }
+
+  try {
+    const {
+      buildInventoryEmbed,
+      buildPokedexEmbed,
+      buildBrowseButtons,
+    } = require('./pokemonEmbeds');
+
+    let result;
+    let embed;
+
+    if (session.kind === 'inventory') {
+      const options = {
+        ...(session.filters || {}),
+        limit: session.limit || 10,
+        page: 1,
+      };
+      const firstPage = getInventory(session.guildId, session.targetId, options);
+      const pages = Math.max(1, firstPage.pages);
+
+      if (action === 'first') session.page = 1;
+      else if (action === 'last') session.page = pages;
+      else if (action === 'prev') session.page = Math.max(1, session.page - 1);
+      else if (action === 'next') session.page = Math.min(pages, session.page + 1);
+
+      session.page = Math.min(Math.max(1, session.page), pages);
+      result = session.page === 1
+        ? firstPage
+        : getInventory(session.guildId, session.targetId, {
+            ...(session.filters || {}),
+            limit: session.limit || 10,
+            page: session.page,
+          });
+
+      embed = buildInventoryEmbed(
+        result,
+        session.title,
+        session.rarity,
+        session.avatarURL
+      );
+    } else if (session.kind === 'pokedex') {
+      const firstPage = getPokedex(
+        session.guildId,
+        session.targetId,
+        session.generation,
+        1,
+        session.limit || 20
+      );
+      const pages = Math.max(1, firstPage.pages);
+
+      if (action === 'first') session.page = 1;
+      else if (action === 'last') session.page = pages;
+      else if (action === 'prev') session.page = Math.max(1, session.page - 1);
+      else if (action === 'next') session.page = Math.min(pages, session.page + 1);
+
+      session.page = Math.min(Math.max(1, session.page), pages);
+      result = session.page === 1
+        ? firstPage
+        : getPokedex(
+            session.guildId,
+            session.targetId,
+            session.generation,
+            session.page,
+            session.limit || 20
+          );
+
+      embed = buildPokedexEmbed(result, session.generation);
+    } else {
+      browseSessions.delete(sessionId);
+      await interaction.update({ components: [] }).catch(() => {});
+      return;
+    }
+
+    session.expiresAt = Date.now() + 5 * 60 * 1000;
+    await interaction.update({
+      embeds: [embed],
+      components: [buildBrowseButtons(sessionId, result.page, result.pages)],
+    });
+  } catch (error) {
+    console.error('[Pokémon] Browse pagination failed:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'I could not update this Pokémon page. Please run the command again.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
+  }
+}
+
 function init(client) {
   if (!client) return module.exports;
 
@@ -1677,6 +1808,12 @@ function init(client) {
     if (!interaction.isButton()) return;
 
     const customId = String(interaction.customId || '');
+
+    if (customId.startsWith('pokemon:browse:')) {
+      await handleBrowseInteraction(interaction, customId);
+      return;
+    }
+
     if (!customId.startsWith('pokemon:pack:')) return;
 
     const parts = customId.split(':');
@@ -1761,6 +1898,7 @@ function init(client) {
 
 function close() {
   sessions.clear();
+  browseSessions.clear();
   activeOpenings.clear();
 
   if (db.open) {
@@ -1793,6 +1931,40 @@ function createPackSession(guildId, userId, cards, counts) {
     cards,
     counts: counts || { common: 0, rare: 0, mythical: 0 },
     index: 0,
+    expiresAt: now + 5 * 60 * 1000,
+  });
+
+  return id;
+}
+
+function createBrowseSession(guildId, userId, options = {}) {
+  if (!guildId || !userId) {
+    throw new Error('A server and user are required to create a Pokémon browse session.');
+  }
+
+  const kind = String(options.kind || '');
+  if (!['inventory', 'pokedex'].includes(kind)) {
+    throw new Error('Unsupported Pokémon browse session type.');
+  }
+
+  const now = Date.now();
+  for (const [sessionId, session] of browseSessions.entries()) {
+    if (session.expiresAt <= now) browseSessions.delete(sessionId);
+  }
+
+  const id = crypto.randomBytes(5).toString('hex');
+  browseSessions.set(id, {
+    kind,
+    guildId: String(guildId),
+    userId: String(userId),
+    targetId: String(options.targetId || userId),
+    title: String(options.title || 'Pokémon Inventory'),
+    avatarURL: options.avatarURL || null,
+    rarity: options.rarity || null,
+    filters: options.filters || {},
+    generation: options.generation || null,
+    limit: Math.max(1, Math.min(25, Math.floor(Number(options.limit) || (kind === 'pokedex' ? 20 : 10)))),
+    page: Math.max(1, Math.floor(Number(options.page) || 1)),
     expiresAt: now + 5 * 60 * 1000,
   });
 
@@ -1844,4 +2016,5 @@ module.exports = {
   creditShopPurchase,
   grantEventReward,
   createPackSession,
+  createBrowseSession,
 };
