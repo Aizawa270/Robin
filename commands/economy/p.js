@@ -49,20 +49,79 @@ function formatPackBalances(balances) {
 }
 
 async function showHelp(message) {
+  const botIcon = message.client?.user?.displayAvatarURL?.({ size: 128 });
   const embed = new EmbedBuilder()
     .setColor(THEME)
-    .setTitle('Vanessa Pokémon')
-    .setDescription('Collect Pokémon cards from Generations I–IX, build collections and complete your Pokédex.')
+    .setAuthor({
+      name: 'VANESSA  /  POKÉMON COLLECTION',
+      ...(botIcon ? { iconURL: botIcon } : {}),
+    })
+    .setTitle('Pokémon Field Guide')
+    .setDescription([
+      'Collect cards, discover Pokémon across **Generations I–IX**, and build your own collection.',
+      '',
+      '**Getting started** — Check your balance with `$p packs`, then open a `$p pack common`, `$p pack rare`, or `$p pack mythical`.',
+    ].join('\n'))
     .addFields(
-      { name: 'Packs', value: '`$p packs`\n`$p pack <common|rare|mythic>`\n`$p pack <rarity> 10` (show all 10)\n`$p daily`', inline: true },
-      { name: 'Cards', value: '`$p inventory [rarity] [page] [search]` (buttons to browse)\n`$p view <card ID>`\n`$p gift @user <IDs>`\n`$p burn <IDs>`', inline: true },
-      { name: 'Collections', value: '`$p create collection <name>`\n`$p collections [@user]`\n`$p display [@user] <name>`\n`$p add <ID> <name>`\n`$p remove <ID> <name>`\n`$p sethex <name> <hex>`\n`$p delete collection <name>`' },
-      { name: 'Progress', value: '`$p pokedex [1-9|gen1-gen9] [page]` (buttons to browse)\n`$p stats [@user]`\n`$p quests`\n`$p claim <quest ID>`\n`$p leaderboard [cards|mythical|unique|collections]`' },
-      { name: 'Server events', value: '`$p event reward @user <rarity> [amount]`\n`$p setup sync`' },
-      { name: 'EC shop', value: 'View `$ecshop` and purchase packs with `$ecbuy <item ID>`. Only EC shop products configured as Pokémon packs can be bought with this command.' },
+      {
+        name: '01  /  PACKS & REWARDS',
+        value: [
+          '`$p packs` — View pack balance',
+          '`$p pack <rarity>` — Open a pack',
+          '`$p pack <rarity> all` — Show all 10 cards',
+          '`$p daily` — Claim daily pack reward',
+        ].join('\n'),
+        inline: true,
+      },
+      {
+        name: '02  /  CARD INVENTORY',
+        value: [
+          '`$p inventory [rarity] [page] [search]`',
+          '`$p view <card ID>`',
+          '`$p gift @user <IDs>`',
+          '`$p burn <IDs>`',
+          '',
+          'Browse pages with the arrow controls.',
+        ].join('\n'),
+        inline: true,
+      },
+      {
+        name: '03  /  COLLECTIONS',
+        value: [
+          '`$p create collection <name>`',
+          '`$p collections [@user]`',
+          '`$p display [@user] <name>`',
+          '`$p add <card ID> <name>`',
+          '`$p remove <card ID> <name>`',
+          '`$p sethex <name> <hex>`',
+          '`$p delete collection <name>`',
+        ].join('\n'),
+        inline: false,
+      },
+      {
+        name: '04  /  POKÉDEX & PROGRESS',
+        value: [
+          '`$p pokedex [gen1-gen9] [page]`',
+          '`$p stats [@user]`',
+          '`$p quests` — View active quests',
+          '`$p claim <quest ID>`',
+          '`$p leaderboard [cards|mythical|unique|collections]`',
+        ].join('\n'),
+        inline: true,
+      },
+      {
+        name: '05  /  EC SHOP',
+        value: [
+          '`$ecshop` — Browse available items',
+          '`$ecbuy <item ID>` — Purchase a Pokémon pack',
+        ].join('\n'),
+        inline: true,
+      },
     )
-    .setFooter({ text: 'Inventories and collections are separate for each server.' })
-    .setTimestamp();
+    .setFooter({
+      text: `${message.guild?.name || 'This server'} • Your cards and collections are saved separately in each server.`,
+    });
+
   return message.reply({ embeds: [embed] });
 }
 
