@@ -1,3 +1,4 @@
+
 'use strict';
 
 const { EmbedBuilder } = require('discord.js');
@@ -9,6 +10,10 @@ const {
   boostProfit,
   withGamblingLock,
 } = require('../../handlers/gamblingHelpers');
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
@@ -43,10 +48,82 @@ const OWNER_52_TWO_MATCH_CHANCE = 25;
 const ownerCache = new WeakMap();
 
 // ============================================================
+// PENDING DICE RIGS
+// Stored in this file to avoid an additional handler file.
+// Scoped to guild + target user.
+// Cleared automatically when the bot restarts.
+// ============================================================
+
+const pendingDiceRigs = new Map();
+
+function makeDiceRigKey(guildId, userId) {
+  if (!guildId || !userId) return null;
+
+  return `${String(guildId)}:${String(userId)}`;
+}
+
+function armDiceRig(guildId, userId) {
+  const key = makeDiceRigKey(guildId, userId);
+
+  if (!key) return null;
+
+  // Unique token prevents an older game from consuming
+  // a newly armed rig.
+  const token = Symbol('dice-rig');
+
+  pendingDiceRigs.set(key, token);
+
+  return token;
+}
+
+function getDiceRigToken(guildId, userId) {
+  const key = makeDiceRigKey(guildId, userId);
+
+  if (!key) return null;
+
+  return pendingDiceRigs.get(key) || null;
+}
+
+function consumeDiceRig(guildId, userId, token) {
+  const key = makeDiceRigKey(guildId, userId);
+
+  if (!key || !token) return false;
+
+  // Only consume the exact rig used by this game.
+  if (pendingDiceRigs.get(key) !== token) {
+    return false;
+  }
+
+  pendingDiceRigs.delete(key);
+
+  return true;
+}
+
+function clearDiceRig(guildId, userId, token) {
+  const key = makeDiceRigKey(guildId, userId);
+
+  if (!key) return false;
+
+  if (
+    token &&
+    pendingDiceRigs.get(key) !== token
+  ) {
+    return false;
+  }
+
+  return pendingDiceRigs.delete(key);
+}
+
+// ============================================================
 // CLAN TRACKING
 // ============================================================
 
-async function trackClanGame(client, message, game, result) {
+async function trackClanGame(
+  client,
+  message,
+  game,
+  result
+) {
   try {
     const tracker = client?.clanSystem?.trackGame;
 
@@ -66,7 +143,9 @@ async function trackClanGame(client, message, game, result) {
 // ============================================================
 
 function randomDiceFace() {
-  return DICE_FACES[randomInt(0, DICE_FACES.length)];
+  return DICE_FACES[
+    randomInt(0, DICE_FACES.length)
+  ];
 }
 
 function randomFrom(array) {
@@ -111,9 +190,17 @@ function buildEmbed(message, data = {}) {
     .setColor('#5b0000')
     .setTimestamp();
 
-  if (data.title) embed.setTitle(data.title);
-  if (data.description) embed.setDescription(data.description);
-  if (data.thumbnail) embed.setThumbnail(data.thumbnail);
+  if (data.title) {
+    embed.setTitle(data.title);
+  }
+
+  if (data.description) {
+    embed.setDescription(data.description);
+  }
+
+  if (data.thumbnail) {
+    embed.setThumbnail(data.thumbnail);
+  }
 
   if (data.footer) {
     embed.setFooter(
@@ -230,12 +317,12 @@ async function isBotOwner(client, userId) {
 // ============================================================
 // DICE RESULT GENERATOR
 //
-// Standard:
+// STANDARD:
 // 0 matches: 35%
 // 1 match:   53%
 // 2 matches: 12%
 //
-// Owner picking 5 + 2:
+// OWNER / RIGGED:
 // 0 matches: 22%
 // 1 match:   53%
 // 2 matches: 25%
@@ -277,7 +364,9 @@ function rollDiceForPicks(
   const selectedNumbers = [pick1, pick2];
 
   const unselectedNumbers = DICE_NUMBERS.filter(
-    number => number !== pick1 && number !== pick2
+    number =>
+      number !== pick1 &&
+      number !== pick2
   );
 
   // ----------------------------------------------------------
@@ -353,6 +442,7 @@ function parsePick(raw) {
 
 function calculateBaseProfit(amount, matchCount) {
   if (matchCount === 1) return amount;
+
   if (matchCount === 2) return amount * 2;
 
   return 0;
@@ -539,6 +629,14 @@ module.exports = {
         });
       }
 
+      // Snapshot the pending rig before any asynchronous
+      // owner verification. A rig armed after this point
+      // applies to the next game instead.
+      const rigToken = getDiceRigToken(
+        guildId,
+        userId
+      );
+
       // ------------------------------------------------------
       // OWNER ADVANTAGE
       //
@@ -557,6 +655,10 @@ module.exports = {
           (pick1 === 5 && pick2 === 2) ||
           (pick1 === 2 && pick2 === 5)
         );
+
+      // A pending rig gives the same odds as the owner 5 + 2.
+      const useEnhancedOdds =
+        ownerBoost || Boolean(rigToken);
 
       // ------------------------------------------------------
       // TAKE BET
@@ -600,7 +702,7 @@ module.exports = {
         [rollA, rollB] = rollDiceForPicks(
           pick1,
           pick2,
-          ownerBoost
+          useEnhancedOdds
         );
 
         matchCount =
@@ -649,11 +751,6 @@ module.exports = {
 
         settled = true;
 
-        newBalance = client.economy.getBalance(
-          guildId,
-          userId
-        );
-
       } catch (error) {
         console.error(
           '[Dice] Error while settling bet:',
@@ -687,6 +784,39 @@ module.exports = {
             repliedUser: false,
           },
         }).catch(() => null);
+      }
+
+      // Consume the rig only after a successful settlement.
+      // Losing is still a completed game, so the rig is consumed.
+      // Failed bets and refunded games do not consume it.
+      if (rigToken) {
+        consumeDiceRig(
+          guildId,
+          userId,
+          rigToken
+        );
+      }
+
+      // ------------------------------------------------------
+      // GET FINAL BALANCE
+      // ------------------------------------------------------
+
+      try {
+        newBalance = client.economy.getBalance(
+          guildId,
+          userId
+        );
+      } catch (error) {
+        console.error(
+          '[Dice] Balance retrieval failed:',
+          error?.message || error
+        );
+
+        newBalance = balance - amount + (
+          matchCount > 0
+            ? amount + boostedProfit
+            : 0
+        );
       }
 
       // ------------------------------------------------------
@@ -848,3 +978,11 @@ module.exports = {
     }
   ),
 };
+
+// ============================================================
+// SHARED FUNCTIONS FOR rig.js
+// ============================================================
+
+module.exports.isBotOwner = isBotOwner;
+module.exports.armDiceRig = armDiceRig;
+module.exports.clearDiceRig = clearDiceRig;
