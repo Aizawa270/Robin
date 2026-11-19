@@ -9,7 +9,7 @@ const EMOJIS = {
   // Main Pokédex/card markers
   pokemon: '<:pokeball:1572961045683769404>',
   discovered: '<:search:1572961460336730213>',
-  undiscovered: '<:undiscoveredcard:1572964774554370048>',
+  undiscovered: '<:undiscoveredcard:1573020407873933463>',
 
   // Rarity markers
   common: '<:common:1572963631870771340>',
