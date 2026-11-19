@@ -232,178 +232,102 @@ async function buildCollectionGallery(cards, collection = {}, ownerLabel = '') {
   }
 
   const { createCanvas, loadImage } = canvasModule;
+
+  // Transparent gallery: only Pokémon artwork and labels are drawn.
+  // No background fill, white panels, borders, cards, or tile shapes.
   const columns = 4;
   const rows = 2;
-  const margin = 34;
-  const gap = 16;
-  const headerHeight = 104;
-  const cellWidth = 314;
-  const cellHeight = 286;
-  const width = margin * 2 + columns * cellWidth + (columns - 1) * gap;
-  const height = margin * 2 + headerHeight + rows * cellHeight + gap;
+  const width = 1200;
+  const height = 660;
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
+  const slotWidth = width / columns;
+  const rowHeight = height / rows;
 
-  const roundedRect = (x, y, w, h, radius) => {
-    const r = Math.min(radius, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-  };
-
-  const fitText = (text, maxWidth, baseSize = 19, minSize = 13, weight = '600') => {
-    let size = baseSize;
+  const fitFont = (text, maxWidth, startSize = 22, minSize = 14) => {
+    let size = startSize;
     while (size > minSize) {
-      ctx.font = `${weight} ${size}px sans-serif`;
+      ctx.font = `700 ${size}px sans-serif`;
       if (ctx.measureText(text).width <= maxWidth) break;
-      size -= 1;
+      size--;
     }
-    ctx.font = `${weight} ${size}px sans-serif`;
-    return text;
+    ctx.font = `700 ${size}px sans-serif`;
   };
 
-  const title = String(collection.name || 'Pokémon Collection');
-  const owner = String(ownerLabel || 'Collector');
-  const accent = /^#?[0-9a-f]{6}$/i.test(String(collection.hex_color || ''))
-    ? `#${String(collection.hex_color).replace('#', '')}`
-    : '#3B82F6';
-
-  // Quiet, cool neutral canvas with a single restrained accent.
-  const background = ctx.createLinearGradient(0, 0, width, height);
-  background.addColorStop(0, '#F8FAFD');
-  background.addColorStop(1, '#EFF3F8');
-  ctx.fillStyle = background;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.fillStyle = accent;
-  roundedRect(margin, 24, 42, 5, 3);
-  ctx.fill();
-
-  ctx.fillStyle = '#263247';
-  ctx.font = '700 34px sans-serif';
-  const titleText = title.length > 34 ? `${title.slice(0, 31)}…` : title;
-  ctx.fillText(titleText, margin, 70);
-
-  ctx.fillStyle = '#8190A5';
-  ctx.font = '500 15px sans-serif';
-  ctx.fillText(owner.toUpperCase(), margin, 94);
-
-  const countText = `${cards.length} / 8  POKÉMON`;
-  ctx.font = '600 14px sans-serif';
-  const countWidth = ctx.measureText(countText).width + 30;
-  roundedRect(width - margin - countWidth, 49, countWidth, 34, 17);
-  ctx.fillStyle = '#E7EDF5';
-  ctx.fill();
-  ctx.fillStyle = '#63738A';
-  ctx.textAlign = 'center';
-  ctx.fillText(countText, width - margin - countWidth / 2, 71);
-  ctx.textAlign = 'left';
-
-  ctx.strokeStyle = '#E3E9F1';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(margin, headerHeight + margin - 3);
-  ctx.lineTo(width - margin, headerHeight + margin - 3);
-  ctx.stroke();
-
-  const drawJobs = cards.slice(0, 8).map(async (card, index) => {
+  const drawPokemon = async (card, index) => {
     const column = index % columns;
     const row = Math.floor(index / columns);
-    const x = margin + column * (cellWidth + gap);
-    const y = margin + headerHeight + row * (cellHeight + gap);
-    const info = rarityInfo(card.rarity);
-    const types = getTypes(card).map(type =>
-      String(type).charAt(0).toUpperCase() + String(type).slice(1)
-    );
-    const typeLabel = types.length ? types.join(' / ') : 'Unknown type';
-    const typeColor = getPokemonColor(card, 0x8FA3BD);
-
-    // Soft white tile, with a subtle shadow and no heavy frames.
-    ctx.save();
-    ctx.shadowColor = 'rgba(37, 54, 78, 0.07)';
-    ctx.shadowBlur = 16;
-    ctx.shadowOffsetY = 5;
-    roundedRect(x, y, cellWidth, cellHeight, 20);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fill();
-    ctx.restore();
-
-    roundedRect(x + 0.5, y + 0.5, cellWidth - 1, cellHeight - 1, 20);
-    ctx.strokeStyle = '#E8EDF4';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Pale artwork well gives transparent sprite edges a consistent backdrop.
-    const centerX = x + cellWidth / 2;
-    const centerY = y + 91;
-    const artGlow = ctx.createRadialGradient(centerX, centerY, 8, centerX, centerY, 79);
-    artGlow.addColorStop(0, '#FFFFFF');
-    artGlow.addColorStop(1, '#F2F6FB');
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, 77, 0, Math.PI * 2);
-    ctx.fillStyle = artGlow;
-    ctx.fill();
+    const centerX = column * slotWidth + slotWidth / 2;
+    const rowTop = row * rowHeight;
+    const artworkCenterY = rowTop + 138;
 
     if (card.artwork_url) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 7000);
+      const timeout = setTimeout(() => controller.abort(), 7000);
       try {
-        const response = await fetch(card.artwork_url, { signal: controller.signal });
+        const response = await fetch(card.artwork_url, {
+          signal: controller.signal,
+        });
+
         if (response.ok) {
           const bytes = Buffer.from(await response.arrayBuffer());
           if (bytes.length > 0 && bytes.length <= 5 * 1024 * 1024) {
             const image = await loadImage(bytes);
-            const maxWidth = 164;
-            const maxHeight = 164;
-            const scale = Math.min(maxWidth / image.width, maxHeight / image.height);
+            const maxArtworkWidth = 230;
+            const maxArtworkHeight = 230;
+            const scale = Math.min(
+              maxArtworkWidth / image.width,
+              maxArtworkHeight / image.height,
+              1
+            );
             const drawWidth = image.width * scale;
             const drawHeight = image.height * scale;
+
             ctx.drawImage(
               image,
               centerX - drawWidth / 2,
-              centerY - drawHeight / 2,
+              artworkCenterY - drawHeight / 2,
               drawWidth,
               drawHeight
             );
           }
         }
       } catch {
-        // Keep the tile clean even if this Pokémon's artwork cannot be loaded.
+        // Keep this slot transparent if an artwork request fails.
       } finally {
-        clearTimeout(timer);
+        clearTimeout(timeout);
       }
     }
 
     const name = String(card.pokemon_name || 'Unknown Pokémon');
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#263247';
-    fitText(name, cellWidth - 34, 20, 13, '700');
-    ctx.fillText(name, centerX, y + 195);
+    ctx.textBaseline = 'middle';
+    fitFont(name, slotWidth - 28, 22, 14);
 
-    // A tiny type-colour accent separates the artwork from its metadata.
-    ctx.fillStyle = `#${typeColor.toString(16).padStart(6, '0')}`;
-    roundedRect(centerX - 17, y + 207, 34, 3, 2);
-    ctx.fill();
+    // A restrained outlined label stays readable on Discord's light and
+    // dark themes without putting a panel or opaque background behind it.
+    const labelY = rowTop + 285;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(20, 27, 39, 0.78)';
+    ctx.strokeText(name, centerX, labelY, slotWidth - 30);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(name, centerX, labelY, slotWidth - 30);
 
-    ctx.fillStyle = '#718198';
-    fitText(typeLabel, cellWidth - 32, 14, 11, '500');
-    ctx.fillText(typeLabel, centerX, y + 232);
-
-    ctx.fillStyle = '#9AA7B8';
-    ctx.font = '500 12px sans-serif';
-    ctx.fillText(`${info.label}  ·  Gen ${card.generation || '?'}`, centerX, y + 254);
-
-    ctx.fillStyle = '#B0BAC8';
-    ctx.font = '500 11px sans-serif';
-    ctx.fillText(`ID  ${String(card.card_id || '------')}`, centerX, y + 274);
+    const details = `${rarityInfo(card.rarity).label}  ·  Gen ${card.generation || '?'}`;
+    ctx.font = '500 14px sans-serif';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(20, 27, 39, 0.72)';
+    ctx.strokeText(details, centerX, labelY + 27, slotWidth - 32);
+    ctx.fillStyle = '#E6EAF0';
+    ctx.fillText(details, centerX, labelY + 27, slotWidth - 32);
     ctx.textAlign = 'left';
-  });
+    ctx.textBaseline = 'alphabetic';
+  };
 
-  await Promise.all(drawJobs);
+  // Always draw in the supplied order: slots 1–4 on top, 5–8 below.
+  await Promise.all(cards.slice(0, 8).map(drawPokemon));
+
   return new AttachmentBuilder(canvas.toBuffer('image/png'), {
     name: 'pokemon-collection.png',
   });
