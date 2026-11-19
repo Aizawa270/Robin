@@ -8,6 +8,10 @@ const {
   buildPackButtons,
   buildCollectionSummary,
   buildCollectionCardEmbeds,
+  buildCollectionGallery,
+  buildBrowseButtons,
+  buildInventoryEmbed,
+  buildPokedexEmbed,
   buildSimpleEmbed,
   rarityInfo,
 } = require('../../handlers/pokemonEmbeds');
@@ -51,9 +55,9 @@ async function showHelp(message) {
     .setDescription('Collect Pokémon cards from Generations I–IX, build collections and complete your Pokédex.')
     .addFields(
       { name: 'Packs', value: '`$p packs`\n`$p pack <common|rare|mythic>`\n`$p pack <rarity> 10` (show all 10)\n`$p daily`', inline: true },
-      { name: 'Cards', value: '`$p inventory [rarity] [page] [search]`\n`$p view <card ID>`\n`$p gift @user <IDs>`\n`$p burn <IDs>`', inline: true },
+      { name: 'Cards', value: '`$p inventory [rarity] [page] [search]` (buttons to browse)\n`$p view <card ID>`\n`$p gift @user <IDs>`\n`$p burn <IDs>`', inline: true },
       { name: 'Collections', value: '`$p create collection <name>`\n`$p collections [@user]`\n`$p display [@user] <name>`\n`$p add <ID> <name>`\n`$p remove <ID> <name>`\n`$p sethex <name> <hex>`\n`$p delete collection <name>`' },
-      { name: 'Progress', value: '`$p pokedex [1-9|gen1-gen9] [page]`\n`$p stats [@user]`\n`$p quests`\n`$p claim <quest ID>`\n`$p leaderboard [cards|mythical|unique|collections]`' },
+      { name: 'Progress', value: '`$p pokedex [1-9|gen1-gen9] [page]` (buttons to browse)\n`$p stats [@user]`\n`$p quests`\n`$p claim <quest ID>`\n`$p leaderboard [cards|mythical|unique|collections]`' },
       { name: 'Server events', value: '`$p event reward @user <rarity> [amount]`\n`$p setup sync`' },
       { name: 'EC shop', value: 'View `$ecshop` and purchase packs with `$ecbuy <item ID>`. Only EC shop products configured as Pokémon packs can be bought with this command.' },
     )
@@ -114,20 +118,48 @@ async function commandInventory(message, args) {
   const mention = mentionUser(message);
   const target = mention || message.author;
   const rest = cleanArgs(args);
-  const rarity = rest.find(value => pokemon.PACK_TYPES.includes(String(value).toLowerCase()));
+  const rarity = rest.find(value => pokemon.PACK_TYPES.includes(String(value).toLowerCase())) || null;
   const pageArg = rest.find(value => /^\d+$/.test(String(value)));
   const search = rest.filter(value => value !== rarity && value !== pageArg).join(' ').trim();
-  const page = Math.max(1, Number(pageArg) || 1);
-  const result = pokemon.getInventory(message.guild.id, target.id, { rarity, page, search, limit: 10 });
-  const title = target.id === message.author.id ? 'Your Pokémon Inventory' : `${target.username}'s Pokémon Inventory`;
-  const lines = result.cards.map(card => {
-    const label = rarityName(card.rarity);
-    return `**${card.pokemon_name}** • ${label} • Gen ${card.generation}\nID: \`${card.card_id}\``;
+  const requestedPage = Math.max(1, Number(pageArg) || 1);
+  const title = target.id === message.author.id
+    ? 'Your Pokémon Inventory'
+    : `${target.username}'s Pokémon Inventory`;
+  const avatarURL = target.displayAvatarURL({ size: 256 });
+
+  const firstPage = pokemon.getInventory(message.guild.id, target.id, {
+    rarity,
+    search,
+    page: 1,
+    limit: 10,
   });
-  const embed = buildSimpleEmbed(title, lines.length ? lines.join('\n\n') : 'No cards found on this page.')
-    .setFooter({ text: `Page ${result.page}/${result.pages} • ${result.total} card(s)${rarity ? ` • ${rarityName(rarity)}` : ''}` })
-    .setThumbnail(target.displayAvatarURL({ size: 256 }));
-  return message.reply({ embeds: [embed] });
+  const page = Math.min(requestedPage, firstPage.pages);
+  const result = page === 1
+    ? firstPage
+    : pokemon.getInventory(message.guild.id, target.id, {
+        rarity,
+        search,
+        page,
+        limit: 10,
+      });
+
+  const components = result.pages > 1
+    ? [pokemon.createBrowseSession(message.guild.id, message.author.id, {
+        kind: 'inventory',
+        targetId: target.id,
+        title,
+        avatarURL,
+        rarity,
+        filters: { rarity, search },
+        page: result.page,
+        limit: 10,
+      })].map(sessionId => buildBrowseButtons(sessionId, result.page, result.pages))
+    : [];
+
+  return message.reply({
+    embeds: [buildInventoryEmbed(result, title, rarity, avatarURL)],
+    components,
+  });
 }
 
 async function commandView(message, args) {
@@ -179,11 +211,23 @@ async function commandDisplay(message, args) {
   const target = mentionUser(message) || message.author;
   const name = cleanArgs(args).join(' ').trim();
   if (!name) return error(message, 'Missing collection name', 'Use `$p display <collection name>` or `$p display @user <collection name>`.');
+
   const display = pokemon.getCollectionDisplay(message.guild.id, target.id, name);
   if (!display) return error(message, 'Collection not found', 'That player does not have a collection with that name.');
-  const embeds = [buildCollectionSummary(display.collection, display.cards, target.username), ...buildCollectionCardEmbeds(display.cards)];
-  // Discord allows up to ten embeds per message. A collection has at most eight cards.
-  return message.reply({ embeds });
+
+  const embed = buildCollectionSummary(display.collection, display.cards, target.username);
+  try {
+    const gallery = await buildCollectionGallery(display.cards);
+    if (gallery) {
+      embed.setFields([]);
+      embed.setImage('attachment://pokemon-collection.png');
+      return message.reply({ embeds: [embed], files: [gallery] });
+    }
+  } catch (galleryError) {
+    console.error('[Pokémon] Collection gallery generation failed:', galleryError);
+  }
+
+  return message.reply({ embeds: [embed] });
 }
 
 async function commandPokedex(message, args) {
@@ -193,16 +237,36 @@ async function commandPokedex(message, args) {
   const generationToken = separateGeneration ? String(rest[1] || '') : first;
   const hasGeneration = /^gen(?:eration)?[1-9]$/.test(generationToken) || /^[1-9]$/.test(generationToken);
   const generation = hasGeneration ? Number(generationToken.replace(/\D/g, '')) : null;
-  const pageToken = hasGeneration ? rest[separateGeneration ? 2 : 1] : (first === 'all' ? rest[1] : first);
-  const page = Math.max(1, Number(pageToken) || 1);
+  const pageToken = hasGeneration
+    ? rest[separateGeneration ? 2 : 1]
+    : (first === 'all' ? rest[1] : (/^\d+$/.test(first) ? first : null));
+  const requestedPage = Math.max(1, Number(pageToken) || 1);
+
   const status = api.getSyncStatus();
-  if (!status.ready) return error(message, 'Pokédex not initialized', `Run **$p setup sync** first. Cached species: **${status.total}/${status.expected}**.`);
-  const result = pokemon.getPokedex(message.guild.id, message.author.id, generation, page, 20);
-  const lines = result.rows.map(row => `${emoji(row.discovered ? 'discovered' : 'undiscovered', row.discovered ? '●' : '○')}${emoji('pokemon', '◈')}**#${String(row.species_id).padStart(3, '0')} ${row.name}** • ${emoji(row.rarity)}${rarityName(row.rarity)}`);
-  const percentage = result.total ? ((result.found / result.total) * 100).toFixed(1) : '0.0';
-  const embed = buildSimpleEmbed(`Pokédex${generation ? ` • Generation ${generation}` : ''}`, `**${result.found}/${result.total} discovered (${percentage}%)**\n\n${lines.join('\n') || 'No species found.'}`)
-    .setFooter({ text: `Page ${result.page}/${result.pages} • First discovery counts once; duplicates do not increase progress.` });
-  return message.reply({ embeds: [embed] });
+  if (!status.ready) {
+    return error(message, 'Pokédex not initialized', `Run **$p setup sync** first. Cached species: **${status.total}/${status.expected}**.`);
+  }
+
+  const firstPage = pokemon.getPokedex(message.guild.id, message.author.id, generation, 1, 20);
+  const page = Math.min(requestedPage, firstPage.pages);
+  const result = page === 1
+    ? firstPage
+    : pokemon.getPokedex(message.guild.id, message.author.id, generation, page, 20);
+
+  const components = result.pages > 1
+    ? [pokemon.createBrowseSession(message.guild.id, message.author.id, {
+        kind: 'pokedex',
+        targetId: message.author.id,
+        generation,
+        page: result.page,
+        limit: 20,
+      })].map(sessionId => buildBrowseButtons(sessionId, result.page, result.pages))
+    : [];
+
+  return message.reply({
+    embeds: [buildPokedexEmbed(result, generation)],
+    components,
+  });
 }
 
 async function commandStats(client, message) {
