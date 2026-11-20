@@ -1035,48 +1035,100 @@ client.once('ready', async () => {
 
 // ===== MESSAGE CREATE =====
 client.on('messageCreate', async message => {
-  if (message.author.bot) return;
+  if (!message.author || message.author.bot) return;
 
-  // Run TikTok conversion independently.
+  // ==========================================================
+  // TIKTOK DOWNLOADER
+  // Runs independently. Errors cannot block commands.
+  // ==========================================================
+
   handleTikTokPreview(message).catch(error => {
     console.error('[TikTok] Unexpected error:', error);
   });
 
-  // AFK handling remains unchanged.
-  await afkModule.handleMessage(client, message);
-
   // ==========================================================
-  // AI CHAT
-  // Only processes direct mentions, replies to Vanessa,
-  // and the user's $aimemory controls.
+  // AFK HANDLER
   // ==========================================================
-
-  let aiCommandHandled = false;
 
   try {
-    aiCommandHandled = await aiChat.handleMessage(
-      client,
-      message
-    );
+    await afkModule.handleMessage(client, message);
   } catch (error) {
-    console.error('[AI] Message handler failed:', error);
+    console.error('[AFK] Message handler failed:', error);
   }
 
-  // Do not pass $aimemory controls to the regular command handler.
-  if (!aiCommandHandled) {
-    await handleMessage(client, message);
+  // ==========================================================
+  // AI MEMORY COMMAND
+  // Handle this before the regular command handler.
+  // ==========================================================
+
+  const prefix = message.guild
+    ? (client.getPrefix?.(message.guild.id) || '$')
+    : '$';
+
+  const content = message.content?.trim() || '';
+  const memoryCommand = `${prefix}aimemory`;
+
+  const isAIMemoryCommand =
+    content.toLowerCase() === memoryCommand.toLowerCase() ||
+    content.toLowerCase().startsWith(
+      `${memoryCommand.toLowerCase()} `
+    );
+
+  if (isAIMemoryCommand) {
+    try {
+      await aiChat.handleMessage(client, message);
+    } catch (error) {
+      console.error('[AI] Memory command failed:', error);
+    }
+  } else {
+    // ========================================================
+    // NORMAL COMMAND HANDLER
+    // Process commands BEFORE conversational AI.
+    // ========================================================
+
+    try {
+      await handleMessage(client, message);
+    } catch (error) {
+      console.error('[Commands] Message handler failed:', error);
+    }
+
+    // ========================================================
+    // AI CHAT
+    // The AI handler ignores regular prefix commands.
+    // ========================================================
+
+    try {
+      await aiChat.handleMessage(client, message);
+    } catch (error) {
+      console.error('[AI] Message handler failed:', error);
+    }
   }
 
-  // Existing message tracking remains unchanged.
-  await messageTracker.handleMessage(client, message);
+  // ==========================================================
+  // MESSAGE TRACKER
+  // ==========================================================
+
+  try {
+    await messageTracker.handleMessage(client, message);
+  } catch (error) {
+    console.error('[MessageTracker] Message handler failed:', error);
+  }
+
+  // ==========================================================
+  // AUTOMOD
+  // ==========================================================
 
   try {
     if (client.automod?.checkMessage) {
       await client.automod.checkMessage(message);
     }
   } catch (error) {
-    console.error('Automod error:', error);
+    console.error('[Automod] Message check failed:', error);
   }
+
+  // ==========================================================
+  // WATCHWORDS
+  // ==========================================================
 
   try {
     const watchwordCommand = require('./commands/misc/watchword');
@@ -1084,7 +1136,9 @@ client.on('messageCreate', async message => {
     if (watchwordCommand?.checkWatchwords) {
       await watchwordCommand.checkWatchwords(client, message);
     }
-  } catch (error) {}
+  } catch (error) {
+    console.error('[Watchword] Message check failed:', error);
+  }
 });
 
 // ============================================================
