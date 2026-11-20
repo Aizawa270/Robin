@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -36,6 +35,9 @@ const afkModule = require('./commands/utility/afk');
 // ===== VC MODULE =====
 const { setupVCHandler } = require('./handlers/vcHandler');
 
+// ===== AI CHAT MODULE =====
+const aiChat = require('./handlers/aiChat');
+
 // ===== CLIENT =====
 const client = new Client({
   intents: [
@@ -63,6 +65,9 @@ if (!fs.existsSync(DATA_DIR)) {
 
 // ===== VC HANDLER INITIALIZATION =====
 setupVCHandler(client);
+
+// ===== AI CHAT INITIALIZATION =====
+aiChat.init(client);
 
 // ===== DATABASES =====
 
@@ -802,6 +807,17 @@ async function initializeBoosterRoleTracking() {
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
+  if (
+    process.env.CROWLLM_API_KEY &&
+    process.env.CROWLLM_MODEL
+  ) {
+    console.log('[AI] CrowLLM configuration detected');
+  } else {
+    console.warn(
+      '[AI] CrowLLM is not configured. Check CROWLLM_API_KEY and CROWLLM_MODEL in .env.'
+    );
+  }
+
   client.user.setPresence({
     activities: [
       {
@@ -1026,9 +1042,32 @@ client.on('messageCreate', async message => {
     console.error('[TikTok] Unexpected error:', error);
   });
 
-  // Existing handlers remain unchanged.
+  // AFK handling remains unchanged.
   await afkModule.handleMessage(client, message);
-  await handleMessage(client, message);
+
+  // ==========================================================
+  // AI CHAT
+  // Only processes direct mentions, replies to Vanessa,
+  // and the user's $aimemory controls.
+  // ==========================================================
+
+  let aiCommandHandled = false;
+
+  try {
+    aiCommandHandled = await aiChat.handleMessage(
+      client,
+      message
+    );
+  } catch (error) {
+    console.error('[AI] Message handler failed:', error);
+  }
+
+  // Do not pass $aimemory controls to the regular command handler.
+  if (!aiCommandHandled) {
+    await handleMessage(client, message);
+  }
+
+  // Existing message tracking remains unchanged.
   await messageTracker.handleMessage(client, message);
 
   try {
@@ -1398,6 +1437,16 @@ function closeDatabases() {
 
     if (client.vcDB?.open) client.vcDB.close();
     if (client.msgTrackerDB?.open) client.msgTrackerDB.close();
+
+    // AI CHAT DATABASE CLEANUP
+    try {
+      aiChat.close();
+    } catch (error) {
+      console.error(
+        '[AI] Shutdown cleanup failed:',
+        error
+      );
+    }
 
     // Clan shutdown cleanup.
     try {
