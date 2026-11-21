@@ -67,10 +67,11 @@ function buildCardEmbed(card, index = 0, total = 1, counts = null) {
     : 'Unknown';
   const name = card.pokemon_name || card.name || 'Unknown Pokémon';
 
+  const isShiny = Number(card.is_shiny) === 1;
   const embed = new EmbedBuilder()
-    .setColor(getPokemonColor(card, info.color))
-    .setTitle(`${emoji('pokemon', '◈')}${name}`)
-    .setDescription(`**${info.label} Pokémon Card**  ·  ${typeLabel} type`)
+    .setColor(isShiny ? 0xE5B93D : getPokemonColor(card, info.color))
+    .setTitle(`${isShiny ? '✨ ' : ''}${emoji('pokemon', '◈')}${name}`)
+    .setDescription(`**${info.label} Pokémon Card**${isShiny ? '  ·  ✨ **SHINY**' : ''}  ·  ${typeLabel} type`)
     .addFields(
       { name: 'Card ID', value: `\`${card.card_id}\``, inline: true },
       { name: 'Generation', value: `Gen ${card.generation || '?'}`, inline: true },
@@ -135,13 +136,14 @@ function buildInventoryEmbed(result, title, rarity = null, avatarURL = null, fil
     const info = rarityInfo(card.rarity);
     const types = getTypes(card);
     const typeLabel = types.length ? types.join(' / ') : 'Type unavailable';
-    return `${emoji('pokemon', '◈')} **${card.pokemon_name || 'Unknown Pokémon'}**  ·  ${info.label}\n${typeLabel}  ·  Gen ${card.generation || '?'}\nID: \`${card.card_id}\``;
+    return `${emoji('pokemon', '◈')} **${card.pokemon_name || 'Unknown Pokémon'}**${Number(card.is_shiny) === 1 ? '  ·  ✨ **SHINY**' : ''}  ·  ${info.label}\n${typeLabel}  ·  Gen ${card.generation || '?'}\nID: \`${card.card_id}\``;
   });
 
   const activeFilters = [];
   if (filters.rarity) activeFilters.push(`${rarityInfo(filters.rarity).label}`);
   if (filters.type) activeFilters.push(`${filters.type[0].toUpperCase()}${filters.type.slice(1)} type`);
   if (filters.generation) activeFilters.push(`Gen ${filters.generation}`);
+  if (filters.shiny) activeFilters.push('Shiny cards');
   if (filters.search) activeFilters.push(`Name: ${filters.search}`);
 
   const embed = new EmbedBuilder()
@@ -196,7 +198,7 @@ function buildCollectionSummary(collection, cards, ownerLabel) {
     const types = getTypes(card);
     const typeLabel = types.length ? types.join(' / ') : 'Type unavailable';
     const artwork = card.artwork_url ? `  ·  [Artwork](${card.artwork_url})` : '';
-    return `${emoji('pokemon', '◈')} **${index + 1}. ${card.pokemon_name || 'Unknown Pokémon'}**\n${info.label}  ·  ${typeLabel}  ·  Gen ${card.generation || '?'}\nID: \`${card.card_id}\`${artwork}`;
+    return `${emoji('pokemon', '◈')} **${index + 1}. ${card.pokemon_name || 'Unknown Pokémon'}**${Number(card.is_shiny) === 1 ? '  ·  ✨ **SHINY**' : ''}\n${info.label}  ·  ${typeLabel}  ·  Gen ${card.generation || '?'}\nID: \`${card.card_id}\`${artwork}`;
   };
 
   const left = cards.filter((_card, index) => index % 2 === 0)
@@ -277,7 +279,7 @@ async function buildCollectionGallery(cards) {
     ctx.fillStyle = '#FFFFFF';
     ctx.fillText(name, centerX, labelY, slotWidth - 30);
 
-    const details = `${rarityInfo(card.rarity).label}  ·  Gen ${card.generation || '?'}`;
+    const details = `${rarityInfo(card.rarity).label}${Number(card.is_shiny) === 1 ? '  ·  SHINY' : ''}  ·  Gen ${card.generation || '?'}`;
     ctx.font = '500 14px sans-serif';
     ctx.lineWidth = 4;
     ctx.strokeStyle = 'rgba(20, 27, 39, 0.78)';
@@ -295,13 +297,91 @@ function buildCollectionCardEmbeds(cards) {
     const info = rarityInfo(card.rarity);
     const types = getTypes(card);
     const typeLabel = types.length ? types.join(' / ') : 'Type unavailable';
+    const isShiny = Number(card.is_shiny) === 1;
     const embed = new EmbedBuilder()
-      .setColor(getPokemonColor(card, info.color))
-      .setTitle(`${index + 1}. ${emoji('pokemon', '◈')}${card.pokemon_name || 'Unknown Pokémon'}`)
-      .setDescription(`${info.label}  ·  ${typeLabel}  ·  Gen ${card.generation || '?'}\nCard ID: \`${card.card_id}\`  ·  Pokédex: #${String(card.species_id || '').padStart(3, '0')}`);
+      .setColor(isShiny ? 0xE5B93D : getPokemonColor(card, info.color))
+      .setTitle(`${index + 1}. ${isShiny ? '✨ ' : ''}${emoji('pokemon', '◈')}${card.pokemon_name || 'Unknown Pokémon'}`)
+      .setDescription(`${info.label}${isShiny ? '  ·  ✨ **SHINY**' : ''}  ·  ${typeLabel}  ·  Gen ${card.generation || '?'}\nCard ID: \`${card.card_id}\`  ·  Pokédex: #${String(card.species_id || '').padStart(3, '0')}`);
     if (card.artwork_url) embed.setImage(card.artwork_url);
     return embed;
   });
+}
+
+function buildProfileEmbed(user, stats, packBalances, serverName = 'This server') {
+  const avatar = user?.displayAvatarURL?.({ size: 256 });
+  const username = user?.username || 'PokéPack Collector';
+  const discovered = Number(stats.unique_discovered || 0);
+  const dexPercent = Math.min(100, (discovered / 1025) * 100);
+  const joinedAt = Number(stats.created_at || 0);
+  const joinedText = joinedAt > 0 ? `<t:${Math.floor(joinedAt / 1000)}:D>` : 'Unknown';
+
+  const embed = new EmbedBuilder()
+    .setColor(THEME)
+    .setAuthor({
+      name: 'POKÉPACK  /  COLLECTOR PROFILE',
+      ...(avatar ? { iconURL: avatar } : {}),
+    })
+    .setTitle(`${username}'s Collection`)
+    .setDescription([
+      `Collector since **${joinedText}**`,
+      `Pokédex progress  ·  **${discovered.toLocaleString('en-US')}/1,025**  (${dexPercent.toFixed(1)}%)`,
+    ].join('\n'))
+    .addFields(
+      {
+        name: 'COLLECTION OVERVIEW',
+        value: [
+          `**${Number(stats.cards_owned || 0).toLocaleString('en-US')}** cards owned`,
+          `**${Number(stats.unique_discovered || 0).toLocaleString('en-US')}** unique Pokémon`,
+          `**${Number(stats.collections || 0).toLocaleString('en-US')}** collections created`,
+        ].join('\n'),
+        inline: true,
+      },
+      {
+        name: 'CARD RARITY',
+        value: [
+          `Common  ·  **${Number(stats.common_cards || 0).toLocaleString('en-US')}**`,
+          `Rare  ·  **${Number(stats.rare_cards || 0).toLocaleString('en-US')}**`,
+          `Mythical  ·  **${Number(stats.mythical_cards || 0).toLocaleString('en-US')}**`,
+          `✨ Shiny cards  ·  **${Number(stats.shiny_cards || 0).toLocaleString('en-US')}**`,
+        ].join('\n'),
+        inline: true,
+      },
+      {
+        name: 'PACK INVENTORY',
+        value: [
+          `Common Packs  ·  **${Number(packBalances?.common || 0).toLocaleString('en-US')}**`,
+          `Rare Packs  ·  **${Number(packBalances?.rare || 0).toLocaleString('en-US')}**`,
+          `Mythical Packs  ·  **${Number(packBalances?.mythical || 0).toLocaleString('en-US')}**`,
+        ].join('\n'),
+        inline: true,
+      },
+      {
+        name: 'COLLECTOR RECORD',
+        value: [
+          `Packs opened  ·  **${Number(stats.packs_opened || 0).toLocaleString('en-US')}**`,
+          `Cards burned  ·  **${Number(stats.cards_burned || 0).toLocaleString('en-US')}**`,
+          `Cards gifted  ·  **${Number(stats.cards_gifted || 0).toLocaleString('en-US')}**`,
+        ].join('\n'),
+        inline: true,
+      },
+      {
+        name: 'RECENT CARDS IN COLLECTION',
+        value: (Array.isArray(stats.recent_cards) && stats.recent_cards.length)
+          ? stats.recent_cards.map(card => {
+              const name = String(card.pokemon_name || 'Unknown Pokémon');
+              const artwork = card.artwork_url ? `[${name}](${card.artwork_url})` : `**${name}**`;
+              const shiny = Number(card.is_shiny) === 1 ? '  ·  ✨ Shiny' : '';
+              return `${artwork}  ·  ${rarityInfo(card.rarity).label}${shiny}  ·  \`${card.card_id}\``;
+            }).join('\n')
+          : 'No cards collected yet.',
+        inline: false,
+      },
+    )
+    .setFooter({ text: `${serverName}  ·  Shiny status is separate from card rarity` })
+    .setTimestamp();
+
+  if (avatar) embed.setThumbnail(avatar);
+  return embed;
 }
 
 function buildSimpleEmbed(title, description, color = THEME) {
@@ -324,5 +404,6 @@ module.exports = {
   buildCollectionSummary,
   buildCollectionGallery,
   buildCollectionCardEmbeds,
+  buildProfileEmbed,
   buildSimpleEmbed,
 };
