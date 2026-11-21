@@ -384,6 +384,167 @@ function buildProfileEmbed(user, stats, packBalances, serverName = 'This server'
   return embed;
 }
 
+async function buildProfileImage(user, stats, packBalances, serverName = 'This server') {
+  let canvasModule;
+  try {
+    canvasModule = require('@napi-rs/canvas');
+  } catch {
+    return null;
+  }
+
+  const { createCanvas, loadImage } = canvasModule;
+  const width = 1600;
+  const height = 900;
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+
+  const roundedRect = (x, y, w, h, radius, fill, stroke = null, lineWidth = 1) => {
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, radius);
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.lineWidth = lineWidth; ctx.strokeStyle = stroke; ctx.stroke(); }
+  };
+  const text = (value, x, y, size, color = '#E8EDF7', weight = 600, align = 'left') => {
+    ctx.font = `${weight} ${size}px sans-serif`;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = color;
+    ctx.fillText(String(value), x, y);
+  };
+  const number = value => Number(value || 0).toLocaleString('en-US');
+  const loadRemote = async url => {
+    if (!url) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6500);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) return null;
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (!bytes.length || bytes.length > 5 * 1024 * 1024) return null;
+      return await loadImage(bytes);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const bg = ctx.createLinearGradient(0, 0, width, height);
+  bg.addColorStop(0, '#111827');
+  bg.addColorStop(0.55, '#1B2335');
+  bg.addColorStop(1, '#101522');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+  ctx.globalAlpha = 0.12;
+  for (let i = 0; i < 18; i++) {
+    ctx.fillStyle = i % 2 ? '#60A5FA' : '#A78BFA';
+    ctx.beginPath();
+    ctx.arc((i * 173) % width, (i * 97) % height, 90 + (i % 4) * 24, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Header / trainer identity
+  roundedRect(34, 30, 1532, 190, 28, '#252D40', '#59647C', 3);
+  roundedRect(56, 50, 140, 140, 22, '#111827', '#65738E', 2);
+  const avatarUrl = user?.displayAvatarURL?.({ extension: 'png', size: 256 });
+  const avatar = await loadRemote(avatarUrl);
+  if (avatar) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(66, 60, 120, 120, 18);
+    ctx.clip();
+    ctx.drawImage(avatar, 66, 60, 120, 120);
+    ctx.restore();
+  } else {
+    text(String(user?.username || 'P').slice(0, 1).toUpperCase(), 126, 120, 64, '#60A5FA', 800, 'center');
+  }
+  text('POKÉPACK COLLECTOR', 224, 78, 30, '#B8C4D9', 700);
+  text(user?.username || 'Collector', 224, 126, 54, '#F4F7FF', 800);
+  text(`${serverName}  ·  Collector profile`, 224, 177, 24, '#8FA0BC', 500);
+
+  // Main stat panels
+  const panelY = 250;
+  const panelH = 380;
+  roundedRect(34, panelY, 950, panelH, 26, '#20283A', '#59647C', 3);
+  roundedRect(1010, panelY, 556, panelH, 26, '#20283A', '#59647C', 3);
+  text('COLLECTION STATS', 64, 292, 30, '#FBBF24', 800);
+
+  const cardsOwned = Number(stats.cards_owned || 0);
+  const unique = Number(stats.unique_discovered || 0);
+  const dexPct = Math.min(100, unique / 1025 * 100);
+  const statItems = [
+    ['PACKS OPENED', number(stats.packs_opened), '#60A5FA'],
+    ['CARDS OWNED', number(cardsOwned), '#FBBF24'],
+    ['UNIQUE POKÉMON', number(unique), '#34D399'],
+    ['SHINY CARDS', number(stats.shiny_cards), '#F0C75E'],
+    ['COMMON', number(stats.common_cards), '#9CA3AF'],
+    ['RARE', number(stats.rare_cards), '#60A5FA'],
+    ['MYTHICAL', number(stats.mythical_cards), '#C084FC'],
+    ['COLLECTIONS', number(stats.collections), '#F472B6'],
+  ];
+  const statW = 410;
+  const statH = 104;
+  statItems.forEach((item, i) => {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const x = 64 + col * 450;
+    const y = 328 + row * 128;
+    roundedRect(x, y, statW, statH, 18, '#151D2C', '#3B465C', 2);
+    roundedRect(x, y, 8, statH, 4, item[2]);
+    text(item[0], x + 28, y + 32, 21, '#9EACC5', 700);
+    text(item[1], x + 28, y + 72, 36, '#F4F7FF', 800);
+  });
+
+  // Pokédex progress and pack balances
+  text('POKÉDEX', 1040, 292, 30, '#FBBF24', 800);
+  text(`${number(unique)} / 1,025`, 1040, 344, 36, '#F4F7FF', 800);
+  roundedRect(1040, 370, 490, 20, 10, '#111827');
+  roundedRect(1040, 370, 490 * dexPct / 100, 20, 10, '#60A5FA');
+  text(`${dexPct.toFixed(1)}% COMPLETE`, 1040, 410, 20, '#9EACC5', 700);
+  text('PACK INVENTORY', 1040, 466, 28, '#FBBF24', 800);
+  const packs = [
+    ['COMMON', number(packBalances?.common), '#60A5FA'],
+    ['RARE', number(packBalances?.rare), '#FBBF24'],
+    ['MYTHICAL', number(packBalances?.mythical), '#C084FC'],
+  ];
+  packs.forEach((pack, i) => {
+    const x = 1040 + i * 160;
+    roundedRect(x, 490, 145, 94, 16, '#151D2C', '#3B465C', 2);
+    text(pack[0], x + 14, 520, 17, pack[2], 700);
+    text(pack[1], x + 14, 555, 30, '#F4F7FF', 800);
+  });
+
+  // Display three most recently acquired cards
+  text('RECENTLY COLLECTED', 64, 690, 30, '#FBBF24', 800);
+  const recent = Array.isArray(stats.recent_cards) ? stats.recent_cards.slice(0, 3) : [];
+  const cardW = 480;
+  const cardH = 170;
+  for (let i = 0; i < 3; i++) {
+    const x = 34 + i * 515;
+    roundedRect(x, 718, cardW, cardH, 22, '#20283A', '#59647C', 3);
+    const card = recent[i];
+    if (!card) {
+      text('No cards collected yet', x + cardW / 2, 802, 24, '#8FA0BC', 600, 'center');
+      continue;
+    }
+    const artwork = await loadRemote(card.artwork_url);
+    if (artwork) {
+      const scale = Math.min(126 / artwork.width, 126 / artwork.height);
+      const dw = artwork.width * scale;
+      const dh = artwork.height * scale;
+      ctx.drawImage(artwork, x + 22 + (126 - dw) / 2, 738 + (126 - dh) / 2, dw, dh);
+    }
+    const shiny = Number(card.is_shiny) === 1;
+    text(`${shiny ? '✨ ' : ''}${card.pokemon_name || 'Unknown Pokémon'}`, x + 168, 766, 27, shiny ? '#F6D365' : '#F4F7FF', 800);
+    text(rarityInfo(card.rarity).label.toUpperCase(), x + 168, 810, 20, rarityInfo(card.rarity).color.toString(16).padStart(6, '0').replace(/^/, '#'), 700);
+    text(`CARD #${card.card_id}`, x + 168, 850, 18, '#9EACC5', 600);
+  }
+  text('POKÉPACK  ·  LIVE COLLECTION DATA', 1560, 878, 18, '#77869F', 600, 'right');
+
+  return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: 'pokemon-profile.png' });
+}
+
 function buildSimpleEmbed(title, description, color = THEME) {
   return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description).setTimestamp();
 }
@@ -405,5 +566,6 @@ module.exports = {
   buildCollectionGallery,
   buildCollectionCardEmbeds,
   buildProfileEmbed,
+  buildProfileImage,
   buildSimpleEmbed,
 };
