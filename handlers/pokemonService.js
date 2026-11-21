@@ -51,10 +51,22 @@ const CARD_RARITY = Object.freeze({
   mythical: { label: 'Mythical', color: 0x111827 },
 });
 
+// Thresholds are out of 10,000. Mythical pulls are intentionally scarce:
+// Common pack: 0.10%, Rare pack: 0.25%, Mythical pack: 1.50%.
 const PACK_DROP_RATES = Object.freeze({
-  common: [8500, 9900, 10000],
-  rare: [6500, 9500, 10000],
-  mythical: [4000, 8500, 10000],
+  common: [9300, 9990, 10000],
+  rare: [7800, 9975, 10000],
+  mythical: [6000, 9850, 10000],
+});
+
+// Shiny is an independent property, not a card rarity. A shiny Pidgey remains
+// Common/Rare/Mythical according to its normal rarity roll.
+const SHINY_CHANCE_DENOMINATOR = 4096;
+
+const BURN_REWARDS = Object.freeze({
+  common: 1000,
+  rare: 5000,
+  mythical: 15000,
 });
 
 const OPEN_COOLDOWN_MS = 5000;
@@ -198,6 +210,7 @@ function ensureSchema() {
       rarity TEXT NOT NULL CHECK (rarity IN ('common','rare','mythical')),
       source TEXT NOT NULL DEFAULT 'pack',
       acquired_at INTEGER NOT NULL,
+      is_shiny INTEGER NOT NULL DEFAULT 0 CHECK (is_shiny IN (0,1)),
       FOREIGN KEY (species_id) REFERENCES pokemon_species(species_id)
     );
 
@@ -297,6 +310,16 @@ function ensureSchema() {
       ADD COLUMN collections_created INTEGER NOT NULL DEFAULT 0
     `);
   }
+
+  // Existing cards migrate as non-shiny. New packs independently roll the flag.
+  const cardColumns = db.prepare('PRAGMA table_info(pokemon_cards)').all();
+  if (!cardColumns.some(column => column.name === 'is_shiny')) {
+    db.exec('ALTER TABLE pokemon_cards ADD COLUMN is_shiny INTEGER NOT NULL DEFAULT 0');
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_pokemon_cards_shiny
+    ON pokemon_cards(guild_id, user_id, is_shiny)
+  `);
 }
 
 ensureSchema();
@@ -616,7 +639,10 @@ function openPack(guildId, userId, packType, now = Date.now()) {
         return { ok: false, code: 'species_not_synced' };
       }
 
-      generated.push(selected);
+      generated.push({
+        ...selected,
+        is_shiny: crypto.randomInt(SHINY_CHANCE_DENOMINATOR) === 0 ? 1 : 0,
+      });
     }
 
     const openTransaction = db.transaction(() => {
@@ -655,15 +681,16 @@ function openPack(guildId, userId, packType, now = Date.now()) {
 
         db.prepare(`
           INSERT INTO pokemon_cards
-            (card_id, guild_id, user_id, species_id, rarity, source, acquired_at)
-          VALUES (?, ?, ?, ?, ?, 'pack', ?)
+            (card_id, guild_id, user_id, species_id, rarity, source, acquired_at, is_shiny)
+          VALUES (?, ?, ?, ?, ?, 'pack', ?, ?)
         `).run(
           cardId,
           gid,
           uid,
           item.species.species_id,
           item.rarity,
-          now
+          now,
+          item.is_shiny
         );
 
         const discovered = db.prepare(`
@@ -682,6 +709,7 @@ function openPack(guildId, userId, packType, now = Date.now()) {
           pokemon_name: item.species.name,
           generation: item.species.generation,
           rarity: item.rarity,
+          is_shiny: item.is_shiny,
           artwork_url: item.species.artwork_url,
           types: item.species.types || '[]',
         });
@@ -796,6 +824,7 @@ function getInventory(guildId, userId, options = {}) {
       c.species_id,
       c.rarity,
       c.acquired_at,
+      c.is_shiny,
       s.name AS pokemon_name,
       s.generation,
       s.artwork_url,
@@ -961,13 +990,25 @@ function burnCards(guildId, userId, cardIds) {
     ensurePlayer(gid, uid);
 
     const cards = ids.map(id => db.prepare(`
-      SELECT card_id
+      SELECT card_id, rarity
       FROM pokemon_cards
       WHERE guild_id = ? AND user_id = ? AND card_id = ?
     `).get(gid, uid, id));
 
     if (cards.some(card => !card)) {
       throw new Error('CARD_NOT_OWNED');
+    }
+
+    const burnedByRarity = { common: 0, rare: 0, mythical: 0 };
+    const rewardByRarity = { common: 0, rare: 0, mythical: 0 };
+
+    for (const card of cards) {
+      const rarity = String(card.rarity || '').toLowerCase();
+      if (!Object.prototype.hasOwnProperty.call(BURN_REWARDS, rarity)) {
+        throw new Error(`INVALID_CARD_RARITY:${rarity}`);
+      }
+      burnedByRarity[rarity]++;
+      rewardByRarity[rarity] += BURN_REWARDS[rarity];
     }
 
     const removeCard = db.prepare(`
@@ -985,7 +1026,12 @@ function burnCards(guildId, userId, cardIds) {
       WHERE guild_id = ? AND user_id = ?
     `).run(ids.length, gid, uid);
 
-    return { count: ids.length };
+    return {
+      count: ids.length,
+      burnedByRarity,
+      rewardByRarity,
+      rewardTotal: Object.values(rewardByRarity).reduce((sum, amount) => sum + amount, 0),
+    };
   });
 
   try {
@@ -1201,6 +1247,7 @@ function getCollectionDisplay(guildId, userId, collectionName) {
     SELECT
       c.card_id,
       c.rarity,
+      c.is_shiny,
       c.species_id,
       s.name AS pokemon_name,
       s.generation,
@@ -1304,11 +1351,16 @@ function getPlayerStats(guildId, userId) {
     WHERE guild_id = ? AND user_id = ?
   `).get(gid, uid);
 
-  const cardsRow = db.prepare(`
-    SELECT COUNT(*) AS count
+  const cardBreakdown = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN rarity = 'common' THEN 1 ELSE 0 END) AS common_count,
+      SUM(CASE WHEN rarity = 'rare' THEN 1 ELSE 0 END) AS rare_count,
+      SUM(CASE WHEN rarity = 'mythical' THEN 1 ELSE 0 END) AS mythical_count,
+      SUM(CASE WHEN is_shiny = 1 THEN 1 ELSE 0 END) AS shiny_count
     FROM pokemon_cards
     WHERE guild_id = ? AND user_id = ?
-  `).get(gid, uid);
+  `).get(gid, uid) || {};
 
   const collectionsRow = db.prepare(`
     SELECT COUNT(*) AS count
@@ -1316,11 +1368,38 @@ function getPlayerStats(guildId, userId) {
     WHERE guild_id = ? AND user_id = ?
   `).get(gid, uid);
 
+  const playerRow = db.prepare(`
+    SELECT created_at
+    FROM pokemon_players
+    WHERE guild_id = ? AND user_id = ?
+  `).get(gid, uid) || {};
+
+  const recentCards = db.prepare(`
+    SELECT
+      c.card_id,
+      c.rarity,
+      c.is_shiny,
+      c.acquired_at,
+      s.name AS pokemon_name,
+      s.artwork_url
+    FROM pokemon_cards c
+    JOIN pokemon_species s ON s.species_id = c.species_id
+    WHERE c.guild_id = ? AND c.user_id = ?
+    ORDER BY c.acquired_at DESC, c.card_id ASC
+    LIMIT 3
+  `).all(gid, uid);
+
   return {
     ...stats,
     unique_discovered: Number(uniqueRow?.count || 0),
-    cards_owned: Number(cardsRow?.count || 0),
+    cards_owned: Number(cardBreakdown.total || 0),
+    common_cards: Number(cardBreakdown.common_count || 0),
+    rare_cards: Number(cardBreakdown.rare_count || 0),
+    mythical_cards: Number(cardBreakdown.mythical_count || 0),
+    shiny_cards: Number(cardBreakdown.shiny_count || 0),
     collections: Number(collectionsRow?.count || 0),
+    created_at: Number(playerRow.created_at || 0),
+    recent_cards: recentCards,
   };
 }
 
@@ -1979,6 +2058,8 @@ module.exports = {
   PACK_TYPES,
   CARD_RARITY,
   PACK_DROP_RATES,
+  SHINY_CHANCE_DENOMINATOR,
+  BURN_REWARDS,
   OPEN_COOLDOWN_MS,
   CARDS_PER_PACK,
   MAX_COLLECTIONS_CARDS,
