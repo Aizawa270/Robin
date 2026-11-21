@@ -1,4 +1,3 @@
-
 'use strict';
 
 const { EmbedBuilder } = require('discord.js');
@@ -11,9 +10,8 @@ const {
   withGamblingLock,
 } = require('../../handlers/gamblingHelpers');
 
-// ============================================================
-// CONFIGURATION
-// ============================================================
+// Persistent rigs are managed by commands/economy/rig.js.
+const { isDiceRigged } = require('./rig');
 
 const MAX_BET = 25_000;
 const COOLDOWN_MS = 10_000;
@@ -34,96 +32,20 @@ const busyChannels = new Map();
 
 const NO_MATCH_CHANCE = 35;
 const ONE_MATCH_CHANCE = 53;
-const TWO_MATCH_CHANCE = 12;
 
 // ============================================================
-// OWNER ODDS
-// Only applies when the bot owner picks 5 and 2.
+// PERSISTENT RIG ODDS
+// Only apply when a rigged user picks 5 and 2.
 // ============================================================
 
-const OWNER_52_NO_MATCH_CHANCE = 22;
-const OWNER_52_ONE_MATCH_CHANCE = 53;
-const OWNER_52_TWO_MATCH_CHANCE = 25;
-
-const ownerCache = new WeakMap();
-
-// ============================================================
-// PENDING DICE RIGS
-// Stored in this file to avoid an additional handler file.
-// Scoped to guild + target user.
-// Cleared automatically when the bot restarts.
-// ============================================================
-
-const pendingDiceRigs = new Map();
-
-function makeDiceRigKey(guildId, userId) {
-  if (!guildId || !userId) return null;
-
-  return `${String(guildId)}:${String(userId)}`;
-}
-
-function armDiceRig(guildId, userId) {
-  const key = makeDiceRigKey(guildId, userId);
-
-  if (!key) return null;
-
-  // Unique token prevents an older game from consuming
-  // a newly armed rig.
-  const token = Symbol('dice-rig');
-
-  pendingDiceRigs.set(key, token);
-
-  return token;
-}
-
-function getDiceRigToken(guildId, userId) {
-  const key = makeDiceRigKey(guildId, userId);
-
-  if (!key) return null;
-
-  return pendingDiceRigs.get(key) || null;
-}
-
-function consumeDiceRig(guildId, userId, token) {
-  const key = makeDiceRigKey(guildId, userId);
-
-  if (!key || !token) return false;
-
-  // Only consume the exact rig used by this game.
-  if (pendingDiceRigs.get(key) !== token) {
-    return false;
-  }
-
-  pendingDiceRigs.delete(key);
-
-  return true;
-}
-
-function clearDiceRig(guildId, userId, token) {
-  const key = makeDiceRigKey(guildId, userId);
-
-  if (!key) return false;
-
-  if (
-    token &&
-    pendingDiceRigs.get(key) !== token
-  ) {
-    return false;
-  }
-
-  return pendingDiceRigs.delete(key);
-}
+const RIGGED_NO_MATCH_CHANCE = 18;
+const RIGGED_ONE_MATCH_CHANCE = 55;
 
 // ============================================================
 // CLAN TRACKING
 // ============================================================
 
-async function trackClanGame(
-  client,
-  message,
-  game,
-  result
-) {
+async function trackClanGame(client, message, game, result) {
   try {
     const tracker = client?.clanSystem?.trackGame;
 
@@ -143,9 +65,7 @@ async function trackClanGame(
 // ============================================================
 
 function randomDiceFace() {
-  return DICE_FACES[
-    randomInt(0, DICE_FACES.length)
-  ];
+  return DICE_FACES[randomInt(0, DICE_FACES.length)];
 }
 
 function randomFrom(array) {
@@ -190,17 +110,9 @@ function buildEmbed(message, data = {}) {
     .setColor('#5b0000')
     .setTimestamp();
 
-  if (data.title) {
-    embed.setTitle(data.title);
-  }
-
-  if (data.description) {
-    embed.setDescription(data.description);
-  }
-
-  if (data.thumbnail) {
-    embed.setThumbnail(data.thumbnail);
-  }
+  if (data.title) embed.setTitle(data.title);
+  if (data.description) embed.setDescription(data.description);
+  if (data.thumbnail) embed.setThumbnail(data.thumbnail);
 
   if (data.footer) {
     embed.setFooter(
@@ -224,126 +136,31 @@ function money(client, amount) {
 }
 
 // ============================================================
-// BOT OWNER DETECTION
-// ============================================================
-
-function addOwnerInformation(owner, ids) {
-  if (!owner) return;
-
-  if (owner.id) {
-    ids.add(String(owner.id));
-  }
-
-  if (owner.ownerId) {
-    ids.add(String(owner.ownerId));
-  }
-
-  const members = owner.members?.cache || owner.members;
-
-  if (members?.values) {
-    for (const member of members.values()) {
-      const id =
-        member?.user?.id ||
-        member?.userId ||
-        member?.id;
-
-      if (id) {
-        ids.add(String(id));
-      }
-    }
-  }
-}
-
-async function isBotOwner(client, userId) {
-  if (!client || typeof client !== 'object') {
-    return false;
-  }
-
-  const cached = ownerCache.get(client);
-
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.ids.has(String(userId));
-  }
-
-  const ownerIds = new Set();
-
-  // Optional environment-variable fallback.
-  const configuredOwners = [
-    process.env.BOT_OWNER_ID,
-    process.env.BOT_OWNER_IDS,
-    client.ownerId,
-  ];
-
-  for (const value of configuredOwners) {
-    if (!value) continue;
-
-    String(value)
-      .split(/[,\s]+/)
-      .filter(Boolean)
-      .forEach(id => ownerIds.add(id));
-  }
-
-  try {
-    let application = client.application;
-
-    if (
-      application &&
-      !application.owner &&
-      typeof application.fetch === 'function'
-    ) {
-      application = await application.fetch();
-    }
-
-    addOwnerInformation(
-      application?.owner,
-      ownerIds
-    );
-
-  } catch (error) {
-    console.error(
-      '[Dice] Owner detection failed:',
-      error?.message || error
-    );
-  }
-
-  ownerCache.set(client, {
-    ids: ownerIds,
-    expiresAt: Date.now() + 10 * 60 * 1000,
-  });
-
-  return ownerIds.has(String(userId));
-}
-
-// ============================================================
 // DICE RESULT GENERATOR
 //
-// STANDARD:
+// Standard:
 // 0 matches: 35%
 // 1 match:   53%
 // 2 matches: 12%
 //
-// OWNER / RIGGED:
-// 0 matches: 22%
-// 1 match:   53%
-// 2 matches: 25%
+// Active rig + picks 5 and 2:
+// 0 matches: 18%
+// 1 match:   55%
+// 2 matches: 27%
 // ============================================================
 
 function rollDiceForPicks(
   pick1,
   pick2,
-  ownerBoost = false
+  rigged = false
 ) {
-  const noMatchChance = ownerBoost
-    ? OWNER_52_NO_MATCH_CHANCE
+  const noMatchChance = rigged
+    ? RIGGED_NO_MATCH_CHANCE
     : NO_MATCH_CHANCE;
 
-  const oneMatchChance = ownerBoost
-    ? OWNER_52_ONE_MATCH_CHANCE
+  const oneMatchChance = rigged
+    ? RIGGED_ONE_MATCH_CHANCE
     : ONE_MATCH_CHANCE;
-
-  const twoMatchChance = ownerBoost
-    ? OWNER_52_TWO_MATCH_CHANCE
-    : TWO_MATCH_CHANCE;
 
   const outcomeRoll = randomInt(0, 100);
 
@@ -364,9 +181,7 @@ function rollDiceForPicks(
   const selectedNumbers = [pick1, pick2];
 
   const unselectedNumbers = DICE_NUMBERS.filter(
-    number =>
-      number !== pick1 &&
-      number !== pick2
+    number => number !== pick1 && number !== pick2
   );
 
   // ----------------------------------------------------------
@@ -442,7 +257,6 @@ function parsePick(raw) {
 
 function calculateBaseProfit(amount, matchCount) {
   if (matchCount === 1) return amount;
-
   if (matchCount === 2) return amount * 2;
 
   return 0;
@@ -629,36 +443,19 @@ module.exports = {
         });
       }
 
-      // Snapshot the pending rig before any asynchronous
-      // owner verification. A rig armed after this point
-      // applies to the next game instead.
-      const rigToken = getDiceRigToken(
-        guildId,
-        userId
-      );
-
       // ------------------------------------------------------
-      // OWNER ADVANTAGE
+      // PERSISTENT RIG CHECK
       //
-      // Only applies to the bot owner when picking 5 and 2.
-      // Order does not matter.
+      // An active rig only affects this user when they pick 5 and 2.
+      // The order of the two picks does not matter.
       // ------------------------------------------------------
 
-      const isOwner = await isBotOwner(
-        client,
-        userId
-      );
-
-      const ownerBoost =
-        isOwner &&
+      const useEnhancedOdds =
+        isDiceRigged(guildId, userId) &&
         (
           (pick1 === 5 && pick2 === 2) ||
           (pick1 === 2 && pick2 === 5)
         );
-
-      // A pending rig gives the same odds as the owner 5 + 2.
-      const useEnhancedOdds =
-        ownerBoost || Boolean(rigToken);
 
       // ------------------------------------------------------
       // TAKE BET
@@ -786,19 +583,8 @@ module.exports = {
         }).catch(() => null);
       }
 
-      // Consume the rig only after a successful settlement.
-      // Losing is still a completed game, so the rig is consumed.
-      // Failed bets and refunded games do not consume it.
-      if (rigToken) {
-        consumeDiceRig(
-          guildId,
-          userId,
-          rigToken
-        );
-      }
-
       // ------------------------------------------------------
-      // GET FINAL BALANCE
+      // GET UPDATED BALANCE
       // ------------------------------------------------------
 
       try {
@@ -813,9 +599,7 @@ module.exports = {
         );
 
         newBalance = balance - amount + (
-          matchCount > 0
-            ? amount + boostedProfit
-            : 0
+          matchCount > 0 ? amount + boostedProfit : 0
         );
       }
 
@@ -978,11 +762,3 @@ module.exports = {
     }
   ),
 };
-
-// ============================================================
-// SHARED FUNCTIONS FOR rig.js
-// ============================================================
-
-module.exports.isBotOwner = isBotOwner;
-module.exports.armDiceRig = armDiceRig;
-module.exports.clearDiceRig = clearDiceRig;
