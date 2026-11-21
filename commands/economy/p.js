@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { EmbedBuilder } = require('discord.js');
 const pokemon = require('../../handlers/pokemonService');
 const api = require('../../handlers/pokemonApi');
+const economy = require('../../handlers/economy');
 const features = require('../../handlers/pokemonFeatures')(pokemon);
 const {
   buildCardEmbed,
@@ -15,6 +16,7 @@ const {
   buildResetButtons,
   buildInventoryEmbed,
   buildPokedexEmbed,
+  buildProfileEmbed,
   buildSimpleEmbed,
   rarityInfo,
 } = require('../../handlers/pokemonEmbeds');
@@ -182,6 +184,7 @@ async function showHelp(message) {
         value: [
           '`$p inv` — View your cards',
           '`$p inv psychic` — Filter by type',
+          '`$p inv shiny` — Show shiny cards',
           '`$p inv gen 4` — Filter by generation',
           '`$p inv rare gen 2` — Combine filters',
           '`$p view <card ID>` — Inspect a card',
@@ -216,7 +219,7 @@ async function showHelp(message) {
         name: '05  /  POKÉDEX & PROGRESS',
         value: [
           '`$p pokedex [gen1-gen9] [page]`',
-          '`$p stats [@user]`',
+          '`$p stats [@user]` / `$p profile [@user]` — Collector profile',
           '`$p quests`  ·  `$p claim <quest ID>`',
           '`$p leaderboard [cards|mythical|unique|collections]`',
         ].join('\n'),
@@ -288,11 +291,15 @@ async function commandUnpack(message, args) {
 
 function parseInventoryArgs(args) {
   const tokens = cleanArgs(args).map(value => String(value));
-  const options = { rarity: null, type: null, generation: null, page: 1, search: '' };
+  const options = { rarity: null, type: null, generation: null, shiny: false, page: 1, search: '' };
   const remaining = [];
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i].toLowerCase();
+    if (token === 'shiny') {
+      options.shiny = true;
+      continue;
+    }
     if (['common', 'rare', 'mythical', 'mythic'].includes(token) && !options.rarity) {
       options.rarity = token === 'mythic' ? 'mythical' : token;
       continue;
@@ -524,7 +531,29 @@ async function commandBurn(message, args) {
     if (result.code === 'card_not_owned') return error(message, 'Card not available', 'One or more IDs are invalid or are not in your inventory. No cards were removed.');
     return error(message, 'Missing card IDs', 'Use `$p burn <card ID> [card ID ...]` with up to 25 IDs.');
   }
-  return message.reply({ embeds: [buildSimpleEmbed('Cards burned', `Permanently removed **${result.count}** card(s) from your inventory.`)] });
+
+  const crowns = Number(result.rewardTotal || 0);
+  const wallet = economy.addCrowns(message.guild.id, message.author.id, crowns, {
+    type: 'pokemon_card_burn',
+    reason: `Burned ${result.count} Pokémon card(s)`,
+  });
+  if (!wallet) {
+    return error(message, 'Cards burned, payout issue', `Your **${result.count}** card(s) were removed, but the Crown payout could not be recorded. Please contact a server administrator with this message.`);
+  }
+
+  const breakdown = [
+    result.burnedByRarity.common ? `Common: **${result.burnedByRarity.common}** × 1,000` : null,
+    result.burnedByRarity.rare ? `Rare: **${result.burnedByRarity.rare}** × 5,000` : null,
+    result.burnedByRarity.mythical ? `Mythical: **${result.burnedByRarity.mythical}** × 15,000` : null,
+  ].filter(Boolean).join('\n');
+
+  return message.reply({
+    embeds: [buildSimpleEmbed(
+      'Cards burned',
+      `Permanently removed **${result.count}** card(s) from your inventory.\n\n${breakdown}\n\n**Crowns earned:** +${crowns.toLocaleString('en-US')} Crowns`,
+      0xD6A53C
+    )],
+  });
 }
 
 async function commandCollections(message, args) {
@@ -593,19 +622,8 @@ async function commandPokedex(message, args) {
 async function commandStats(client, message) {
   const target = mentionUser(message) || message.author;
   const stats = pokemon.getPlayerStats(message.guild.id, target.id);
-  const embed = new EmbedBuilder()
-    .setColor(THEME)
-    .setTitle(`${target.username}'s Pokémon Stats`)
-    .setThumbnail(target.displayAvatarURL({ size: 256 }))
-    .addFields(
-      { name: 'Cards owned', value: String(stats.cards_owned), inline: true },
-      { name: 'Unique discovered', value: String(stats.unique_discovered), inline: true },
-      { name: 'Collections', value: String(stats.collections), inline: true },
-      { name: 'Packs opened', value: String(stats.packs_opened), inline: true },
-      { name: 'Mythical cards', value: String(stats.mythical_collected), inline: true },
-      { name: 'Rare cards', value: String(stats.rare_collected), inline: true },
-    )
-    .setTimestamp();
+  const packBalances = pokemon.getPackBalances(message.guild.id, target.id);
+  const embed = buildProfileEmbed(target, stats, packBalances, message.guild?.name || 'This server');
   return message.reply({ embeds: [embed] });
 }
 
@@ -660,10 +678,12 @@ async function commandLeaderboard(client, message, args) {
 async function commandSetup(message, args) {
   if (!canManage(message)) return error(message, 'Access denied', 'Only the server owner, bot owner or members with Manage Server can run Pokémon setup.');
   const sub = String(args[0] || '').toLowerCase();
-  if (sub !== 'sync') return error(message, 'Pokémon setup', 'Use `$p setup sync` to download and cache all 1,025 National Pokédex species from Generations I–IX.');
+  if (sub !== 'sync') return error(message, 'Pokémon setup', 'Use `$p setup sync` to sync Pokémon data, or `$p setup sync force` to refresh all 1,025 species.');
   const statusMessage = await message.reply({ embeds: [buildSimpleEmbed('Pokémon data sync', 'Connecting to PokéAPI and caching species information. This is normally a one-time setup task.')] });
   try {
+    const force = args.slice(1).some(value => String(value).toLowerCase() === 'force');
     const result = await api.syncSpecies({
+      force,
       onProgress: progress => {
         if (progress.stage === 'species' && (progress.completed % 100 === 0 || progress.completed === progress.total)) {
           statusMessage.edit({ embeds: [buildSimpleEmbed('Pokémon data sync', `Cached **${progress.completed}/${progress.total}** species…`)] }).catch(() => {});
@@ -672,7 +692,7 @@ async function commandSetup(message, args) {
     });
     const genLines = result.byGeneration.map(row => `Gen ${row.generation}: ${row.count}`).join('\n');
     const rarityLines = result.byRarity.map(row => `${rarityName(row.rarity)}: ${row.count}`).join('\n');
-    const description = `Cached **${result.totalCached}/1,025** species.\n\n**Generations**\n${genLines}\n\n**Species rarity registry**\n${rarityLines}` + (result.failures.length ? `\n\n**${result.failures.length} request(s) failed.** Run sync again to retry missing species.` : '');
+    const description = `Cached **${result.totalCached}/1,025** species.\n\nReclassified **${Number(result.reclassifiedCards || 0)}** existing Ultra Beast card(s) as Mythical.\n\n**Generations**\n${genLines}\n\n**Species rarity registry**\n${rarityLines}` + (result.failures.length ? `\n\n**${result.failures.length} request(s) failed.** Run sync again to retry missing species.` : '');
     return statusMessage.edit({ embeds: [buildSimpleEmbed(result.ok ? 'Pokémon data ready' : 'Pokémon sync incomplete', description, result.ok ? 0x16A34A : 0xF59E0B)] });
   } catch (syncError) {
     console.error('[Pokémon API] Sync failed:', syncError);
@@ -760,7 +780,8 @@ async function execute(client, message, args) {
       return message.reply({ embeds: [buildSimpleEmbed('Collection colour updated', `**${name}** now uses **${result.hex}**.`, parseInt(result.hex.slice(1), 16))] });
     }
     case 'pokedex': return commandPokedex(message, rest);
-    case 'stats': return commandStats(client, message);
+    case 'stats':
+    case 'profile': return commandStats(client, message);
     case 'quests':
     case 'quest': return commandQuests(message);
     case 'claim': return commandClaim(message, rest);
