@@ -84,6 +84,7 @@ function install(service) {
       ? Number(options.generation)
       : null;
     const search = String(options.search || '').trim().toLowerCase();
+    const shiny = Boolean(options.shiny);
 
     const where = ['c.guild_id = ?', 'c.user_id = ?'];
     const params = [gid, uid];
@@ -101,6 +102,9 @@ function install(service) {
     if (generation) {
       where.push('s.generation = ?');
       params.push(generation);
+    }
+    if (shiny) {
+      where.push('c.is_shiny = 1');
     }
     if (search) {
       where.push('LOWER(s.name) LIKE ?');
@@ -121,6 +125,7 @@ function install(service) {
         c.species_id,
         c.rarity,
         c.acquired_at,
+        c.is_shiny,
         s.name AS pokemon_name,
         s.generation,
         s.artwork_url,
@@ -138,7 +143,7 @@ function install(service) {
       page,
       pages: Math.max(1, Math.ceil(total / limit)),
       limit,
-      filters: { rarity, type, generation, search },
+      filters: { rarity, type, generation, shiny, search },
     };
   }
 
