@@ -1,3 +1,4 @@
+
 'use strict';
 
 const { EmbedBuilder } = require('discord.js');
@@ -10,7 +11,7 @@ const {
   withGamblingLock,
 } = require('../../handlers/gamblingHelpers');
 
-// Persistent rigs are managed by commands/economy/rig.js.
+// Must point to the same rig.js module used by the rig command.
 const { isDiceRigged } = require('./rig');
 
 const MAX_BET = 25_000;
@@ -34,8 +35,8 @@ const NO_MATCH_CHANCE = 35;
 const ONE_MATCH_CHANCE = 53;
 
 // ============================================================
-// PERSISTENT RIG ODDS
-// Only apply when a rigged user picks 5 and 2.
+// RIGGED ODDS
+// Only apply when an active rigged user picks 5 and 2.
 // ============================================================
 
 const RIGGED_NO_MATCH_CHANCE = 18;
@@ -53,10 +54,7 @@ async function trackClanGame(client, message, game, result) {
       await tracker(message, game, result);
     }
   } catch (error) {
-    console.error(
-      `[${game}] Clan quest tracking failed:`,
-      error
-    );
+    console.error(`[${game}] Clan quest tracking failed:`, error);
   }
 }
 
@@ -70,9 +68,7 @@ function randomDiceFace() {
 
 function randomFrom(array) {
   if (!Array.isArray(array) || !array.length) {
-    throw new Error(
-      'Cannot choose from an empty dice result array.'
-    );
+    throw new Error('Cannot choose from an empty dice result array.');
   }
 
   return array[randomInt(0, array.length)];
@@ -149,11 +145,7 @@ function money(client, amount) {
 // 2 matches: 27%
 // ============================================================
 
-function rollDiceForPicks(
-  pick1,
-  pick2,
-  rigged = false
-) {
+function rollDiceForPicks(pick1, pick2, rigged = false) {
   const noMatchChance = rigged
     ? RIGGED_NO_MATCH_CHANCE
     : NO_MATCH_CHANCE;
@@ -168,12 +160,8 @@ function rollDiceForPicks(
 
   if (outcomeRoll < noMatchChance) {
     targetMatches = 0;
-
-  } else if (
-    outcomeRoll < noMatchChance + oneMatchChance
-  ) {
+  } else if (outcomeRoll < noMatchChance + oneMatchChance) {
     targetMatches = 1;
-
   } else {
     targetMatches = 2;
   }
@@ -206,7 +194,6 @@ function rollDiceForPicks(
 
   if (targetMatches === 1) {
     const matchingNumber = randomFrom(selectedNumbers);
-
     const nonMatchingNumber = randomFrom(unselectedNumbers);
 
     return randomInt(0, 2) === 0
@@ -244,11 +231,9 @@ function parsePick(raw) {
 
   const number = Number(text);
 
-  return Number.isInteger(number) &&
-    number >= 1 &&
-    number <= 6
-      ? number
-      : null;
+  return Number.isInteger(number) && number >= 1 && number <= 6
+    ? number
+    : null;
 }
 
 // ============================================================
@@ -266,13 +251,7 @@ function calculateBaseProfit(amount, matchCount) {
 // ANIMATION EMBED
 // ============================================================
 
-function buildRollingEmbed(
-  message,
-  pick1,
-  pick2,
-  amount,
-  client
-) {
+function buildRollingEmbed(message, pick1, pick2, amount, client) {
   return buildEmbed(message, {
     title: '🎲 Dice Rolling...',
 
@@ -345,9 +324,7 @@ module.exports = {
       // ARGUMENT VALIDATION
       // ------------------------------------------------------
 
-      const amountText = String(
-        args[0] ?? ''
-      ).trim();
+      const amountText = String(args[0] ?? '').trim();
 
       if (!/^\d+$/.test(amountText)) {
         return message.reply({
@@ -389,8 +366,7 @@ module.exports = {
           embeds: [
             buildEmbed(message, {
               title: '🎲 Dice',
-              description:
-                `The maximum bet is **${money(client, MAX_BET)}**.`,
+              description: `The maximum bet is **${money(client, MAX_BET)}**.`,
             }),
           ],
         });
@@ -413,8 +389,7 @@ module.exports = {
           embeds: [
             buildEmbed(message, {
               title: '🎲 Dice',
-              description:
-                `You only have **${money(client, balance)}**.`,
+              description: `You only have **${money(client, balance)}**.`,
             }),
           ],
         });
@@ -444,10 +419,11 @@ module.exports = {
       }
 
       // ------------------------------------------------------
-      // PERSISTENT RIG CHECK
+      // RIG CHECK
       //
-      // An active rig only affects this user when they pick 5 and 2.
-      // The order of the two picks does not matter.
+      // Only works when:
+      // 1. This user has an active rig in this server.
+      // 2. They selected 5 and 2 in either order.
       // ------------------------------------------------------
 
       const useEnhancedOdds =
@@ -540,19 +516,14 @@ module.exports = {
           );
 
           if (credited === false) {
-            throw new Error(
-              'Could not credit dice winnings.'
-            );
+            throw new Error('Could not credit dice winnings.');
           }
         }
 
         settled = true;
 
       } catch (error) {
-        console.error(
-          '[Dice] Error while settling bet:',
-          error
-        );
+        console.error('[Dice] Error while settling bet:', error);
 
         if (!settled) {
           try {
@@ -567,10 +538,7 @@ module.exports = {
               }
             );
           } catch (refundError) {
-            console.error(
-              '[Dice] Refund failed:',
-              refundError
-            );
+            console.error('[Dice] Refund failed:', refundError);
           }
         }
 
@@ -584,7 +552,7 @@ module.exports = {
       }
 
       // ------------------------------------------------------
-      // GET UPDATED BALANCE
+      // UPDATED BALANCE
       // ------------------------------------------------------
 
       try {
