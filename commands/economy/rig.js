@@ -1,9 +1,14 @@
+
 'use strict';
 
 const { EmbedBuilder } = require('discord.js');
 
-// Active rigs are stored per server and user.
-// They remain active until turned off or the bot restarts.
+// ============================================================
+// ACTIVE DICE RIGS
+// Stored per server and user.
+// Remain active until disabled or the bot restarts.
+// ============================================================
+
 const activeDiceRigs = new Set();
 
 function getRigKey(guildId, userId) {
@@ -29,12 +34,16 @@ function isDiceRigged(guildId, userId) {
     return activeDiceRigs.has(getRigKey(guildId, userId));
 }
 
-// Checks whether the user is the bot owner.
+// ============================================================
+// OWNER CHECK
+// ============================================================
+
 function isBotOwner(userId, client) {
     if (!userId) return false;
 
     const ownerIds = new Set();
 
+    // Environment owner IDs.
     const envOwners = [
         process.env.OWNER_ID,
         process.env.OWNER_IDS,
@@ -45,11 +54,14 @@ function isBotOwner(userId, client) {
     for (const value of envOwners) {
         if (!value) continue;
 
-        value.split(/[\s,]+/).forEach(id => {
-            if (id.trim()) ownerIds.add(id.trim());
-        });
+        String(value)
+            .split(/[\s,]+/)
+            .forEach(id => {
+                if (id.trim()) ownerIds.add(id.trim());
+            });
     }
 
+    // Client configuration owner IDs.
     const configOwners = [
         client?.ownerId,
         client?.ownerID,
@@ -63,29 +75,39 @@ function isBotOwner(userId, client) {
     for (const value of configOwners) {
         if (!value) continue;
 
-        String(value).split(/[\s,]+/).forEach(id => {
-            if (id.trim()) ownerIds.add(id.trim());
-        });
+        String(value)
+            .split(/[\s,]+/)
+            .forEach(id => {
+                if (id.trim()) ownerIds.add(id.trim());
+            });
     }
 
+    // Discord application owner.
     const applicationOwner = client?.application?.owner;
 
     if (applicationOwner?.id) {
         ownerIds.add(applicationOwner.id);
     }
 
+    // Discord application team owners.
     if (applicationOwner?.members) {
         for (const member of applicationOwner.members.values()) {
             const id = member?.user?.id || member?.id;
+
             if (id) ownerIds.add(id);
         }
     }
 
-    return ownerIds.has(userId);
+    return ownerIds.has(String(userId));
 }
 
-function getTargetId(message, args) {
-    const mentionedUser = message.mentions.users.first();
+// ============================================================
+// TARGET USER
+// Supports mentions and raw Discord IDs.
+// ============================================================
+
+function getTargetId(message, args = []) {
+    const mentionedUser = message.mentions?.users?.first();
 
     if (mentionedUser) {
         return mentionedUser.id;
@@ -95,10 +117,16 @@ function getTargetId(message, args) {
 
     if (!targetArg) return null;
 
-    const match = targetArg.match(/^<@!?(\d{17,20})>$|^(\d{17,20})$/);
+    const match = String(targetArg).match(
+        /^<@!?(\d{17,20})>$|^(\d{17,20})$/
+    );
 
     return match ? (match[1] || match[2]) : null;
 }
+
+// ============================================================
+// TEMPORARY CONFIRMATION EMBED
+// ============================================================
 
 async function sendTemporaryEmbed(message, embed) {
     try {
@@ -110,15 +138,26 @@ async function sendTemporaryEmbed(message, embed) {
             sent.delete().catch(() => {});
         }, 4000);
 
+        return sent;
+
     } catch (error) {
-        console.error('[RIG] Failed to send confirmation:', error);
+        console.error(
+            '[RIG] Failed to send confirmation:',
+            error?.message || error
+        );
+
+        return null;
     }
 }
+
+// ============================================================
+// COMMAND
+// ============================================================
 
 module.exports = {
     name: 'rig',
     aliases: [],
-    description: 'Owner-only persistent dice rig controls.',
+    description: 'Owner-only dice rig controls.',
     usage: '$rig dice @user | $rig off @user',
 
     // Intentionally no category property.
@@ -128,23 +167,47 @@ module.exports = {
     setDiceRig,
     clearDiceRig,
 
-    async execute(message, args = [], client) {
+    // IMPORTANT:
+    // Vanessa command signature:
+    // execute(client, message, args)
+
+    async execute(client, message, args = []) {
         try {
-            if (!message.guild) return;
+            if (!message?.guild) return;
 
             client = client || message.client;
 
-            // Only the bot owner can use this command.
-            if (!isBotOwner(message.author.id, client)) return;
+            // ------------------------------------------------
+            // OWNER PERMISSION
+            // ------------------------------------------------
 
-            const action = args[0]?.toLowerCase();
+            if (!isBotOwner(message.author.id, client)) {
+                return;
+            }
+
+            // ------------------------------------------------
+            // ARGUMENTS
+            // ------------------------------------------------
+
+            const action = String(args[0] || '').toLowerCase();
             const targetId = getTargetId(message, args);
 
-            if (!action || !targetId) return;
+            if (!action || !targetId) {
+                return;
+            }
 
-            // Activate rig.
+            // ------------------------------------------------
+            // ACTIVATE DICE RIG
+            // Usage: $rig dice @user
+            // ------------------------------------------------
+
             if (action === 'dice') {
-                setDiceRig(message.guild.id, targetId);
+                const activated = setDiceRig(
+                    message.guild.id,
+                    targetId
+                );
+
+                if (!activated) return;
 
                 const embed = new EmbedBuilder()
                     .setColor('#5865F2')
@@ -159,9 +222,16 @@ module.exports = {
                 return sendTemporaryEmbed(message, embed);
             }
 
-            // Deactivate rig.
+            // ------------------------------------------------
+            // DEACTIVATE DICE RIG
+            // Usage: $rig off @user
+            // ------------------------------------------------
+
             if (action === 'off') {
-                const removed = clearDiceRig(message.guild.id, targetId);
+                const removed = clearDiceRig(
+                    message.guild.id,
+                    targetId
+                );
 
                 const embed = new EmbedBuilder()
                     .setColor('#5865F2')
