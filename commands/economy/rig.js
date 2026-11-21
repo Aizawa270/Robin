@@ -1,160 +1,183 @@
-
 'use strict';
 
 const { EmbedBuilder } = require('discord.js');
 
-const {
-  isBotOwner,
-  armDiceRig,
-  clearDiceRig,
-} = require('./dice');
+// Active rigs are stored per server and user.
+// They remain active until turned off or the bot restarts.
+const activeDiceRigs = new Set();
+
+function getRigKey(guildId, userId) {
+    return `${guildId}:${userId}`;
+}
+
+function setDiceRig(guildId, userId) {
+    if (!guildId || !userId) return false;
+
+    activeDiceRigs.add(getRigKey(guildId, userId));
+    return true;
+}
+
+function clearDiceRig(guildId, userId) {
+    if (!guildId || !userId) return false;
+
+    return activeDiceRigs.delete(getRigKey(guildId, userId));
+}
+
+function isDiceRigged(guildId, userId) {
+    if (!guildId || !userId) return false;
+
+    return activeDiceRigs.has(getRigKey(guildId, userId));
+}
+
+// Checks whether the user is the bot owner.
+function isBotOwner(userId, client) {
+    if (!userId) return false;
+
+    const ownerIds = new Set();
+
+    const envOwners = [
+        process.env.OWNER_ID,
+        process.env.OWNER_IDS,
+        process.env.BOT_OWNER_ID,
+        process.env.BOT_OWNER_IDS
+    ];
+
+    for (const value of envOwners) {
+        if (!value) continue;
+
+        value.split(/[\s,]+/).forEach(id => {
+            if (id.trim()) ownerIds.add(id.trim());
+        });
+    }
+
+    const configOwners = [
+        client?.ownerId,
+        client?.ownerID,
+        client?.config?.ownerId,
+        client?.config?.ownerID,
+        client?.config?.owner,
+        client?.settings?.ownerId,
+        client?.settings?.ownerID
+    ];
+
+    for (const value of configOwners) {
+        if (!value) continue;
+
+        String(value).split(/[\s,]+/).forEach(id => {
+            if (id.trim()) ownerIds.add(id.trim());
+        });
+    }
+
+    const applicationOwner = client?.application?.owner;
+
+    if (applicationOwner?.id) {
+        ownerIds.add(applicationOwner.id);
+    }
+
+    if (applicationOwner?.members) {
+        for (const member of applicationOwner.members.values()) {
+            const id = member?.user?.id || member?.id;
+            if (id) ownerIds.add(id);
+        }
+    }
+
+    return ownerIds.has(userId);
+}
+
+function getTargetId(message, args) {
+    const mentionedUser = message.mentions.users.first();
+
+    if (mentionedUser) {
+        return mentionedUser.id;
+    }
+
+    const targetArg = args[1];
+
+    if (!targetArg) return null;
+
+    const match = targetArg.match(/^<@!?(\d{17,20})>$|^(\d{17,20})$/);
+
+    return match ? (match[1] || match[2]) : null;
+}
+
+async function sendTemporaryEmbed(message, embed) {
+    try {
+        const sent = await message.channel.send({
+            embeds: [embed]
+        });
+
+        setTimeout(() => {
+            sent.delete().catch(() => {});
+        }, 4000);
+
+    } catch (error) {
+        console.error('[RIG] Failed to send confirmation:', error);
+    }
+}
 
 module.exports = {
-  name: 'rig',
-  aliases: [],
-  description: 'Owner-only one-use dice rig.',
-  category: 'owner',
-  usage: '$rig dice @user',
+    name: 'rig',
+    aliases: [],
+    description: 'Owner-only persistent dice rig controls.',
+    usage: '$rig dice @user | $rig off @user',
 
-  async execute(client, message, args) {
+    // Intentionally no category property.
 
-    // --------------------------------------------------------
-    // SILENT VALIDATION
-    // --------------------------------------------------------
+    isBotOwner,
+    isDiceRigged,
+    setDiceRig,
+    clearDiceRig,
 
-    // No response for DMs or bot accounts.
-    if (!message.guild) return;
-    if (message.author?.bot) return;
+    async execute(message, args = [], client) {
+        try {
+            if (!message.guild) return;
 
-    // Must have exactly two arguments.
-    if (!Array.isArray(args) || args.length !== 2) {
-      return;
+            client = client || message.client;
+
+            // Only the bot owner can use this command.
+            if (!isBotOwner(message.author.id, client)) return;
+
+            const action = args[0]?.toLowerCase();
+            const targetId = getTargetId(message, args);
+
+            if (!action || !targetId) return;
+
+            // Activate rig.
+            if (action === 'dice') {
+                setDiceRig(message.guild.id, targetId);
+
+                const embed = new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle('Dice Rig Activated')
+                    .setDescription(
+                        `The dice rig has been enabled for <@${targetId}>.\n\n` +
+                        `**Status:** Active\n` +
+                        `**Server:** ${message.guild.name}`
+                    )
+                    .setTimestamp();
+
+                return sendTemporaryEmbed(message, embed);
+            }
+
+            // Deactivate rig.
+            if (action === 'off') {
+                const removed = clearDiceRig(message.guild.id, targetId);
+
+                const embed = new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle('Dice Rig Disabled')
+                    .setDescription(
+                        removed
+                            ? `The dice rig has been disabled for <@${targetId}>.`
+                            : `There was no active dice rig for <@${targetId}>.`
+                    )
+                    .setTimestamp();
+
+                return sendTemporaryEmbed(message, embed);
+            }
+
+        } catch (error) {
+            console.error('[RIG] Command error:', error);
+        }
     }
-
-    // First argument must be "dice".
-    if (String(args[0]).toLowerCase() !== 'dice') {
-      return;
-    }
-
-    // Second argument must be a real Discord mention.
-    const mentionMatch = String(args[1]).match(
-      /^<@!?(\d+)>$/
-    );
-
-    if (!mentionMatch) return;
-
-    const targetId = mentionMatch[1];
-
-    const targetUser = message.mentions?.users?.get(
-      targetId
-    );
-
-    if (!targetUser) return;
-
-    // Do not rig bots.
-    if (targetUser.bot) return;
-
-    // Do not rig yourself.
-    if (targetId === message.author.id) return;
-
-    // --------------------------------------------------------
-    // BOT OWNER VERIFICATION
-    // --------------------------------------------------------
-
-    let authorized = false;
-
-    try {
-      authorized = await isBotOwner(
-        client,
-        message.author.id
-      );
-    } catch (error) {
-      console.error(
-        '[Rig] Owner verification failed:',
-        error?.message || error
-      );
-
-      return;
-    }
-
-    // Unauthorized users receive absolutely no response.
-    if (!authorized) return;
-
-    // --------------------------------------------------------
-    // ARM THE RIG
-    // --------------------------------------------------------
-
-    const token = armDiceRig(
-      message.guild.id,
-      targetId
-    );
-
-    if (!token) return;
-
-    // --------------------------------------------------------
-    // SUCCESS EMBED
-    // --------------------------------------------------------
-
-    const embed = new EmbedBuilder()
-      .setColor('#5b0000')
-      .setTitle('🎲 Dice Rig Armed')
-      .setDescription(
-        `**Target:** ${targetUser.username}\n\n` +
-        '**Rigged Odds**\n' +
-        '• No match: **22%**\n' +
-        '• One match: **53%**\n' +
-        '• Two matches: **25%**\n\n' +
-        '**Duration:** Next successfully settled dice game.'
-      )
-      .setThumbnail(
-        targetUser.displayAvatarURL({
-          size: 256,
-        })
-      )
-      .setFooter({
-        text: `Authorized by ${message.author.username}`,
-      })
-      .setTimestamp();
-
-    // --------------------------------------------------------
-    // SEND CONFIRMATION
-    // --------------------------------------------------------
-
-    let sentMessage;
-
-    try {
-      sentMessage = await message.reply({
-        embeds: [embed],
-
-        allowedMentions: {
-          repliedUser: false,
-          users: [],
-        },
-      });
-
-    } catch (error) {
-      // If the confirmation could not be sent,
-      // remove this command's rig.
-      clearDiceRig(
-        message.guild.id,
-        targetId,
-        token
-      );
-
-      console.error(
-        '[Rig] Could not send confirmation:',
-        error?.message || error
-      );
-
-      return;
-    }
-
-    // --------------------------------------------------------
-    // DELETE SUCCESS EMBED AFTER 4 SECONDS
-    // --------------------------------------------------------
-
-    setTimeout(() => {
-      sentMessage.delete().catch(() => {});
-    }, 4000);
-  },
 };
