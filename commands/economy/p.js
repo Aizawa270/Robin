@@ -17,6 +17,7 @@ const {
   buildInventoryEmbed,
   buildPokedexEmbed,
   buildProfileEmbed,
+  buildProfileImage,
   buildSimpleEmbed,
   rarityInfo,
 } = require('../../handlers/pokemonEmbeds');
@@ -623,6 +624,12 @@ async function commandStats(client, message) {
   const target = mentionUser(message) || message.author;
   const stats = pokemon.getPlayerStats(message.guild.id, target.id);
   const packBalances = pokemon.getPackBalances(message.guild.id, target.id);
+  const profileImage = await buildProfileImage(target, stats, packBalances, message.guild?.name || 'This server');
+  if (profileImage) {
+    const embed = buildProfileEmbed(target, stats, packBalances, message.guild?.name || 'This server')
+      .setImage('attachment://pokemon-profile.png');
+    return message.reply({ embeds: [embed], files: [profileImage] });
+  }
   const embed = buildProfileEmbed(target, stats, packBalances, message.guild?.name || 'This server');
   return message.reply({ embeds: [embed] });
 }
