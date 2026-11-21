@@ -7,10 +7,16 @@ const SPECIES_LIMIT = 1025; // National Pokédex species through Generation IX.
 const CONCURRENCY = 5;
 const REQUEST_TIMEOUT_MS = 15000;
 
+// Ultra Beasts are treated as Mythical-tier collectibles in PokéPack even
+// though PokéAPI does not flag them as legendary or mythical species.
+const ULTRA_BEAST_SPECIES_IDS = new Set([
+  793, 794, 795, 796, 797, 798, 799,
+  803, 804, 805, 806,
+]);
+
 // These species are deliberately assigned the Rare game tier. All species
-// flagged legendary or mythical by PokéAPI are assigned the Mythical game tier.
-// Every other Generation I-IX species defaults to Common. Edit this list to
-// tune the server's card economy without changing already-created cards.
+// flagged legendary or mythical by PokéAPI, plus Ultra Beasts, are assigned
+// the Mythical game tier. Every other Gen I-IX species defaults to Common.
 const RARE_SPECIES_IDS = new Set([
   // Kanto
   3, 6, 9, 26, 31, 34, 45, 59, 62, 65, 68, 71, 76, 80, 89, 94, 103, 112,
@@ -58,7 +64,11 @@ const GENERATION_NUMBER = Object.freeze({
 });
 
 function speciesRarity(species) {
-  if (species.is_legendary || species.is_mythical) return 'mythical';
+  if (
+    species.is_legendary ||
+    species.is_mythical ||
+    ULTRA_BEAST_SPECIES_IDS.has(Number(species.id))
+  ) return 'mythical';
   return RARE_SPECIES_IDS.has(Number(species.id)) ? 'rare' : 'common';
 }
 
@@ -117,18 +127,22 @@ async function syncSpecies(options = {}) {
   }
 
   const existingRows = service.db.prepare(
-    'SELECT species_id, types FROM pokemon_species'
+    'SELECT species_id, types, rarity FROM pokemon_species'
   ).all();
   const existing = new Map(existingRows.map(row => [
     Number(row.species_id),
-    String(row.types || '[]'),
+    { types: String(row.types || '[]'), rarity: String(row.rarity || 'common') },
   ]));
   const queue = listing.results.slice(0, SPECIES_LIMIT).filter(item => {
     const id = extractId(item.url);
     if (!id || id > SPECIES_LIMIT) return false;
     if (force || !existing.has(id)) return true;
+
+    const cached = existing.get(id);
+    // Repair old caches that placed Ultra Beasts in the Common/Rare pool.
+    if (ULTRA_BEAST_SPECIES_IDS.has(id) && cached.rarity !== 'mythical') return true;
     // Backfill type data for species cached by the previous version.
-    return !existing.get(id) || existing.get(id) === '[]';
+    return !cached.types || cached.types === '[]';
   });
 
   let completed = 0;
@@ -167,8 +181,8 @@ async function syncSpecies(options = {}) {
       .join(' ');
     const artworkUrl = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${pokemonId}.png`;
 
-    // The Pokémon endpoint includes its primary form's type(s), used for card themes.
-    // If this secondary request fails, keep the species syncable and use the rarity colour.
+    // Pokémon endpoint includes its primary form's type(s), used for card themes.
+    // If this secondary request fails, keep the species syncable and use fallback colour.
     let types = [];
     if (defaultPokemonUrl) {
       try {
@@ -177,7 +191,7 @@ async function syncSpecies(options = {}) {
           .map(entry => String(entry?.type?.name || '').toLowerCase())
           .filter(Boolean)
           .slice(0, 2);
-      } catch (typeError) {
+      } catch {
         // Type data is cosmetic; a failed type lookup must not block Pokédex sync.
       }
     }
@@ -207,6 +221,18 @@ async function syncSpecies(options = {}) {
     }
   });
 
+  // Existing Ultra Beast cards keep their ownership/card IDs, but their stored
+  // game tier is corrected too so they no longer remain Common in inventories.
+  const ultraBeastIds = [...ULTRA_BEAST_SPECIES_IDS];
+  const reclassifiedCards = ultraBeastIds.length
+    ? service.db.prepare(`
+        UPDATE pokemon_cards
+        SET rarity = 'mythical'
+        WHERE species_id IN (${ultraBeastIds.map(() => '?').join(',')})
+          AND rarity != 'mythical'
+      `).run(...ultraBeastIds).changes
+    : 0;
+
   const totalCached = Number(service.db.prepare('SELECT COUNT(*) AS count FROM pokemon_species').get().count);
   const byGeneration = service.db.prepare('SELECT generation,COUNT(*) AS count FROM pokemon_species GROUP BY generation ORDER BY generation').all();
   const byRarity = service.db.prepare('SELECT rarity,COUNT(*) AS count FROM pokemon_species GROUP BY rarity').all();
@@ -214,6 +240,7 @@ async function syncSpecies(options = {}) {
     ok: totalCached >= SPECIES_LIMIT && failures.length === 0,
     inserted,
     totalCached,
+    reclassifiedCards,
     failures,
     byGeneration,
     byRarity,
@@ -231,6 +258,7 @@ module.exports = {
   API_BASE,
   SPECIES_LIMIT,
   RARE_SPECIES_IDS,
+  ULTRA_BEAST_SPECIES_IDS,
   syncSpecies,
   getSyncStatus,
   speciesRarity,
